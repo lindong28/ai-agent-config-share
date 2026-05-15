@@ -6,7 +6,7 @@ Behavioral guidelines for reviewing skills — covering triggering, structure, i
 
 **These guidelines are working if:** skills trigger when they should and stay silent when they shouldn't; SKILL.md bodies stay readable; authors explain why, not just how; scope matches the stated purpose without accumulated cruft; every section is actionable by the actor chain.
 
-**Loop:** For each skill (or each section, for large skills), check 1–8 in order. Loop until no principle is violated.
+**Loop:** For each skill (or each section, for large skills), check 1–7 in order. Loop until no principle is violated.
 
 ---
 
@@ -27,26 +27,22 @@ The test: you can write a one-sentence "triggers when the user [concrete context
 
 ---
 
-## 2. Demand Contracts for External Interfaces
+## 2. Demand Interface Contract for Wrapped Programs
 
-**When a skill depends on or produces for something outside itself — a wrapped program's output, another reference doc's required field, or a downstream consumer's expected artifact — surface review can only check form, not substance until the relevant external contract is in hand. Locate it before entering principles 3–7.**
+**When a skill drives a wrapped program and acts on its output, the skill ↔ program boundary is an interface; judging the skill's behavior across it requires reading the contract, not just SKILL.md prose. Reviewers MUST locate the contract before entering principles 3–7; if it is missing — or enumerates fields without explaining what each field means and how the program intends consumers to act on it — flag and require补充 before continuing the audit.**
 
-Three illustrative shapes:
+Without documented semantics, the reviewer can audit only surface form (does the skill mention this field?) and not substance (is the skill's interpretation aligned with what the program actually means?). A skill might bundle "重跑 / 手动修复 / 仍然保存" into an ask when validation fails; surface review only sees the bundle. But if the contract distinguishes "informational already-self-fixed" from "actionable needs-human", the misalignment becomes immediately visible. Without the contract, that gap stays invisible to anyone who hasn't grepped the program's source.
 
-- **Wrapped-program contracts**: a skill drives a CLI / API / library and acts on its output. A skill that bundles "重跑 / 手动修复 / 仍然保存" into one ask looks fine on surface — but if the contract distinguishes "informational already-self-fixed" from "actionable needs-human", the misalignment is visible.
-- **Reference-doc dependencies**: a skill / reference doc requires another doc to produce or contain field X (e.g., a long-task protocol assumes "plan must have a verify section"). If the upstream doesn't bind X, the dependency is silent — works when the author happens to satisfy it, fails when they don't.
-- **Downstream consumer / output contracts**: a skill PRODUCES an artifact (handoff markdown, summary, report, plan) for a downstream consumer. Rules whose effect serves a framework different from the skill's stated core goal are locally coherent but globally misaligned (e.g., audit-checklist drift in a skill whose actual contract is equivalence-substitution).
-
-A useful contract has two layers, applicable to any shape: (a) **meaning per item** — what does each field / required artifact actually represent; and (b) **intended consumer behavior** — what does the consumer (upstream-of-skill or downstream-of-skill) expect or use. Wrapped programs typically need both layers checked; ref-doc dependencies often need only binding existence.
+A useful contract has two layers: (a) **meaning per field** — not "tag_violations: list" but "tags the program rejected during self-validation; non-empty does not mean the agent must act"; and (b) **intended consumer behavior** — what the program expects the caller to do with each output. "Field exists" alone tells a reviewer nothing about whether the skill's reaction is appropriate.
 
 When reviewing:
-- Locate the relevant external contract (program README / docstring / schema for upstream; stated core goal / consumer-facing purpose for downstream output). If absent, stop the audit — the rest is built on guesses.
-- For each program output the SKILL.md consumes, hold contract and SKILL.md side by side: does the skill's interpretation match the contract's stated meaning? Does the skill's response match the contract's stated consumer
- behavior?
-- For skills that PRODUCE an artifact, name the artifact's consumer-facing goal. For each prescriptive rule (especially rules about absence / empty-case handling), project the rule's effect from the consumer's perspective: does it serve the stated goal, or only make sense under a different framework? Mis-framed rules read as locally reasonable but globally drift the artifact away from its actual contract.
-- When fixing a gap, prefer strengthening the upstream contract over adding defensive logic to this skill — defensive accumulation across many dependents drifts more than fixing the source once.
+- For wrapped-program skills, locate the contract (README section, entry-point docstring, schema spec). If absent, stop the audit — the rest is built on guesses.
+- Flag contracts that list fields by name and type without explaining semantic meaning or intended consumer behavior.
+- For each program output the SKILL.md consumes, hold contract and SKILL.md side by side: does the skill's interpretation match the contract's stated meaning? Does the skill's response match the contract's stated consumer behavior?
+- Flag SKILL.md sections acting on fields whose semantics aren't in the contract — either the contract is incomplete or the skill is fabricating.
+- Flag asks where the contract already specifies a deterministic consumer behavior — the skill is asking the user for something the contract has decided.
 
-Ask yourself: "Reading this skill's body and the relevant external contract together — upstream input or downstream consumer — can I tell whether the interaction or production is appropriate? If I can only see what the skill does (form) but not whether it's right (substance), the contract is what's missing."
+Ask yourself: "Reading SKILL.md and the contract together, can I tell whether the skill ↔ program interaction is appropriate? If I can only see what the skill does (form) but not whether it's right (substance), the contract is what's missing."
 
 ---
 
@@ -94,25 +90,14 @@ When reviewing:
 - Flag SKILL.md over 500 lines without hierarchical sections and "go here next" navigation cues.
 - Flag content in SKILL.md that only matters for one rare branch — it belongs in references/.
 - Flag reference files with no "read this when…" pointer from SKILL.md. Unreferenced files are dead weight.
-- Flag content in SKILL.md that's skill-agnostic (would apply equally to any skill) — it belongs in broader-scope files (CLAUDE.md / skill registry / shared references), not embedded in this skill. Exception: skill-agnostic content can stay if it's both (a) prone to being overlooked without explicit instruction at runtime AND (b) materially affects this skill's execution quality.
-- Flag duplication — paraphrased summaries, same-constraint repetition across description / overview / tail-end guard sections. Apply the **substitution-path test** before consolidating: piece A is safely consolidatable into B only when every (consumer, scenario) of A has a reasonable path to B. Self-question: "Who reads this, in what scenario, and where do they go if it's gone?" Default tilts: for **normative content** (rules / contracts / definitions), source of truth belongs at the detail end, with always-loaded surface as a pointer; for **executor-aid cues** (param tables, output shape examples), keep both if removing forces an extra hop at execution time. Pick one location only when no (consumer, scenario) breaks.
+- Flag duplication — paraphrased summaries, same-constraint repetition across description / overview / tail-end guard sections. Apply the **substitution-path test** before consolidating: piece A is safely consolidatable into piece B only when every (consumer, scenario) of A has a reasonable path to B. Self-question: "Who reads this, in what scenario, and where do they go if it's gone?" Executor-aid cues (param tables, output shape examples in SKILL.md) overlapping an authoritative spec are not duplication if removing them forces an extra hop at execution time. Pick one location of truth only when no (consumer, scenario) breaks.
 - Flag mixed-role lists in the body — items playing different functional roles (e.g. references read vs review objects processed) bundled into one bulleted list. Split into role-named sub-sections so the reader doesn't classify each bullet before acting.
 
 The test: from SKILL.md alone, a reader can decide whether they need to open each reference file, without opening it.
 
 ---
 
-## 6. Definition Precedes Reference
-
-**Within a single linearly-read doc: define terms before using them. When deduplicating, delete the later re-definition, not the earlier definition.**
-
-A term used before defined forces the reader to jump forward or push through with unresolved meaning. Compression that targets an overview / framing section orphans later references.
-
-The test: read front-to-back — did you ever need to jump forward to resolve a term?
-
----
-
-## 7. Trigger Mode: Auto vs Manual
+## 6. Trigger Mode: Auto vs Manual
 
 **Auto-invocable skills need low false-positive cost. Manual skills need to be discoverable without reminders.**
 
@@ -128,7 +113,7 @@ The test: for auto — "what's the worst thing that happens if this fires unprom
 
 ---
 
-## 8. Confirm High-Cost Decisions
+## 7. Confirm High-Cost Decisions
 
 **For each decision the skill's runtime makes implicitly, ask: "if the model picks wrong, how expensive is the redo?" If high — regenerated artifacts, re-run subprocess, modified files, or significant user re-work — the skill must explicitly instruct the runtime to use `AskUserQuestion` at that point. Trust-the-LLM is no substitute for confirming user intent at high-reversal-cost branches.**
 
