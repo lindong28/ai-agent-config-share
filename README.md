@@ -9,6 +9,7 @@
 - `claude/CLAUDE.md` + `codex/AGENTS.md` — Claude Code / Codex CLI 通用行为指引（安装时会自动合并）
 - `codex/config.toml` — Codex CLI 通用配置（MCP servers、agents、profiles 等）
 - `codex/agents/` — 3 个 Codex agent 定义（explorer / reviewer / docs-researcher）
+- `claude/skills/agent-browser/` — 浏览器自动化 skill（同时安装到 Claude Code 和 Codex）
 
 完整 command 列表 + 常见开发阶段的工作流组合 见 [command-guide.md](command-guide.md)。
 

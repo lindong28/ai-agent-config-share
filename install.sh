@@ -6,8 +6,11 @@
 #     <repo>/claude/commands/custom/*.md → ~/.claude/commands/custom/*.md
 #     <repo>/claude/references/*.md      → ~/.claude/references/*.md
 #     <repo>/codex/agents/*.toml         → ~/.codex/agents/*.toml
+#     <repo>/claude/skills/agent-browser → ~/.claude/skills/agent-browser
+#                                      → ~/.codex/skills/agent-browser
 #   npm global packages:
 #     MCP server CLI tools referenced by codex/config.toml
+#     agent-browser
 #
 # Manual merge required (preserves existing customizations):
 #   <repo>/claude/CLAUDE.md  → merge into ~/.claude/CLAUDE.md
@@ -148,6 +151,17 @@ if [ -d "$CODEX_AGENTS_SRC" ]; then
     done < <(find "$CODEX_AGENTS_SRC" -type f -name '*.toml' -print0)
 fi
 
+# --- Agent-browser skill (symlink entire directory to both tools) ---
+
+AGENT_BROWSER_SKILL="$SCRIPT_DIR/claude/skills/agent-browser"
+
+if [ -d "$AGENT_BROWSER_SKILL" ]; then
+    echo
+    echo "Installing agent-browser skill:"
+    link_one "$AGENT_BROWSER_SKILL" "$HOME/.claude/skills/agent-browser"
+    link_one "$AGENT_BROWSER_SKILL" "$HOME/.codex/skills/agent-browser"
+fi
+
 # --- MCP server CLI tools (npm global packages) ---
 
 NPM_GLOBAL_LIST="$(npm list -g --depth=0 2>/dev/null || true)"
@@ -170,11 +184,17 @@ ensure_npm_global() {
 }
 
 echo
-echo "Installing MCP server CLI tools:"
+echo "Installing CLI tools:"
 ensure_npm_global "@modelcontextprotocol/server-github"
 ensure_npm_global "@modelcontextprotocol/server-memory"
 ensure_npm_global "@modelcontextprotocol/server-sequential-thinking"
 ensure_npm_global "@upstash/context7-mcp"
+ensure_npm_global "agent-browser"
+
+# Download Chrome for Testing (idempotent — skips if already present)
+if command -v agent-browser >/dev/null 2>&1; then
+    agent-browser install
+fi
 
 if [ -z "${GITHUB_PERSONAL_ACCESS_TOKEN:-}" ]; then
     echo
