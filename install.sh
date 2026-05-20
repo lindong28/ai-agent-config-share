@@ -31,8 +31,18 @@
 #   <repo>/codex/config.toml → merge into ~/.codex/config.toml
 #
 # Symlink policy: if a target path already exists (file, dir, or symlink
-# pointing elsewhere), prompt the user whether to overwrite it. In a
+# pointing elsewhere), prompt the user whether to overwrite it. The prompt
+# accepts y / N / a (yes-to-all-remaining) / s (skip-all-remaining); once
+# 'a' or 's' is chosen, the rest of this run is automatic. In a
 # non-interactive shell the prompt defaults to skip (preserve existing).
+#
+# Package-update policy: already-installed npm globals and the Chrome for
+# Testing payload are NOT upgraded by default. The installer asks once
+# upfront: "Update existing installations? [y/N]" — y/N is run-wide
+# (all-or-nothing), no per-package question. Override with the env var:
+#   UPDATE_EXISTING=1 ./install.sh    # upgrade all existing
+#   UPDATE_EXISTING=0 ./install.sh    # leave all existing alone
+# Non-interactive shells default to 0. New installs always proceed.
 
 set -euo pipefail
 
@@ -50,6 +60,12 @@ overwritten=0
 skipped=0
 already_linked=0
 
+# Run-level decision shortcut for overwrite prompts.
+#   ""     = ask each time (default)
+#   "all"  = auto-overwrite every remaining conflict in this run
+#   "skip" = auto-skip every remaining conflict in this run
+overwrite_mode=""
+
 prompt_overwrite() {
     # Ask the user whether to replace an existing target with our symlink.
     # Returns 0 (yes) or 1 (no / no tty). Silent — caller prints messaging.
@@ -57,6 +73,12 @@ prompt_overwrite() {
     # Reads from /dev/tty directly because the caller runs inside a
     # `while read; done < <(find ...)` loop, where stdin is the find pipe,
     # not the terminal. /dev/tty bypasses that.
+
+    case "$overwrite_mode" in
+        all)  return 0 ;;
+        skip) return 1 ;;
+    esac
+
     if [ ! -e /dev/tty ] || [ ! -r /dev/tty ]; then
         return 1
     fi
@@ -65,13 +87,15 @@ prompt_overwrite() {
     local detail="$2"
     {
         echo "  [CONFLICT] $dst already exists ($detail)"
-        printf "  Replace with symlink to share version? [y/N] "
+        printf "  Replace with symlink to share version? [y/N/a=yes-to-all/s=skip-all] "
     } >/dev/tty
     local answer=""
     read -r answer </dev/tty
     case "$answer" in
+        a|A)         overwrite_mode="all";  echo "  (auto-overwriting remaining conflicts)" >/dev/tty; return 0 ;;
+        s|S)         overwrite_mode="skip"; echo "  (auto-skipping remaining conflicts)"    >/dev/tty; return 1 ;;
         y|Y|yes|YES) return 0 ;;
-        *) return 1 ;;
+        *)           return 1 ;;
     esac
 }
 
@@ -330,6 +354,30 @@ fi
 
 # --- MCP server CLI tools (npm global packages) ---
 
+# --- Update preference for existing installations ---
+# Re-runs can otherwise silently bump versions of already-installed packages
+# (npm globals) and refresh side artifacts (Chrome for Testing) and change
+# runtime behavior. New installs always proceed; updates require explicit
+# consent. Override non-interactively with UPDATE_EXISTING=0/1; non-TTY
+# defaults to 0.
+
+UPDATE_EXISTING="${UPDATE_EXISTING:-}"
+if [ -z "$UPDATE_EXISTING" ]; then
+    echo
+    if [ -t 0 ]; then
+        echo "Update existing installations? (npm globals, Chrome for Testing)"
+        printf "New installs always proceed either way. [y/N] "
+        read -r answer
+        case "$answer" in
+            y|Y|yes|YES) UPDATE_EXISTING=1 ;;
+            *)           UPDATE_EXISTING=0 ;;
+        esac
+    else
+        UPDATE_EXISTING=0
+        echo "→ non-TTY: UPDATE_EXISTING=0 (existing installs left alone)"
+    fi
+fi
+
 NPM_GLOBAL_LIST="$(npm list -g --depth=0 2>/dev/null || true)"
 
 ensure_npm_global() {
@@ -342,7 +390,12 @@ ensure_npm_global() {
         name="${pkg%%@*}"
     fi
     if echo "$NPM_GLOBAL_LIST" | grep -q "$name"; then
-        echo "  [already installed] $name"
+        if [ "$UPDATE_EXISTING" = "1" ]; then
+            echo "  Updating $pkg..."
+            npm install -g "$pkg"
+        else
+            echo "  [already installed] $name (skip — UPDATE_EXISTING=0)"
+        fi
         return
     fi
     echo "  Installing $pkg..."
@@ -351,15 +404,26 @@ ensure_npm_global() {
 
 echo
 echo "Installing CLI tools:"
+
+# Track whether agent-browser was preexisting so we know if `agent-browser install`
+# (which refreshes Chrome for Testing) counts as a fresh-install side effect or
+# an update. Fresh installs always get Chrome; updates only when opted in.
+AGENT_BROWSER_PREEXISTING=0
+command -v agent-browser >/dev/null 2>&1 && AGENT_BROWSER_PREEXISTING=1
+
 ensure_npm_global "@modelcontextprotocol/server-github"
 ensure_npm_global "@modelcontextprotocol/server-memory"
 ensure_npm_global "@modelcontextprotocol/server-sequential-thinking"
 ensure_npm_global "@upstash/context7-mcp"
 ensure_npm_global "agent-browser"
 
-# Download Chrome for Testing (idempotent — skips if already present)
+# Refresh Chrome for Testing only on fresh install or when explicitly updating.
 if command -v agent-browser >/dev/null 2>&1; then
-    agent-browser install
+    if [ "$AGENT_BROWSER_PREEXISTING" = "0" ] || [ "$UPDATE_EXISTING" = "1" ]; then
+        agent-browser install
+    else
+        echo "  [skip] agent-browser install (Chrome for Testing) — UPDATE_EXISTING=0"
+    fi
 fi
 
 if [ -z "${GITHUB_PERSONAL_ACCESS_TOKEN:-}" ]; then
@@ -408,11 +472,18 @@ AGENTS_MD_SRC="$SCRIPT_DIR/codex/AGENTS.md"
 cat <<EOF
 
 ================================================================
-Next step: merge top-level config
+Next steps
 ================================================================
 
-CLAUDE.md, AGENTS.md, and config.toml were NOT auto-symlinked —
-that would overwrite your existing customizations. The README has a
-one-shot prompt you can paste into Claude Code to merge them safely.
+1. Merge top-level config (CLAUDE.md, AGENTS.md, config.toml)
+   These were NOT auto-symlinked — that would overwrite your
+   existing customizations. The README has a one-shot prompt
+   you can paste into Claude Code to merge them safely.
+
+2. Verify the install
+   Run ./verify.sh for a mechanical check (symlinks, deps,
+   settings.json, merged-config anchors). Exit code = FAIL count.
+   The README also has a Claude Code prompt that runs verify.sh
+   and then does a semantic diff of the manually-merged configs.
 
 EOF
