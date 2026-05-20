@@ -16,13 +16,14 @@
 #   npm global packages:
 #     MCP server CLI tools referenced by codex/config.toml
 #     agent-browser
+#   Dependency checks + auto-fix (macOS assumed; interactive y/N prompts):
+#     jq (brew install if missing) — needed by statusline.sh
+#     ~/.local/bin in PATH (append export to ~/.zshrc / ~/.bashrc / fish config)
+#     codex CLI presence (warn only — OAuth-gated, can't auto-install)
+#     ~/.claude/settings.json statusLine field (add if missing; warn on conflict)
 #
-# Platform notes:
-#   - codeagent-wrapper is an arm64 macOS binary required by /custom:execute-plan.
-#     On other platforms execute-plan will not work.
-#   - statusline.sh produces ~/.claude/tt-status.json which tt-web consumes for
-#     Claude quota cards. Symlink only — user must manually wire it into
-#     ~/.claude/settings.json (see README) and have `jq` on PATH.
+# Platform note: codeagent-wrapper is an arm64 macOS binary required by
+# /custom:execute-plan. On Intel Mac it links but won't run.
 #
 # Manual merge required (preserves existing customizations):
 #   <repo>/claude/CLAUDE.md  → merge into ~/.claude/CLAUDE.md
@@ -142,6 +143,126 @@ link_tree() {
     done < <(find "$src_dir" -type f -name '*.md' -print0)
 }
 
+# Prompt-yes helper. Returns 0 on yes, 1 on no / no tty.
+prompt_yes() {
+    local question="$1"
+    if [ ! -e /dev/tty ] || [ ! -r /dev/tty ]; then
+        return 1
+    fi
+    printf "  %s [y/N] " "$question" >/dev/tty
+    local answer=""
+    read -r answer </dev/tty
+    case "$answer" in
+        y|Y|yes|YES) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+ensure_jq() {
+    if command -v jq >/dev/null 2>&1; then
+        return 0
+    fi
+    echo
+    echo "Dependency: jq (required by statusline.sh)"
+    if ! command -v brew >/dev/null 2>&1; then
+        echo "  [WARN] jq not found and brew not available. Install jq manually."
+        return 0
+    fi
+    if prompt_yes "jq not found — brew install jq?"; then
+        brew install jq
+    else
+        echo "  [WARN] Skipped. statusline.sh will fail to write tt-status.json without jq."
+    fi
+}
+
+ensure_local_bin_in_path() {
+    local bin_dir="$HOME/.local/bin"
+    case ":$PATH:" in
+        *":$bin_dir:"*) return 0 ;;
+    esac
+    echo
+    echo "PATH check: ~/.local/bin (tt-web entry)"
+    local rc=""
+    case "$SHELL" in
+        */zsh)  rc="$HOME/.zshrc" ;;
+        */bash) rc="$HOME/.bashrc" ;;
+        */fish) rc="$HOME/.config/fish/config.fish" ;;
+        *)
+            echo "  [WARN] Unknown shell ($SHELL); add ~/.local/bin to PATH manually."
+            return 0
+            ;;
+    esac
+    if prompt_yes "~/.local/bin not in PATH. Append export to $rc?"; then
+        if [[ "$rc" == *fish* ]]; then
+            echo 'set -gx PATH $HOME/.local/bin $PATH' >>"$rc"
+        else
+            echo 'export PATH="$HOME/.local/bin:$PATH"' >>"$rc"
+        fi
+        echo "  Appended. Reload your shell or 'source $rc' to apply."
+    else
+        echo "  Skipped. Add ~/.local/bin to PATH manually before using tt-web."
+    fi
+}
+
+check_codex_cli() {
+    if command -v codex >/dev/null 2>&1; then
+        return 0
+    fi
+    echo
+    echo "Dependency: codex CLI (required by /custom:execute-plan)"
+    echo "  [WARN] 'codex' not on PATH. /custom:execute-plan will not work."
+    echo "         Install + login: https://github.com/openai/codex"
+}
+
+wire_statusline_settings() {
+    local settings="$HOME/.claude/settings.json"
+    local target_cmd='~/.claude/statusline.sh'
+
+    echo
+    echo "Wiring statusLine into $settings:"
+
+    if ! command -v jq >/dev/null 2>&1; then
+        echo "  [SKIP] jq not available — can't safely edit settings.json."
+        return 0
+    fi
+
+    mkdir -p "$(dirname "$settings")"
+
+    if [ ! -f "$settings" ]; then
+        cat >"$settings" <<EOF
+{
+  "statusLine": {
+    "type": "command",
+    "command": "$target_cmd"
+  }
+}
+EOF
+        echo "  [created] $settings with statusLine"
+        return 0
+    fi
+
+    local existing
+    existing="$(jq -r '.statusLine.command // empty' "$settings" 2>/dev/null || echo "")"
+    if [ "$existing" = "$target_cmd" ]; then
+        echo "  [already wired] statusLine already points to share's statusline.sh"
+    elif [ -z "$existing" ]; then
+        local tmp
+        tmp="$(mktemp)"
+        if jq --arg cmd "$target_cmd" \
+            '.statusLine = {type: "command", command: $cmd}' \
+            "$settings" >"$tmp"; then
+            mv "$tmp" "$settings"
+            echo "  [updated] added statusLine to $settings"
+        else
+            rm -f "$tmp"
+            echo "  [WARN] jq failed to merge statusLine into $settings."
+        fi
+    else
+        echo "  [CONFLICT] $settings already has statusLine.command=$existing"
+        echo "             Review and decide whether to switch to: $target_cmd"
+    fi
+}
+
 echo "ai-agent-config-share installer"
 echo "  source: $SCRIPT_DIR"
 echo "  target: $HOME"
@@ -201,9 +322,6 @@ done
 if [ "$have_statusline" -eq 1 ]; then
     echo
     echo "Installing statusline scripts:"
-    if ! command -v jq >/dev/null 2>&1; then
-        echo "  [WARN] jq not found on PATH; statusline.sh needs it to write tt-status.json."
-    fi
     for f in "${STATUSLINE_FILES[@]}"; do
         src="$SCRIPT_DIR/claude/$f"
         [ -f "$src" ] && link_one "$src" "$HOME/.claude/$f"
@@ -262,6 +380,13 @@ if [ -x "$TT_WEB_INSTALL" ]; then
     echo "Running tt-web sub-installer:"
     "$TT_WEB_INSTALL"
 fi
+
+# --- Dependency validation + settings.json wiring (macOS-assumed) ---
+
+ensure_jq || true
+ensure_local_bin_in_path || true
+check_codex_cli || true
+wire_statusline_settings || true
 
 if [ "$skipped" -gt 0 ]; then
     echo
