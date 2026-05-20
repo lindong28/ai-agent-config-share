@@ -50,6 +50,21 @@ tt-web stop
 
 > install.sh 末尾若提示 `~/.local/bin not in PATH`，需要把它加到 shell rc 里才能直接敲 `tt-web`。
 
+### 启用 Claude quota 卡片（statusline 数据源）
+
+tt-web dashboard 上 "Claude 5h / 7d quota" 两张卡片数据来自 `~/.claude/tt-status.json`——这个文件由 `claude/statusline.sh` 在每次 Claude Code 启动时写入。install.sh 会 symlink 这个脚本到 `~/.claude/statusline.sh`，但**启用还得你手动改 `~/.claude/settings.json`**：
+
+```json
+{
+  "statusLine": {
+    "type": "command",
+    "command": "~/.claude/statusline.sh"
+  }
+}
+```
+
+需要 `jq` 在 PATH 上（macOS: `brew install jq`）。不启用的话，tt-web 上 Codex quota 仍能正常显示，只是 Claude 那两张是 `—` / `no data`。
+
 ## 运行依赖
 
 `/custom:execute-plan` 要求两层外部组件，install.sh 不会替你装：

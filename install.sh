@@ -6,6 +6,8 @@
 #     <repo>/claude/commands/custom/*.md → ~/.claude/commands/custom/*.md
 #     <repo>/claude/references/*.md      → ~/.claude/references/*.md
 #     <repo>/claude/bin/codeagent-wrapper → ~/.claude/bin/codeagent-wrapper
+#     <repo>/claude/statusline.sh        → ~/.claude/statusline.sh
+#     <repo>/claude/statusline-transcript.py → ~/.claude/statusline-transcript.py
 #     <repo>/codex/agents/*.toml         → ~/.codex/agents/*.toml
 #     <repo>/claude/skills/agent-browser → ~/.claude/skills/agent-browser
 #                                      → ~/.codex/skills/agent-browser
@@ -15,8 +17,12 @@
 #     MCP server CLI tools referenced by codex/config.toml
 #     agent-browser
 #
-# Platform note: codeagent-wrapper is an arm64 macOS binary required by
-# /custom:execute-plan. On other platforms execute-plan will not work.
+# Platform notes:
+#   - codeagent-wrapper is an arm64 macOS binary required by /custom:execute-plan.
+#     On other platforms execute-plan will not work.
+#   - statusline.sh produces ~/.claude/tt-status.json which tt-web consumes for
+#     Claude quota cards. Symlink only — user must manually wire it into
+#     ~/.claude/settings.json (see README) and have `jq` on PATH.
 #
 # Manual merge required (preserves existing customizations):
 #   <repo>/claude/CLAUDE.md  → merge into ~/.claude/CLAUDE.md
@@ -182,6 +188,26 @@ if [ -f "$CODEAGENT_WRAPPER" ]; then
         echo "         Linking anyway, but /custom:execute-plan will fail at runtime."
     fi
     link_one "$CODEAGENT_WRAPPER" "$HOME/.claude/bin/codeagent-wrapper"
+fi
+
+# --- statusline scripts (produce ~/.claude/tt-status.json for tt-web) ---
+
+STATUSLINE_FILES=(statusline.sh statusline-transcript.py)
+have_statusline=0
+for f in "${STATUSLINE_FILES[@]}"; do
+    [ -f "$SCRIPT_DIR/claude/$f" ] && have_statusline=1 && break
+done
+
+if [ "$have_statusline" -eq 1 ]; then
+    echo
+    echo "Installing statusline scripts:"
+    if ! command -v jq >/dev/null 2>&1; then
+        echo "  [WARN] jq not found on PATH; statusline.sh needs it to write tt-status.json."
+    fi
+    for f in "${STATUSLINE_FILES[@]}"; do
+        src="$SCRIPT_DIR/claude/$f"
+        [ -f "$src" ] && link_one "$src" "$HOME/.claude/$f"
+    done
 fi
 
 # --- MCP server CLI tools (npm global packages) ---
