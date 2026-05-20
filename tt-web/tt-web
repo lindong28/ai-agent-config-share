@@ -1,0 +1,152 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SOURCE="${BASH_SOURCE[0]}"
+while [ -L "$SOURCE" ]; do
+  SOURCE_DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+  SOURCE="$(readlink "$SOURCE")"
+  case "$SOURCE" in
+    /*) ;;
+    *) SOURCE="$SOURCE_DIR/$SOURCE" ;;
+  esac
+done
+ROOT_DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+STATE_DIR="$ROOT_DIR/state"
+PID_FILE="$STATE_DIR/pid"
+PORT_FILE="$STATE_DIR/port"
+LOG_FILE="$STATE_DIR/server.log"
+HOST="127.0.0.1"
+BASE_PORT="${TT_WEB_PORT:-39001}"
+
+usage() {
+  echo "usage: tt-web {start|stop|restart|status|open}"
+}
+
+is_running() {
+  [ -f "$PID_FILE" ] || return 1
+  local pid
+  pid="$(cat "$PID_FILE" 2>/dev/null || true)"
+  [ -n "$pid" ] || return 1
+  kill -0 "$pid" 2>/dev/null
+}
+
+find_port() {
+  local port="$BASE_PORT"
+  while nc -z "$HOST" "$port" >/dev/null 2>&1; do
+    port=$((port + 1))
+  done
+  echo "$port"
+}
+
+start() {
+  mkdir -p "$STATE_DIR"
+  if is_running; then
+    local port
+    port="$(cat "$PORT_FILE" 2>/dev/null || echo "$BASE_PORT")"
+    echo "tt-web already running: http://$HOST:$port (pid $(cat "$PID_FILE"))"
+    return 0
+  fi
+
+  local port
+  port="$(find_port)"
+  : > "$LOG_FILE"
+  local pid
+  pid="$(python3 - "$ROOT_DIR/server.py" "$HOST" "$port" "$LOG_FILE" <<'PY'
+import os
+import sys
+
+server, host, port, log_file = sys.argv[1:]
+pid = os.fork()
+if pid:
+    print(pid)
+    raise SystemExit(0)
+
+os.setsid()
+with open(os.devnull, "rb", buffering=0) as stdin, open(log_file, "ab", buffering=0) as log:
+    os.dup2(stdin.fileno(), 0)
+    os.dup2(log.fileno(), 1)
+    os.dup2(log.fileno(), 2)
+os.execvp("python3", ["python3", server, "--host", host, "--port", port])
+PY
+)"
+  echo "$pid" > "$PID_FILE"
+  echo "$port" > "$PORT_FILE"
+
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    if curl -fsS "http://$HOST:$port/api/health" >/dev/null 2>&1; then
+      echo "tt-web started: http://$HOST:$port (pid $pid)"
+      return 0
+    fi
+    sleep 0.2
+  done
+
+  echo "tt-web start failed; see $LOG_FILE" >&2
+  return 1
+}
+
+stop() {
+  if ! is_running; then
+    rm -f "$PID_FILE" "$PORT_FILE"
+    echo "tt-web not running"
+    return 0
+  fi
+
+  local pid
+  pid="$(cat "$PID_FILE")"
+  kill "$pid" 2>/dev/null || true
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    if ! kill -0 "$pid" 2>/dev/null; then
+      break
+    fi
+    sleep 0.2
+  done
+  if kill -0 "$pid" 2>/dev/null; then
+    kill -9 "$pid" 2>/dev/null || true
+  fi
+  rm -f "$PID_FILE" "$PORT_FILE"
+  echo "tt-web stopped"
+}
+
+status() {
+  if ! is_running; then
+    echo "tt-web not running"
+    return 0
+  fi
+  local pid port uptime
+  pid="$(cat "$PID_FILE")"
+  port="$(cat "$PORT_FILE" 2>/dev/null || echo "$BASE_PORT")"
+  uptime="$(ps -o etime= -p "$pid" 2>/dev/null | awk '{$1=$1; print}')"
+  echo "tt-web running: pid=$pid port=$port uptime=${uptime:-unknown} url=http://$HOST:$port"
+}
+
+open_dashboard() {
+  if ! is_running; then
+    start
+  fi
+  local port
+  port="$(cat "$PORT_FILE")"
+  open "http://$HOST:$port"
+}
+
+case "${1:-}" in
+  start)
+    start
+    ;;
+  stop)
+    stop
+    ;;
+  restart)
+    stop >/dev/null || true
+    start
+    ;;
+  status)
+    status
+    ;;
+  open)
+    open_dashboard
+    ;;
+  *)
+    usage
+    exit 2
+    ;;
+esac

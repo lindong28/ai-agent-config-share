@@ -1,6 +1,6 @@
 # ai-agent-config-share
 
-Claude Code 和 Codex CLI 的共享 agent 配置，包括 slash commands、行为指引、agent 定义和浏览器自动化 skill。安装脚本自动处理 symlink 和配置合并。
+Claude Code 和 Codex CLI 的共享 agent 配置，包括 slash commands、行为指引、agent 定义、浏览器自动化 skill，以及本地 token usage dashboard（tt-web）。安装脚本自动处理 symlink 和配置合并。
 
 ## 文档导航
 
@@ -37,3 +37,28 @@ git clone git@github.com:Picnic-PGC/dongs-agent-config.git
 ## 用法
 
 装完后在 Claude Code 中输入 `/custom:` 触发 slash command 选择器。具体工作流组合见 [docs/command-guide.md](docs/command-guide.md)。
+
+## tt-web：本地 token usage dashboard
+
+`tt-web/` 子目录是一个独立的 localhost-only Python web 应用，回顾 Claude Code / Codex 的 token usage、cost、project / model / session 明细。install.sh 会自动调 `tt-web/install.sh`（下载 Chart.js、symlink `tt-web` 入口到 `~/.local/bin/`）。详情见 [tt-web/README.md](tt-web/README.md)。
+
+```sh
+tt-web start    # 启动本地服务（默认监听 127.0.0.1:39001）
+tt-web open     # 浏览器打开
+tt-web stop
+```
+
+> install.sh 末尾若提示 `~/.local/bin not in PATH`，需要把它加到 shell rc 里才能直接敲 `tt-web`。
+
+## 运行依赖
+
+`/custom:execute-plan` 要求两层外部组件，install.sh 不会替你装：
+
+- `codeagent-wrapper`：仓库 `claude/bin/` 里携带的 **arm64 macOS** 二进制，install.sh 会 symlink 到 `~/.claude/bin/`。非 Apple Silicon Mac 上跑不起来
+- Codex CLI：`codex` 在 PATH 上、已登录鉴权。需要自己装：见 [openai/codex](https://github.com/openai/codex)
+
+不打算用 `/custom:execute-plan` 的话两者都可以跳过——其他 9 个 command 不依赖。
+
+---
+
+*Last synced from upstream: 2026-05-20 12:08 GMT+8*

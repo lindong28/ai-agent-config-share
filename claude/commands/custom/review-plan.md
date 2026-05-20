@@ -1,6 +1,5 @@
 ---
 description: 审查指定 plan 文件并按原则修复。
-disable-model-invocation: true
 ---
 
 # review-plan

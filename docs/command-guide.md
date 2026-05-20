@@ -13,7 +13,8 @@
 | `/custom:review-skill <path> [optimize]` | 按 `skill-review-principles.md` 审查 skill/command；`optimize` 叠加体积优化维度 | 同上 |
 | `/custom:create-skill-from-workflow` | 把刚执行的工作流提取为可复用 skill / command | 内部自动调 `/custom:review-skill` 循环 |
 | `/custom:fix-skill-from-session [问题]` | 扫 session 中 skill / command 的错行为，定位 source-level 修复 | 内部自动调 `/custom:review-skill` 循环 |
-| `/custom:simulate-user-test` | 模拟用户测试产品（web / desktop / mobile），输出 issue 清单 | 否（fan-out subagents 单次执行） |
+| `/custom:execute-plan <plan.md>` | Claude 作为 supervisor 启动 Codex 实施 plan.md：按 Stop Gate 收敛；plan 有 UX 入口则自动跑 `/custom:test-ux` 把 Critical/High issue 回灌 Codex 直到清 | 是（Stop Gate + UX 验收双循环） |
+| `/custom:test-ux` | 模拟用户测试**已部署**的产品（web / desktop / mobile），输出 issue 清单 | 否（fan-out subagents 单次执行） |
 | `/custom:create-handoff` | 把 session 关键 context 落到 markdown 给新 session 接力 | 否（单次执行） |
 
 注：所有 `create-*` / `fix-*` 命令**已经在内部 invoke 对应的 review 循环**. 但有时候内置的循环还是不够，需要额外手动多次触发review。
@@ -39,7 +40,8 @@
    - 人工验证点: 读 plan.md，重点看 L3 中的 verify 步骤
    - 复杂场景: 手动多次触发 review，直到人工判断 Claude Code 基本查不出问题
 
-5. Codex 中执行：实施 plans/<name>-<date>
+5. Claude Code 中执行：/custom:execute-plan plans/<name>-<date>/plan.md
+   - Claude supervise Codex 实施，按 Stop Gate 收敛；plan 有 UX 入口时自动跑 test-ux 闭环
 ```
 
 ### B. 不需要 spec 的快速 plan
@@ -53,7 +55,8 @@
    - 人工验证点: 读 plan.md，重点看 L3 中的 verify 步骤
    - 复杂场景: 手动多次触发 review，直到人工判断 Claude Code 基本查不出问题
 
-3. Codex 中执行：实施 plans/<name>-<date>
+3. Claude Code 中执行：/custom:execute-plan plans/<name>-<date>/plan.md
+   - Claude supervise Codex 实施，按 Stop Gate 收敛
 ```
 
 ### C. 产品上线前 UX 测试
@@ -61,7 +64,7 @@
 适用：web / desktop / mobile 产品在交给真人前先用 AI 模拟扫一遍。
 
 ```
-/custom:simulate-user-test 描述需要评测的产品功能/使用方式/PRD文档
+/custom:test-ux 描述需要评测的产品功能/使用方式/PRD文档
 ```
 
 ---

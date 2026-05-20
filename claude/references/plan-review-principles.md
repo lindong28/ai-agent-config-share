@@ -12,7 +12,7 @@ Behavioral guidelines for reviewing implementation plans — plan files written 
 
 ## Priority and conflict resolution
 
-Principles are listed in **tiebreaker priority order** — when two give conflicting guidance, the lower-numbered principle wins. Principles 3 and 12 are conditional (apply only when their scope is matched); when they apply, their position in the order stands.
+Principles are listed in **tiebreaker priority order** — when two give conflicting guidance, the lower-numbered principle wins. Principles 4 and 13 are conditional (apply only when their scope is matched); when they apply, their position in the order stands.
 
 **Escape valve**: when applying this order would contradict your judgment of what serves the plan's goal, ask the user before applying.
 
@@ -25,26 +25,37 @@ Principles are listed in **tiebreaker priority order** — when two give conflic
 The plan must answer three questions concretely:
 - **Before**: the current state, as an observable fact — "daemon is foreground, dies on logout", not "daemon management is bad".
 - **Change**: which artifacts will exist that don't today, which existing files change.
-- **Verify**: the steps a reader can execute to confirm success, with the observable evidence each should produce. Cover both the happy path and the error / edge paths the change is supposed to handle — "what should fail to work" carries as much weight as "what should work".
+- **Verify**: the steps a reader can execute to confirm success, with the observable evidence each should produce.
 
-**Verify is from the consumer's perspective, not the implementer's.** "Consumer" = whoever or whatever uses the plan's deliverable: end user, downstream code, evaluator, deployment env. The verify must answer "would the consumer accept this as done?", not "did internal pieces wire up". Internal correctness (types, lint, unit tests) is necessary but not sufficient — a plan that passes its tests but doesn't satisfy the consumer is not done.
-
-Verify takes whatever shape the consumer's acceptance takes — shell command output, screenshots of UI states, report file content, evaluator scores, manual confirmation. Don't reduce it to "command + stdout" if the consumer's acceptance is non-shell.
+**Verify is from the consumer's perspective.** "Consumer" = whoever uses the deliverable: end user, downstream code, evaluator, deployment env. Internal correctness (types, lint, unit tests) is necessary but not sufficient — a plan that passes its own tests but doesn't satisfy the consumer is not done.
 
 When reviewing, flag:
 - "Before" stated as a quality ("unmaintainable", "hard to use") rather than a concrete state.
 - Verify steps a reader can't execute — missing prerequisites (parent dir creation, tool availability probes), unresolved inputs (which hostname, which filename), ambiguous targets ("tweak a setting").
 - Success criteria that stop at "the file exists" and never reach "the feature works end to end".
-- Verify steps that only exercise the success path. If the change introduces new failure modes (timeout, missing input, permission denied), at least one verify step must surface them.
-- Verify only covering implementer-side state (build green / unit tests pass) without exercising the consumer's acceptance — flag as "internal-only verify".
-- Verify shape forced into "command + stdout" when the consumer's acceptance is actually visual / qualitative / human-judgment — flag and ask plan to re-frame.
 - **Consumer acceptance boundary not surfaced as first-class** — use-path (what the consumer does with the artifact next), success criteria (what counts as done by what bar), or acceptance threshold all belong on the surface, not buried in scope/description. Same physical artifact form supports wildly different acceptance depths depending on use-path (e.g., a "compare two AIGC systems" report used to *pick one* needs only blackbox scores; used to *cherry-pick algorithms for a new system* must decompose to module/algorithm level). When the plan states only the artifact form and not the acceptance boundary, design depth is ungrounded and reviewers can't validate.
 
 Ask yourself: "Could I execute every verify step from the plan alone, and tell whether each passed — and would passing satisfy the deliverable's consumer for the use-path the plan claims?" If no, flag.
 
 ---
 
-## 2. Verify Layering
+## 2. Deliverable Surface Semantics
+
+**Every user-readable point on the deliverable must admit one interpretation.**
+
+The deliverable presents user-readable points the consumer reads to make sense of the artifact — numbers, labels, fields, list items, chart elements. Each must be uniquely interpretable from the plan's deliverable description; otherwise the same artifact form admits multiple valid readings and the implementer silently picks one. The consumer sees the value render correctly and still cannot tell what it represents.
+
+For each user-readable point, the plan must pin the interpretive dimensions the consumer needs to read it — e.g., **attribution** (whose data), **coverage** (which events / records are in scope), **timeliness** (as-of-when), **unit / baseline** (vs what). The relevant dimensions vary by deliverable; this list is not exhaustive.
+
+When reviewing, flag:
+- A user-readable point whose interpretive dimensions are implicit when the consumer's interpretation depends on them — e.g., a "5h quota" KPI on a multi-system dashboard with no indication of whose quota.
+- Plan specifies the artifact form (KPI card / chart / list / report field) but not what the value carried by that form represents in consumer-readable terms.
+
+Ask yourself: "For every user-readable point on the deliverable, could the consumer determine what it represents without inventing a definition or asking the implementer?" If no, flag.
+
+---
+
+## 3. Verify Layering
 
 **Verify must be specified in two layers — what the deliverable's user accepts, and what implementation-side checks back it up. Both are required. The user-facing layer must be expressible without reference to internal design.**
 
@@ -57,6 +68,7 @@ A plan with only internal verify ships code that compiles but doesn't satisfy th
 When reviewing, flag:
 - Verify list with no separation of user-facing from internal — implementer can't tell which check is the actual deliverable gate vs which is just an internal safety net.
 - User-facing verify written in terms of internal data shapes / state machines / private APIs — that's internal verify mislabeled; the actual user acceptance is undefined.
+- User-facing verify modality mismatched with the consumer's acceptance modality — e.g., "command + stdout" check when the consumer accepts visual / qualitative / human-judgment evidence. The check passes mechanically yet leaves the consumer's acceptance ungated.
 - Internal verify reduced to "build green" / "lint passes" only — non-trivial design decisions have no per-decision implementation-time safety net.
 - User-facing verify deferred to "after implementation" / "we'll see when it's done" — the deliverable's shape and use haven't collapsed enough for the plan to be ready; user-facing verify must be definable from the deliverable description alone.
 - Internal verify present without any user-facing verify — plan describes how to build but not what the user accepts.
@@ -65,7 +77,7 @@ Ask yourself: "Could the implementer execute the user-facing verify without know
 
 ---
 
-## 3. Spec Verify Coverage (conditional)
+## 4. Spec Verify Coverage (conditional)
 
 **Applies only when the plan references an upstream `spec.md` as user-facing contract. Skip otherwise.**
 
@@ -89,20 +101,20 @@ Ask yourself: "For each user-facing verify dimension named in spec, can I point 
 
 ---
 
-## 4. User-Facing Surface Verify Coverage
+## 5. User-Facing Surface Verify Coverage
 
 **Every factual sub-promise on the plan's user-facing surface must map to an implementer-executable verify assertion. The user reads the user-facing surface to confirm intent; the implementer reads and runs verify steps. Review-plan ensures the mapping so neither party silently drops a promise.**
 
 The user-facing surface — sections the user reviews and signs off on — has two core sources:
 
 - **Locked user decisions** — items the user and planner have explicitly aligned on. Different plans express these under different names (AskUserQuestion outcomes, "已确认决策", "user-approved choices", etc.); recognize the role, not the literal label.
-- **User-perspective verify / acceptance criteria** — verify entries written for the user to audit (distinct from internal verify written for the implementer, per P2).
+- **User-perspective verify / acceptance criteria** — verify entries written for the user to audit (distinct from internal verify written for the implementer, per P3).
 
 The implementer-facing surface — implementation steps + per-step internal verify — the user does not exhaustively audit; the implementer runs every verify step and ships only when all pass.
 
 The handshake: user signs off on the user-facing surface; reviewer ensures every factual sub-promise on the user-facing surface maps to an implementer-executable verify assertion; implementer executes all verify steps. If a sub-promise has no corresponding assertion, neither party catches deviation — the implementer can ship something that contradicts what the user signed off on, and verify still passes.
 
-Sub-promise = any factual / quantitative / scope claim on the user-facing surface — including **preservation** claims ("don't touch X", "保留 X 不动"), not just mutation claims. **Granularity**: take the smallest semantic unit the user recognized when aligning with the planner; a "clear tables X/Y/Z, preserve table W" locked decision contains four sub-promises (three mutations + one preservation), not one. Examples:
+Sub-promise = any factual / quantitative / scope claim on the user-facing surface — including **preservation** claims ("don't touch X", "保留 X 不动") and **error / edge / failure path** claims (timeout handling, missing input, permission denied, etc.), not just success-path mutation claims. **Granularity**: take the smallest semantic unit the user recognized when aligning with the planner; a "clear tables X/Y/Z, preserve table W" locked decision contains four sub-promises (three mutations + one preservation), not one. Examples:
 
 - User-perspective verify says "search button absent on all 4 tabs" → verify asserts DOM contains no `button#refresh` on each tab.
 
@@ -112,11 +124,11 @@ When reviewing, flag:
 - **Preservation** sub-promise ("don't touch X", "保留 X") with no assertion that X is unchanged — silent over-mutation cannot be detected.
 - Verify only asserts the downstream observable (e.g., content quality after a rerun) without asserting the mechanism named in the sub-promise (which tables cleared, which range covered, which version used) — a passing observable check can mask wrong-table / wrong-range / wrong-version execution.
 
-Ask yourself: "Walking each factual claim on the user-facing surface (locked user decisions + user-perspective verify), can I point to an implementer-executable verify step that would fail if that exact claim were violated — including preservation claims, not just mutation claims?" If any claim has no such mapping, flag.
+Ask yourself: "Walking each factual claim on the user-facing surface (locked user decisions + user-perspective verify), can I point to an implementer-executable verify step that would fail if that exact claim were violated — including preservation and error-path claims, not just success-path mutation claims?" If any claim has no such mapping, flag.
 
 ---
 
-## 5. User Decision Handoffs
+## 6. User Decision Handoffs
 
 **When the plan requires a user decision mid-plan, the plan must minimize the user's path from "stop" to "confident choice".**
 
@@ -140,7 +152,7 @@ Ask yourself: "Can the user receive the handoff, inspect the necessary evidence 
 
 ---
 
-## 6. Surface Implicit Tradeoff Preferences
+## 7. Surface Implicit Tradeoff Preferences
 
 **Tradeoff preferences (the user's relative priority among competing dimensions) shape product form, verify-dimension priority, and implementation choices — and the user's initial task description usually does NOT include them. The plan must surface them explicitly.**
 
@@ -166,7 +178,7 @@ Ask yourself: "If the implementer hits a runtime conflict between two dimensions
 
 ---
 
-## 7. Docs in Scope
+## 8. Docs in Scope
 
 **User-facing and root-level docs are plan deliverables, not discoveries during cleanup.**
 
@@ -180,7 +192,7 @@ Ask yourself: "After this ships, what does a collaborator look at first — and 
 
 ---
 
-## 8. Simplicity First
+## 9. Simplicity First
 
 **Minimum artifacts and minimum work that achieves the goal. Nothing speculative.**
 
@@ -194,7 +206,7 @@ Ask yourself: "Would a senior engineer reading this say the plan is overcomplica
 
 ---
 
-## 9. Surgical Scope
+## 10. Surgical Scope
 
 **Every file and edit in the plan traces to the stated goal. Don't widen.**
 
@@ -208,7 +220,7 @@ The test: every proposed file, section, and edit traces to one sentence in the g
 
 ---
 
-## 10. Risk Surfacing and Response
+## 11. Risk Surfacing and Response
 
 **New coupling, external dependencies, and unverified assumptions are part of the plan — not things to discover during implementation.**
 
@@ -216,7 +228,7 @@ Don't use this principle to justify scope expansion — Simplicity and Surgical 
 
 **Each surfaced risk carries two slots:** *acceptance* (why it isn't mitigated — probability / impact / cost) and *trigger response* (what runs when it fires). Trigger response is one of:
 - **No-impact alternative** — preserves the deliverable's user experience. Planner writes it; implementer runs it autonomously.
-- **User-impact alternative** — changes or degrades the deliverable. Planner pre-surfaces options + tradeoffs via `AskUserQuestion` *during planning* and records the user's chosen ordering (1–2 fallbacks); implementer follows that order without re-asking. See Principle 5 for the decision packet shape.
+- **User-impact alternative** — changes or degrades the deliverable. Planner pre-surfaces options + tradeoffs via `AskUserQuestion` *during planning* and records the user's chosen ordering (1–2 fallbacks); implementer follows that order without re-asking. See Principle 6 for the decision packet shape.
 - **Stop-and-ask** — only when all pre-listed fallbacks fail and the implementer cannot locate a fresh no-impact alternative.
 
 When reviewing, flag:
@@ -233,7 +245,7 @@ Ask yourself: "If this plan ran on staging tomorrow, where would it crack first 
 
 ---
 
-## 11. Iteration Cost-Aware Verify
+## 12. Iteration Cost-Aware Verify
 
 **Verify steps that need human action cost orders of magnitude more iteration time than agent-autonomous ones. Plan verify so the slow path is sparse and pre-covered.**
 
@@ -250,7 +262,7 @@ Ask yourself: "If every human-gated verify failed once, how much of that failure
 
 ---
 
-## 12. LLM Output Reproducibility (conditional)
+## 13. LLM Output Reproducibility (conditional)
 
 **Applies only when the artifact's behavior depends on LLM output (generated content, decisions, classification). Skip for pure deterministic code.**
 

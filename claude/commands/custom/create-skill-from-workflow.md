@@ -110,6 +110,18 @@ origin: 2026-05-01
 
 ## 3. 输出：skill.md / command.md
 
+### SKILL.md Structure
+
+**Frontmatter (YAML):**
+- Two required fields: `name` and `description` (see [agentskills.io/specification](https://agentskills.io/specification) for supported fields)
+- Max 1024 characters total
+- `name`: Use letters, numbers, and hyphens only (no parentheses, special chars)
+- `description`: Third-person, describes ONLY when to use (NOT what it does)
+  - Start with "Use when..." to focus on triggering conditions
+  - Include specific symptoms, situations, and contexts
+  - **NEVER summarize the skill's process or workflow** (see CSO section for why)
+  - Keep under 500 characters if possible
+
 ### 落点
 
 按 form factor + scope（facet 1 + facet 3 决定）落到对应位置：
@@ -142,7 +154,10 @@ origin: 2026-05-01
 
 ### 验证
 
-写完后执行 `/custom:review-skill <path>` 循环审查改动。
+调用 `/custom:review-skill <path>` 完成审查。
+
+- **独立性**：spawn general-purpose subagent 跑（不要 inline 自查替代）。
+- **收敛性**：主 session 判断 finding 是否需修。需修 → 改 → 重审。循环到一轮无需修。
 
 ### Handoff
 

@@ -1,6 +1,5 @@
 ---
 description: 审查指定 spec 文件（create-spec 产出的 spec.md）并按原则修复。
-disable-model-invocation: true
 ---
 
 # review-spec

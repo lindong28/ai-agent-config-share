@@ -32,7 +32,7 @@ disable-model-invocation: true
 
 ### 1. 自己挖 scope，不要让用户重复
 
-用户敲 `/custom:handoff` 时**不要先问"你想交接什么"**。先扫本会话最近的执行轨迹（用户最后几个 prompt、刚跑完的工具调用、生成 / 修改的文件、未完成的待办），自己推断 scope。
+用户敲 `/custom:create-handoff` 时**不要先问"你想交接什么"**。先扫本会话最近的执行轨迹（用户最后几个 prompt、刚跑完的工具调用、生成 / 修改的文件、未完成的待办），自己推断 scope。
 
 如果上下文确实推不出"下一 agent 要做什么"（刚做完探索、还没明确下一步），才在第 2 步的 AskUserQuestion 里直接问。
 
@@ -52,14 +52,14 @@ scope 和其他关键 context（reader 限定 / 负向边界 / 语言 / 命名 /
 
 ### 3. 写文件
 
-落点：`plans/<topic>-handoff-YYYYMMDD.md`
+落点：`handoffs/<topic>-handoff-YYYYMMDD.md`
 
 - `<topic>`：从下一 agent 任务里抽 3-6 个英文单词（kebab-case），例：`summarizer-prompt-parity`、`wechat-emoji-3-baseline`
 - `YYYYMMDD`：今天日期，无分隔
 - 默认中文写作；除非 `$ARGUMENTS` 或上下文明确要求英文
 - Write 前确认目标路径不存在；若同日已有同 slug 文件，让用户选覆盖、改 slug、或加 `-v2` 后缀
 
-写完后简短回执：文件路径 + 一句话说"下一 session 用 `理解并执行 plans/<file>` 即可接力"。
+写完后简短回执：文件路径 + 一句话说"下一 session 用 `理解并执行 handoffs/<file>` 即可接力"。
 
 ---
 

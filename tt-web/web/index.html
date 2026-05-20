@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>tt-web Overview</title>
+    <link rel="stylesheet" href="/web/styles.css">
+    <script src="/web/vendor/chart.umd.min.js"></script>
+    <script src="/web/app.js"></script>
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <div class="brand">
+          <div class="brand-mark" aria-hidden="true"></div>
+          <h1 class="brand-title">tt-web</h1>
+        </div>
+        <nav class="nav" aria-label="Primary">
+          <a data-nav href="/">Overview</a>
+          <a data-nav href="/explore">Explore</a>
+          <a data-nav href="/sessions">Sessions</a>
+        </nav>
+        <div class="toolbar">
+          <select id="range" aria-label="Range">
+            <option value="7d">7d</option>
+            <option value="30d" selected>30d</option>
+            <option value="90d">90d</option>
+            <option value="all">All</option>
+          </select>
+          <button id="refresh" class="icon-btn" type="button" title="Refresh" aria-busy="false">⟳ Refresh</button>
+        </div>
+      </header>
+      <main class="main">
+        <section class="kpi-grid" aria-label="KPI">
+          <article class="kpi-card">
+            <div class="kpi-label">Today cost</div>
+            <div id="today-cost" class="kpi-value">—</div>
+            <div id="today-tokens" class="kpi-sub">— tokens</div>
+          </article>
+          <article class="kpi-card">
+            <div class="kpi-label">Week cost</div>
+            <div id="week-cost" class="kpi-value">—</div>
+            <div id="week-tokens" class="kpi-sub">— tokens</div>
+          </article>
+          <article class="kpi-card">
+            <div class="kpi-label">Claude 5h</div>
+            <div id="claude-five-hour" class="kpi-value">—</div>
+            <div id="claude-five-reset" class="kpi-sub">—</div>
+            <div id="claude-five-updated" class="kpi-meta">—</div>
+          </article>
+          <article class="kpi-card">
+            <div class="kpi-label">Claude 7d</div>
+            <div id="claude-seven-day" class="kpi-value">—</div>
+            <div id="claude-seven-reset" class="kpi-sub">—</div>
+            <div id="claude-seven-updated" class="kpi-meta">—</div>
+          </article>
+          <article class="kpi-card">
+            <div class="kpi-label">Codex 5h</div>
+            <div id="codex-five-hour" class="kpi-value">—</div>
+            <div id="codex-five-reset" class="kpi-sub">—</div>
+            <div id="codex-five-updated" class="kpi-meta">—</div>
+          </article>
+          <article class="kpi-card">
+            <div class="kpi-label">Codex 7d</div>
+            <div id="codex-seven-day" class="kpi-value">—</div>
+            <div id="codex-seven-reset" class="kpi-sub">—</div>
+            <div id="codex-seven-updated" class="kpi-meta">—</div>
+          </article>
+        </section>
+        <p class="estimate-note">Codex cost is 推算 from GPT-5 pricing when exact billing is not present.</p>
+        <section class="panel-grid" aria-label="Overview charts">
+          <article class="panel panel-wide">
+            <div class="panel-head">
+              <h2>30 day cost</h2>
+              <a class="panel-link" href="/explore?x=day&group=agent&metric=cost">→ Explore</a>
+            </div>
+            <div class="chart-box"><canvas id="daily-cost-chart"></canvas></div>
+          </article>
+          <article class="panel">
+            <div class="panel-head">
+              <h2>Top projects this week</h2>
+              <a class="panel-link" href="/explore?x=project&group=none&metric=cost">→ Explore</a>
+            </div>
+            <div class="chart-box short"><canvas id="top-projects-chart"></canvas></div>
+          </article>
+          <article class="panel">
+            <div class="panel-head">
+              <h2>Model mix this month</h2>
+              <a class="panel-link" href="/explore?x=model&group=agent&metric=total">→ Explore</a>
+            </div>
+            <div class="chart-box short"><canvas id="model-mix-chart"></canvas></div>
+          </article>
+        </section>
+      </main>
+    </div>
+    <script>
+      TTWeb.initOverview().catch((error) => {
+        console.error(error);
+        document.body.insertAdjacentHTML("beforeend", '<p class="main error">Failed to load overview.</p>');
+      });
+    </script>
+  </body>
+</html>

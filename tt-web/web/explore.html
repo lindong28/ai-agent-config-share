@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>tt-web Explore</title>
+    <link rel="stylesheet" href="/web/styles.css">
+    <script src="/web/vendor/chart.umd.min.js"></script>
+    <script src="/web/app.js"></script>
+    <script src="/web/pivot.js"></script>
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <div class="brand">
+          <div class="brand-mark" aria-hidden="true"></div>
+          <h1 class="brand-title">tt-web</h1>
+        </div>
+        <nav class="nav" aria-label="Primary">
+          <a data-nav href="/">Overview</a>
+          <a data-nav href="/explore">Explore</a>
+          <a data-nav href="/sessions">Sessions</a>
+        </nav>
+        <div class="toolbar">
+          <select id="range" aria-label="Range">
+            <option value="7d">7d</option>
+            <option value="30d" selected>30d</option>
+            <option value="90d">90d</option>
+            <option value="all">All</option>
+          </select>
+          <button id="refresh" class="icon-btn" type="button" title="Refresh" aria-busy="false">⟳ Refresh</button>
+        </div>
+      </header>
+      <main class="main">
+        <section class="controls" aria-label="Pivot controls">
+          <div class="field">
+            <label for="x-dim">X axis</label>
+            <select id="x-dim">
+              <option value="day">Day</option>
+              <option value="week">Week</option>
+              <option value="month">Month</option>
+              <option value="project">Project</option>
+              <option value="model">Model</option>
+              <option value="agent">Agent</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="group-dim">Group</label>
+            <select id="group-dim">
+              <option value="none">None</option>
+              <option value="project">Project</option>
+              <option value="model">Model</option>
+              <option value="agent">Agent</option>
+              <option value="day">Day</option>
+              <option value="week">Week</option>
+              <option value="month">Month</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="metric">Metric</label>
+            <select id="metric">
+              <option value="cost">Cost</option>
+              <option value="input">Input tokens</option>
+              <option value="output">Output tokens</option>
+              <option value="cache_read">Cache read</option>
+              <option value="cache_creation">Cache creation</option>
+              <option value="total">Total tokens</option>
+              <option value="messages">Messages</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>Status</label>
+            <div id="pivot-status" class="status-line">Ready</div>
+          </div>
+        </section>
+        <div class="preset-row" aria-label="Presets">
+          <button class="preset-btn" type="button" data-preset="daily-cost">Daily cost</button>
+          <button class="preset-btn" type="button" data-preset="project-cost">Project cost</button>
+          <button class="preset-btn" type="button" data-preset="model-tokens">Model tokens</button>
+          <button class="preset-btn" type="button" data-preset="agent-project">Agent by project</button>
+          <button class="preset-btn" type="button" data-preset="cache">Cache read</button>
+        </div>
+        <section class="panel">
+          <div class="panel-head">
+            <h2>Pivot chart</h2>
+            <span class="estimate-note">Cost cells can be — when model pricing is unknown.</span>
+          </div>
+          <div class="chart-box"><canvas id="pivot-chart"></canvas></div>
+        </section>
+        <section class="panel">
+          <div class="panel-head">
+            <h2>Pivot data</h2>
+            <span id="pivot-count" class="status-line">— rows</span>
+          </div>
+          <div class="table-wrap">
+            <table id="pivot-table"></table>
+          </div>
+        </section>
+      </main>
+    </div>
+    <script>
+      TTWebPivot.init().catch((error) => {
+        console.error(error);
+        document.body.insertAdjacentHTML("beforeend", '<p class="main error">Failed to load pivot.</p>');
+      });
+    </script>
+  </body>
+</html>

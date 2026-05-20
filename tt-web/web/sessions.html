@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>tt-web Sessions</title>
+    <link rel="stylesheet" href="/web/styles.css">
+    <script src="/web/vendor/chart.umd.min.js"></script>
+    <script src="/web/app.js"></script>
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <div class="brand">
+          <div class="brand-mark" aria-hidden="true"></div>
+          <h1 class="brand-title">tt-web</h1>
+        </div>
+        <nav class="nav" aria-label="Primary">
+          <a data-nav href="/">Overview</a>
+          <a data-nav href="/explore">Explore</a>
+          <a data-nav href="/sessions">Sessions</a>
+        </nav>
+        <div class="toolbar">
+          <select id="range" aria-label="Range">
+            <option value="7d">7d</option>
+            <option value="30d" selected>30d</option>
+            <option value="90d">90d</option>
+            <option value="all">All</option>
+          </select>
+          <select id="sort" aria-label="Sort">
+            <option value="time">Time</option>
+            <option value="cost">Cost</option>
+            <option value="tokens">Tokens</option>
+            <option value="duration">Duration</option>
+          </select>
+          <button id="refresh" class="icon-btn" type="button" title="Refresh" aria-busy="false">⟳ Refresh</button>
+        </div>
+      </header>
+      <main class="main">
+        <section class="panel">
+          <div class="panel-head">
+            <h2>Session details</h2>
+            <span id="session-count" class="status-line">— sessions</span>
+          </div>
+          <p class="estimate-note">Rows with unknown pricing show —. Codex rows marked 推算 are estimated.</p>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Agent</th>
+                  <th>Project</th>
+                  <th>Model</th>
+                  <th>Started</th>
+                  <th class="numeric">Cost</th>
+                  <th class="numeric">Tokens</th>
+                  <th class="numeric">Messages</th>
+                </tr>
+              </thead>
+              <tbody id="sessions-body"></tbody>
+            </table>
+          </div>
+        </section>
+      </main>
+    </div>
+    <script>
+      TTWeb.initSessions().catch((error) => {
+        console.error(error);
+        document.body.insertAdjacentHTML("beforeend", '<p class="main error">Failed to load sessions.</p>');
+      });
+    </script>
+  </body>
+</html>

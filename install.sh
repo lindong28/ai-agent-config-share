@@ -5,12 +5,18 @@
 #   Symlinks:
 #     <repo>/claude/commands/custom/*.md → ~/.claude/commands/custom/*.md
 #     <repo>/claude/references/*.md      → ~/.claude/references/*.md
+#     <repo>/claude/bin/codeagent-wrapper → ~/.claude/bin/codeagent-wrapper
 #     <repo>/codex/agents/*.toml         → ~/.codex/agents/*.toml
 #     <repo>/claude/skills/agent-browser → ~/.claude/skills/agent-browser
 #                                      → ~/.codex/skills/agent-browser
+#   Sub-installers:
+#     <repo>/tt-web/install.sh           # localhost token-usage dashboard
 #   npm global packages:
 #     MCP server CLI tools referenced by codex/config.toml
 #     agent-browser
+#
+# Platform note: codeagent-wrapper is an arm64 macOS binary required by
+# /custom:execute-plan. On other platforms execute-plan will not work.
 #
 # Manual merge required (preserves existing customizations):
 #   <repo>/claude/CLAUDE.md  → merge into ~/.claude/CLAUDE.md
@@ -162,6 +168,22 @@ if [ -d "$AGENT_BROWSER_SKILL" ]; then
     link_one "$AGENT_BROWSER_SKILL" "$HOME/.codex/skills/agent-browser"
 fi
 
+# --- codeagent-wrapper binary (arm64 macOS; required by /custom:execute-plan) ---
+
+CODEAGENT_WRAPPER="$SCRIPT_DIR/claude/bin/codeagent-wrapper"
+
+if [ -f "$CODEAGENT_WRAPPER" ]; then
+    echo
+    echo "Installing codeagent-wrapper binary:"
+    arch="$(uname -m)"
+    os="$(uname -s)"
+    if [ "$os" != "Darwin" ] || [ "$arch" != "arm64" ]; then
+        echo "  [WARN] codeagent-wrapper is arm64 macOS only; current platform: $os/$arch."
+        echo "         Linking anyway, but /custom:execute-plan will fail at runtime."
+    fi
+    link_one "$CODEAGENT_WRAPPER" "$HOME/.claude/bin/codeagent-wrapper"
+fi
+
 # --- MCP server CLI tools (npm global packages) ---
 
 NPM_GLOBAL_LIST="$(npm list -g --depth=0 2>/dev/null || true)"
@@ -204,6 +226,16 @@ fi
 
 echo
 echo "Symlink install done. installed=$installed  overwritten=$overwritten  already_linked=$already_linked  skipped=$skipped"
+
+# --- tt-web sub-installer (localhost token-usage dashboard) ---
+
+TT_WEB_INSTALL="$SCRIPT_DIR/tt-web/install.sh"
+
+if [ -x "$TT_WEB_INSTALL" ]; then
+    echo
+    echo "Running tt-web sub-installer:"
+    "$TT_WEB_INSTALL"
+fi
 
 if [ "$skipped" -gt 0 ]; then
     echo

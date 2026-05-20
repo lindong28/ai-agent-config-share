@@ -89,7 +89,7 @@ fix 过程中至少要让以下几类信息变清晰。**这不是顺序步骤**
 - **Strengthen, don't enumerate**：让正确路更显眼，而非列举错路。每加一行应关闭一个系统性 gap，不是 patch 单次 hallucination
 - **structural fit**：fix 要强化 artifact 的现有结构，而非 bolt-on 补丁。多想想 fix 放在哪里、用什么格式能自然融入
 - **trust-the-model test**：这段 fix 给 SOTA 模型看了，它自己能推出正确的做法吗？能 → 可能不需要这么具体
-- **Calibrate by current state**：skill 缺相关 instruction 的，加 baseline 指令（如 lens / alignment point）就停；已有 instruction 仍走偏才升级到反模式 / 强措辞。强措辞过早降低泛化性
+- **Calibrate by current state**：skill 缺相关 instruction 的，加 baseline 指令（如 lens / alignment point）就停；已有 instruction 仍走偏才升级到反模式 / 强措辞。强措辞过早降低泛化性。同一 root cause 加一层防护就停，不要叠多层（如 lens + gate + tripwire 三重）——出 re-failure 再升级，别预防式叠加
 - **universalization test**：当 fix 向 universal mechanism（必须能答出表 / checklist / mandatory section）添加条目时，每条必须对 artifact 的**所有目标场景**成立。问自己："这条对 [其他场景] 也说得通吗？"说不通 → 找背后覆盖所有场景的 principle 替代，或放入带适用条件的软指导 section（参见 `create-plan.md` 的硬/软分层模式）。直接把特定场景的需求加为硬要求是不匹配场景的 compliance burden
 - restructuring 类 fix 可参考 `skill-creation-patterns.md` 中 proven template；**不 force-fit**
 
@@ -124,7 +124,10 @@ fix 过程中至少要让以下几类信息变清晰。**这不是顺序步骤**
 
 ### 审核
 
-完成 Edit 后执行 `/custom:review-skill <path>` 循环审查改动；invoke 时重点围绕改动的内容进行审核
+完成 Edit 后调用 `/custom:review-skill <path>`；invoke 时重点围绕改动的内容进行审核。
+
+- **独立性**：spawn general-purpose subagent 跑（不要 inline 自查替代）。
+- **收敛性**：主 session 判断 finding 是否需修。需修 → 改 → 重审。循环到一轮无需修。
 
 ---
 

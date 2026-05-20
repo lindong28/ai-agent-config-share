@@ -279,7 +279,7 @@ spec:    /abs/path/to/plans/<name>-<date>/spec.md       # 若有 spec
 state:   /abs/path/to/plans/<name>-<date>/state.md      # 长任务默认启用
 journal: /abs/path/to/plans/<name>-<date>/journal.md    # 长任务默认启用
 
-下一步：在新 session 里跑 `claude '实现这份 plan：<path-to-plan.md>'`
+下一步：在新 session 里跑 `claude '实现 <path-to-plan.md>'`
 （implementer 会自动按 plan banner + 全局 CLAUDE.md 长任务协议读 state/journal；spec.md 由 plan 内引用）
 ```
 
@@ -308,5 +308,6 @@ plan written: /abs/path/to/plans/<name>-<date>.md
 - **没对齐取舍偏好就写 L2 verify**：AIGC / UX-heavy 任务里，用户体验维度多且互相牵制，但 verify 维度优先级没跟用户拍——阈值全是 planner 默认，交付时争议
 - **verify 单层化**：只写 internal verify（types / lint / unit test）就声称设计完整 → plan 不知道交付的样子；只写 user-facing 不写每个非平凡设计决策的内部检查 → 错误全推到交付 gate，迭代成本爆炸
 - **替用户决策**：把"分布式一致性用强一致还是最终一致"或"傻瓜式 vs 高级可调"这类高反转成本取舍自己拍——plan 阶段最需要用户拍板的事
+- **把 mandatory workflow gate 降级为用户选项**：§3 的 procedural steps（审查 / 长任务 bootstrap / Handoff 等）是 planner autonomous 执行的环节，不是设计取舍——停下来征求"要不要跑 review-plan / 是否 bootstrap" 是把本属 planner 的工作流决策推给 user。设计取舍 → AskUserQuestion；workflow gate → 直接执行。
 - **verify 没区分人机边界**：可自动化的 API / CLI / browser / DevTools 验证被写成"人工测试"；或需要用户真机判断的 manual gate 前没有用脚本 / mock / 截图 / DB / API 先排除主要风险——implementer 会过早 blocked
 - **用户决策交接过薄**：phase 边界写"让用户选择/确认"，但没定义选择目标、选项取舍、直接可看的材料、最短访问路径和回复格式——implementer 会把决策 gate 降级成文字推荐或让用户自己找材料
