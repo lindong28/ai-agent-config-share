@@ -2,7 +2,6 @@
 name: create-plan
 description: 用户给一个模糊任务描述（设计/重构/新增功能/规划 xxx）、需要先产出 plan.md 再实现时使用。单文件改动或已存在 plan 的场景不用。
 argument-hint: <task description> [可附 "给我 N 份方案" 启用 Best-of-N]
-disable-model-invocation: true
 origin: 2026-04-30
 ---
 

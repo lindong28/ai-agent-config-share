@@ -81,13 +81,16 @@
 
   async function withRefresh(button, load) {
     const label = button.textContent;
+    const wasDisabled = button.disabled;
     button.setAttribute("aria-busy", "true");
+    button.disabled = true;
     button.textContent = "⟳ Refreshing";
     try {
       await load();
     } finally {
       button.textContent = label;
       button.setAttribute("aria-busy", "false");
+      button.disabled = wasDisabled;
     }
   }
 
@@ -258,6 +261,249 @@
     return `updated ${Math.floor(hours / 24)}d ago`;
   }
 
+  async function initNetwork() {
+    async function load(force) {
+      try {
+        const data = await api("/api/network", force ? { force: "1" } : {});
+        renderNetwork(data, () => load(true));
+      } catch (error) {
+        renderNetwork({
+          error: error && error.message ? error.message : String(error),
+          verdict: "unknown",
+        }, () => load(true));
+      }
+    }
+    const refresh = qs("#refresh");
+    if (refresh) {
+      refresh.addEventListener("click", () => withRefresh(refresh, () => load(true)));
+    }
+    updateNavLinks();
+    await load(false);
+  }
+
+  function renderNetwork(data, retry) {
+    renderNetworkBanner(data);
+    if (data.installed === false) {
+      renderNetworkError({
+        title: "ip-check is not installed. Run tt-web/install.sh.",
+        message: data.hint || data.error || "Install the ip-check wrapper before using /network.",
+        docs: true,
+      }, retry);
+      setNetworkCardsUnavailable("ip-check is not installed.");
+      return;
+    }
+    if (data.error) {
+      renderNetworkError({
+        title: "Network check failed",
+        message: data.error,
+        retry: true,
+      }, retry);
+      setNetworkCardsUnavailable("Network check failed.");
+      return;
+    }
+    clearNetworkError();
+    renderLocalNetwork(data);
+    renderPublicNetwork(data);
+    renderRiskNetwork(data);
+    renderTimezoneNetwork(data);
+    renderConclusions(data);
+  }
+
+  function renderNetworkBanner(data) {
+    const banner = qs("#network-banner");
+    const verdict = qs("#network-verdict");
+    const updated = qs("#network-updated");
+    const level = data.verdict || "unknown";
+    banner.className = `verdict-banner ${level === "high" ? "high" : level === "low" ? "low" : level === "proxy-in-use" ? "proxy-in-use" : "unknown"}`;
+    if (data.installed === false) {
+      verdict.textContent = "—";
+      updated.textContent = "Cause: ip-check is not installed";
+      return;
+    } else if (data.error) {
+      verdict.textContent = "—";
+      updated.textContent = `Cause: ${data.error}`;
+      return;
+    } else if (level === "high") {
+      verdict.textContent = "High risk for Claude use";
+    } else if (level === "proxy-in-use") {
+      verdict.textContent = "Claude usable, but proxy is in use";
+    } else if (level === "low") {
+      verdict.textContent = "Low risk for Claude use";
+    } else {
+      verdict.textContent = "Network status unknown";
+    }
+    updated.textContent = data.timestamp ? `Last updated ${formatDate(data.timestamp)}` : "—";
+  }
+
+  function renderNetworkError(error, retry) {
+    const panel = qs("#network-error");
+    if (!panel) {
+      return;
+    }
+    const docsLink = error.docs ? '<a href="/ip-check-docs">Docs</a>' : "";
+    const retryButton = error.retry ? '<button type="button" data-network-retry>Retry</button>' : "";
+    const actions = [docsLink, retryButton].filter(Boolean).join("");
+    panel.hidden = false;
+    panel.innerHTML = [
+      `<h2>${escapeHtml(error.title)}</h2>`,
+      `<p>${escapeHtml(error.message || "Unknown error")}</p>`,
+      actions ? `<div class="network-error-actions">${actions}</div>` : "",
+    ].join("");
+    const button = panel.querySelector("[data-network-retry]");
+    if (button && retry) {
+      button.addEventListener("click", () => withRefresh(button, retry));
+    }
+  }
+
+  function clearNetworkError() {
+    const panel = qs("#network-error");
+    if (panel) {
+      panel.hidden = true;
+      panel.innerHTML = "";
+    }
+  }
+
+  function setNetworkCardsUnavailable(message) {
+    const html = `<div class="section-failure">${escapeHtml(message)}</div>`;
+    ["local", "public", "risk", "timezone", "conclusion"].forEach((id) => {
+      qs(`#network-${id}`).innerHTML = html;
+    });
+  }
+
+  function renderLocalNetwork(data) {
+    const local = data.local;
+    if (!local) {
+      renderSectionFailure("#network-local", data, "local");
+      return;
+    }
+    const ipv6 = local.ipv6_leaked ? statusPill("bad", local.ipv6 || "leaked") : statusPill("ok", "disabled");
+    const dns = local.dns && local.dns.length ? local.dns.map(renderDns).join("") : "—";
+    qs("#network-local").innerHTML = [
+      kvRow("LAN IP", escapeHtml(local.lan_ip || "—")),
+      kvRow("IPv6", ipv6),
+      kvRow("DNS servers", `<div class="dns-list">${dns}</div>`),
+      kvRow("DNS region", local.dns_has_cn ? statusPill("bad", "CN resolver detected") : statusPill("ok", "no CN resolver")),
+    ].join("");
+  }
+
+  function renderPublicNetwork(data) {
+    const pub = data.public;
+    if (!pub || pub.ok === false) {
+      renderSectionFailure("#network-public", data, "public", pub && pub.error);
+      return;
+    }
+    const location = [pub.country, pub.region, pub.city].filter(Boolean).join(" / ") || "—";
+    const timezone = pub.timezone ? `${escapeHtml(pub.timezone)} (${escapeHtml(pub.tz_offset || "—")})` : "—";
+    qs("#network-public").innerHTML = [
+      kvRow("IP", escapeHtml(pub.ip || "—")),
+      kvRow("Location", escapeHtml(location)),
+      kvRow("ISP", escapeHtml(pub.isp || "—")),
+      kvRow("Org", escapeHtml(pub.org || "—")),
+      kvRow("Timezone", timezone),
+    ].join("");
+  }
+
+  function renderRiskNetwork(data) {
+    const pub = data.public || {};
+    const risk = data.risk;
+    const spam = data.spam;
+    const proxyEnvEntries = Object.entries(data.proxy_envs || {});
+    const score = risk && risk.score !== null && risk.score !== undefined
+      ? statusPill(risk.level === "high" ? "bad" : risk.level === "medium" ? "warn" : "ok", `${risk.score}/100 ${risk.level}`)
+      : statusPill("warn", sectionMessage(data, "risk") || "not queried");
+    const type = risk && risk.type ? escapeHtml(risk.type) : "—";
+    const markedProxy = Boolean(pub.proxy || (risk && risk.marked_proxy));
+    const spamParsed = spam && (
+      spam.score !== null && spam.score !== undefined ||
+      spam.frequency !== null && spam.frequency !== undefined ||
+      spam.last_seen
+    );
+    const spamFallback = spam && spam.raw_lines && spam.raw_lines.length
+      ? spam.raw_lines.map(escapeHtml).join("<br>")
+      : "";
+    const spamScore = spamParsed && spam.score !== null && spam.score !== undefined
+      ? statusPill(spam.level === "high" ? "bad" : spam.level === "medium" ? "warn" : "ok", `${spam.score}/100 ${spam.level || ""}`.trim())
+      : spamFallback || sectionMessage(data, "spam") || "—";
+    const spamReports = spamParsed && spam.frequency !== null && spam.frequency !== undefined
+      ? escapeHtml(spam.frequency)
+      : "—";
+    const lastSpamReport = spamParsed && spam.last_seen ? escapeHtml(spam.last_seen) : "—";
+    const envs = proxyEnvEntries.length
+      ? proxyEnvEntries.map(([key, value]) => `${escapeHtml(key)} = ${escapeHtml(value)}`).join("<br>")
+      : "—";
+    qs("#network-risk").innerHTML = [
+      kvRow("Risk score (proxycheck)", score),
+      kvRow("Type (proxycheck)", type),
+      kvRow("Marked proxy (ip-api / proxycheck)", markedProxy ? statusPill("warn", "yes") : statusPill("ok", "no")),
+      kvRow("Hosting (ip-api)", pub.hosting ? statusPill("warn", "yes") : statusPill("ok", "no")),
+      kvRow("Spam score (stopforumspam)", spamScore),
+      kvRow("Spam reports (stopforumspam)", spamReports),
+      kvRow("Last spam report", lastSpamReport),
+      kvRow("Proxy envs (local shell)", envs),
+    ].join("");
+  }
+
+  function renderTimezoneNetwork(data) {
+    const tz = data.tz_check;
+    const pub = data.public || {};
+    if (!tz) {
+      renderSectionFailure("#network-timezone", data, "tz_check");
+      return;
+    }
+    const match = tz.matched === true
+      ? statusPill("ok", tz.match_label || "matched")
+      : tz.matched === false
+        ? statusPill("bad", tz.match_label || "mismatch")
+        : statusPill("warn", "not comparable");
+    qs("#network-timezone").innerHTML = [
+      kvRow("CLI timezone", `${escapeHtml(tz.cli_tz || "—")} (${escapeHtml(tz.cli_offset || "—")})`),
+      kvRow("Public timezone", pub.timezone ? `${escapeHtml(pub.timezone)} (${escapeHtml(pub.tz_offset || "—")})` : "—"),
+      kvRow("Match", match),
+    ].join("");
+  }
+
+  function renderConclusions(data) {
+    const items = data.conclusions || [];
+    const note = '<p class="conclusion-note">Verdict: HIGH if any of IPv6 leak / CN DNS / risk score &gt;= 70 / TZ mismatch. PROXY-IN-USE if proxy detected but no high signals. Otherwise LOW.</p>';
+    if (!items.length) {
+      qs("#network-conclusion").innerHTML = `<div class="empty-state">—</div>${note}`;
+      return;
+    }
+    qs("#network-conclusion").innerHTML = `<ul class="conclusion-list">${items.map((item) => {
+      const kind = item.level === "bad" ? "bad" : item.level === "warn" ? "warn" : "ok";
+      return `<li>${statusPill(kind, item.level)} <span>${escapeHtml(item.text)}</span></li>`;
+    }).join("")}</ul>${note}`;
+  }
+
+  function renderSectionFailure(selector, data, section, fallback) {
+    const message = fallback || sectionMessage(data, section) || "unknown";
+    qs(selector).innerHTML = `<div class="section-failure">${statusPill("warn", "Query failed")} ${escapeHtml(message)}</div>`;
+  }
+
+  function sectionMessage(data, section) {
+    const error = (data.errors || []).find((item) => item.section === section);
+    return error && error.message;
+  }
+
+  function kvRow(label, value) {
+    return `<div class="kv-row"><div class="label">${escapeHtml(label)}</div><div class="value">${value}</div></div>`;
+  }
+
+  function renderDns(entry) {
+    const country = entry.country ? ` ${statusPill(entry.country === "CN" ? "bad" : "ok", entry.country)}` : "";
+    const label = entry.label ? ` <span class="muted">${escapeHtml(entry.label)}</span>` : "";
+    return `<div class="dns-row"><span>${escapeHtml(entry.ip)}</span>${label}${country}</div>`;
+  }
+
+  function statusPill(kind, text) {
+    return `<span class="status-pill ${kind}">${escapeHtml(text)}</span>`;
+  }
+
+  function formatDate(iso) {
+    const date = new Date(iso);
+    return Number.isNaN(date.getTime()) ? iso : date.toLocaleString();
+  }
+
   async function initOverview() {
     async function load() {
       const data = await api("/api/overview", { range: getRange() });
@@ -359,6 +605,7 @@
     qs,
     setParam,
     shortText,
+    initNetwork,
     initOverview,
     initSessions,
   };

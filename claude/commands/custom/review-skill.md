@@ -35,9 +35,10 @@ subagent 任务：读以下文件 + 目标文件，按维度报告违反/borderl
 - 必读：`~/.claude/references/skill-review-principles.md` + `~/.claude/references/deep-discuss-style.md`
 - 启用 optimize 模式时追加：`~/.claude/references/skill-optimization-principles.md`
 - 若本会话包含目标的创建过程，追加 `~/.claude/references/skill-creation-principles.md` 对创建过程做补充审查
+- 若 diff 看起来是 session-level upgrade fix（基于观察到的失败行为对 skill 加指令），追加 `~/.claude/commands/custom/fix-skill-from-session.md` §2 Fix 设计 作为 diff-aware fix-review lens——重点 evaluate 每条新增的 fortification 是否 evidence-driven、强度是否过早升级
 
 报告维度：
-- **纵向**：按 review 6 原则逐条扫；optimize 模式下追加 3 条优化原则
+- **纵向**：按 review principles 逐条扫；optimize 模式下追加 3 条优化原则
 - **横向**：对每个 section 跑 review principle-2 的 section-scope trust-the-model test
 
 subagent 不修改文件、不发 AskUserQuestion，只输出发现报告。报告中明确标注每条发现来自 review 还是 optimize 原则集。

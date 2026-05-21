@@ -32,7 +32,7 @@ disable-model-invocation: true
 
 遵循 `~/.claude/references/deep-discuss-style.md` 的风格（提问 / 展示 / 让用户拍板）。其他参考：
 
-- `~/.claude/references/skill-review-principles.md` — 6 条原则是 fix 质量的权威。**冲突时原则文件赢**
+- `~/.claude/references/skill-review-principles.md` — review principles 是 fix 质量的权威。**冲突时原则文件赢**
 - `~/.claude/references/skill-creation-patterns.md` — proven template，restructuring 类 fix 可备选；**不 force-fit**
 
 本 skill 的关键 framing：
@@ -97,7 +97,7 @@ fix 过程中至少要让以下几类信息变清晰。**这不是顺序步骤**
 
 **对齐**：fix 后整体文件仍然健康。
 
-**lens**：fix 读起来像原本就在那里，还是像 bolted-on 的补丁？重读整个 file 检查：是否破坏相邻 section 的一致性？是否引入跨段矛盾？删除的内容是否被其他段依赖？是否仍满足 `skill-review-principles.md` 6 条原则？
+**lens**：fix 读起来像原本就在那里，还是像 bolted-on 的补丁？重读整个 file 检查：是否破坏相邻 section 的一致性？是否引入跨段矛盾？删除的内容是否被其他段依赖？是否仍满足 `skill-review-principles.md` 全部 principles？
 
 验证发现 regression 时，当作新问题重新诊断。
 
@@ -114,7 +114,7 @@ fix 过程中至少要让以下几类信息变清晰。**这不是顺序步骤**
 | Root cause 找到了（哪条指令 / 设计选择导致走偏） | "这里好像不太对" |
 | Fix 补的是 principle / lens，不是枚举具体错误 | "不要写 X Y" |
 | Fix 匹配目标 section 的格式约定，读起来像原本就在那里 | 像补丁 |
-| 整文件仍满足 `skill-review-principles.md` 6 条原则 | fix 引入新的原则违反 |
+| 整文件仍满足 `skill-review-principles.md` 全部 principles | fix 引入新的原则违反 |
 
 ### 与用户的交互
 

@@ -2,6 +2,8 @@ import argparse
 import json
 import logging
 import mimetypes
+import subprocess
+import time
 from collections import defaultdict
 from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -15,6 +17,8 @@ from parsers import claude_status, codex
 ROOT = Path(__file__).resolve().parent
 WEB_ROOT = ROOT / "web"
 logger = logging.getLogger("tt-web")
+_NETWORK_CACHE = {"ts": 0.0, "data": None}
+_NETWORK_TTL = 60.0
 
 
 def overview(query):
@@ -78,28 +82,73 @@ def health(_query):
     return {"ok": True}
 
 
+def network(query):
+    force = query.get("force", [None])[0] == "1"
+    now = time.time()
+    if (not force) and _NETWORK_CACHE["data"] and (now - _NETWORK_CACHE["ts"] < _NETWORK_TTL):
+        return _NETWORK_CACHE["data"]
+    try:
+        result = subprocess.run(["ip-check", "--json"], capture_output=True, text=True, timeout=30)
+        if result.returncode != 0:
+            return {
+                "error": result.stderr or "ip-check exited non-zero",
+                "installed": True,
+                "verdict": "unknown",
+            }
+        data = json.loads(result.stdout)
+        _NETWORK_CACHE["ts"] = now
+        _NETWORK_CACHE["data"] = data
+        return data
+    except FileNotFoundError:
+        return {
+            "error": "ip-check command not found in PATH",
+            "installed": False,
+            "verdict": "unknown",
+            "hint": "Run tt-web/install.sh to install",
+        }
+    except subprocess.TimeoutExpired:
+        return {
+            "error": "ip-check timeout (>30s) - external APIs may be slow",
+            "installed": True,
+            "verdict": "unknown",
+        }
+    except json.JSONDecodeError as exc:
+        return {
+            "error": f"ip-check returned invalid JSON: {exc}",
+            "installed": True,
+            "verdict": "unknown",
+        }
+
+
 ROUTES = {
     "/api/health": health,
     "/api/overview": overview,
     "/api/pivot": pivot_endpoint,
     "/api/sessions": sessions_endpoint,
+    "/api/network": network,
 }
 
 
 class Handler(BaseHTTPRequestHandler):
+    def do_HEAD(self):
+        self._handle_request(send_body=False)
+
     def do_GET(self):
+        self._handle_request(send_body=True)
+
+    def _handle_request(self, send_body=True):
         parsed = urlparse(self.path)
         try:
             if parsed.path.startswith("/api/session/"):
                 session_id = parsed.path[len("/api/session/") :]
-                self._send_json(session_detail(session_id))
+                self._send_json(session_detail(session_id), send_body=send_body)
                 return
             route = ROUTES.get(parsed.path)
             if route:
-                self._send_json(route(parse_qs(parsed.query)))
+                self._send_json(route(parse_qs(parsed.query)), send_body=send_body)
                 return
-            if parsed.path in ("/", "/explore", "/sessions") or parsed.path.startswith("/web/"):
-                self._serve_static(parsed.path)
+            if parsed.path in ("/", "/explore", "/sessions", "/network", "/ip-check-docs") or parsed.path.startswith("/web/"):
+                self._serve_static(parsed.path, send_body=send_body)
                 return
             self.send_error(404)
         except Exception as exc:
@@ -109,22 +158,27 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
         logger.info("%s - %s", self.address_string(), fmt % args)
 
-    def _send_json(self, payload, status=200):
+    def _send_json(self, payload, status=200, send_body=True):
         data = json.dumps(payload, default=_json_default).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(data)))
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
-        self.wfile.write(data)
+        if send_body:
+            self.wfile.write(data)
 
-    def _serve_static(self, path):
+    def _serve_static(self, path, send_body=True):
         if path == "/":
             file_path = WEB_ROOT / "index.html"
         elif path == "/explore":
             file_path = WEB_ROOT / "explore.html"
         elif path == "/sessions":
             file_path = WEB_ROOT / "sessions.html"
+        elif path == "/network":
+            file_path = WEB_ROOT / "network.html"
+        elif path == "/ip-check-docs":
+            file_path = ROOT / "ip_check" / "README.md"
         elif path.startswith("/web/"):
             file_path = ROOT / path.lstrip("/")
         else:
@@ -141,12 +195,17 @@ class Handler(BaseHTTPRequestHandler):
             self.send_error(404)
             return
 
-        content_type = mimetypes.guess_type(str(resolved))[0] or "application/octet-stream"
+        content_type = mimetypes.guess_type(str(resolved))[0]
+        if content_type is None and resolved.suffix == ".md":
+            content_type = "text/markdown"
+        if content_type is None:
+            content_type = "application/octet-stream"
         self.send_response(200)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
-        self.wfile.write(data)
+        if send_body:
+            self.wfile.write(data)
 
 
 def _range_window(value, now):

@@ -1,5 +1,6 @@
 {
   "env": {
+    "TZ": "America/Los_Angeles",
     "MCP_TIMEOUT": "60000",
     "ENABLE_TOOL_SEARCH": "auto",
     "DISABLE_TELEMETRY": "1",

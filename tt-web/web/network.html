@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>tt-web Network</title>
+    <link rel="stylesheet" href="/web/styles.css">
+    <script src="/web/app.js"></script>
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <div class="brand">
+          <div class="brand-mark" aria-hidden="true"></div>
+          <h1 class="brand-title">tt-web</h1>
+        </div>
+        <nav class="nav" aria-label="Primary">
+          <a data-nav href="/">Overview</a>
+          <a data-nav href="/explore">Explore</a>
+          <a data-nav href="/sessions">Sessions</a>
+          <a data-nav href="/network">Network</a>
+        </nav>
+        <div class="toolbar">
+          <button id="refresh" class="icon-btn" type="button" title="Refresh" aria-busy="false">⟳ Refresh</button>
+        </div>
+      </header>
+      <main class="main network-main">
+        <section id="network-banner" class="verdict-banner unknown" aria-live="polite">
+          <span id="network-verdict">—</span>
+          <span id="network-updated" class="network-updated">—</span>
+        </section>
+        <section id="network-error" class="network-error" role="alert" aria-live="assertive" hidden></section>
+        <section class="network-grid" aria-label="Network diagnostics">
+          <article class="network-card">
+            <h2>Local</h2>
+            <div id="network-local" class="network-card-body"></div>
+          </article>
+          <article class="network-card">
+            <h2>Public</h2>
+            <div id="network-public" class="network-card-body"></div>
+          </article>
+          <article class="network-card">
+            <h2>Risk</h2>
+            <div id="network-risk" class="network-card-body"></div>
+          </article>
+          <article class="network-card">
+            <h2>Timezone</h2>
+            <div id="network-timezone" class="network-card-body"></div>
+          </article>
+          <article class="network-card">
+            <h2>Conclusion</h2>
+            <div id="network-conclusion" class="network-card-body"></div>
+          </article>
+        </section>
+      </main>
+    </div>
+    <script>
+      TTWeb.initNetwork().catch((error) => {
+        console.error(error);
+        document.body.insertAdjacentHTML("beforeend", '<p class="main error">Failed to load network.</p>');
+      });
+    </script>
+  </body>
+</html>

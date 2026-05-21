@@ -3,6 +3,7 @@ import logging
 import os
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Optional
 
 from . import RateLimits
 
@@ -12,7 +13,7 @@ STATUS_FILE = os.path.expanduser("~/.claude/tt-status.json")
 logger = logging.getLogger(__name__)
 
 
-def load_rate_limits(status_file: str | None = None) -> RateLimits | None:
+def load_rate_limits(status_file: Optional[str] = None) -> Optional[RateLimits]:
     path = Path(status_file or STATUS_FILE)
     if not path.is_file():
         return None

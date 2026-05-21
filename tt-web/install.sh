@@ -22,3 +22,18 @@ case ":$PATH:" in
 esac
 
 echo "tt-web installed"
+
+# --- ip-check sub-feature ---
+IPCHECK_BIN="$ROOT_DIR/ip-check"
+chmod +x "$IPCHECK_BIN"
+ln -sfn "$IPCHECK_BIN" "$BIN_DIR/ip-check"
+
+# requests dependency (used by ip-check)
+if ! python3 -c "import requests" >/dev/null 2>&1; then
+  echo "Installing 'requests' (required by ip-check)..."
+  python3 -m pip install --user requests || {
+    echo "WARN: pip install failed. ip-check will not work until 'requests' is installed."
+    echo "      Try: python3 -m pip install --user requests"
+  }
+fi
+echo "ip-check installed"

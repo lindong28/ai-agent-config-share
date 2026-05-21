@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# Resolves symlinks, then cd's to the repo dir so `python3 -m ip_check` works
+# when this script is invoked through ~/.local/bin/ip-check.
+SOURCE="${BASH_SOURCE[0]}"
+while [ -L "$SOURCE" ]; do
+  DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+  SOURCE="$(readlink "$SOURCE")"
+  [[ "$SOURCE" != /* ]] && SOURCE="$DIR/$SOURCE"
+done
+SCRIPT_DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+cd "$SCRIPT_DIR" && exec python3 -m ip_check "$@"
