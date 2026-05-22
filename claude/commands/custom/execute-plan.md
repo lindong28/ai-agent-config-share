@@ -51,10 +51,10 @@ Bash({
 - `<WORKDIR>` 必须来自 Bash `pwd`，**禁止从 `$HOME` / 环境变量推断**——repo 路径可能含 worktree 后缀。
 - `run_in_background: true` 是硬约束（不可阻塞 Claude 主 session）。
 - spawn-prompt 只放**未来 LLM 不会自动 default 的非显然信息**：
-  - 角色：implementation agent；end-to-end 执行 plan，不只分析
+  - 角色：<根据任务进行角色设定，例如负责代码的实现/审查/测试>
+  - 用户原始 task 描述（保留原话，不要 paraphrase）
   - 协议绑定：plan 顶部有 Long-task banner → 严格按 `~/.claude/references/long-task-protocol.md`；任何 stop 判断按 `~/.claude/references/plan-execution-principles.md` 的 Stop Gate
-  - 反转保护：未经用户授权不要回滚用户改动；改动限定在 plan 范围内
-  - 真正 blocked 时：贴满足 5 项 Stop Gate 的 report（不要让 Codex 替自己写理由让 stop 合法）
+  - Blocked 时：贴满足 5 项 Stop Gate 的 report
 - 从 wrapper 输出捕获 Codex 的 `session id`——后续 resume 完全依赖它。当前只能扫描输出文本，**捕不到时视为 wrapper / 适配层问题**——排查 stderr / 退出码 / 输出截断，不要直接交给用户。
 
 ### 2. 等待与轮询

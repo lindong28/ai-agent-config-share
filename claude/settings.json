@@ -65,7 +65,7 @@
       "Bash(~/.claude/bin/codeagent-wrapper --backend codex*)"
     ]
   },
-  "model": "opus[1m]",
+  "model": "claude-opus-4-6[1m]",
   "enableAllProjectMcpServers": true,
   "statusLine": {
     "type": "command",

@@ -76,4 +76,4 @@ Dashboard 上 "Claude 5h / 7d quota" 两张卡片的数据来自 `~/.claude/tt-s
 
 ---
 
-*Last synced from upstream: 2026-05-20 23:56 GMT+8*
+*Last synced from upstream: 2026-05-22 07:29 GMT+8*
