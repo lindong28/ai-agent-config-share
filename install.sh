@@ -3,8 +3,9 @@
 #
 # Auto-installed (safe to share verbatim):
 #   Symlinks:
-#     <repo>/claude/commands/custom/*.md → ~/.claude/commands/custom/*.md
-#     <repo>/claude/references/*.md      → ~/.claude/references/*.md
+#     <repo>/claude/commands/custom/*.md  → ~/.claude/commands/custom/*.md
+#     <repo>/claude/commands/routine/*.md → ~/.claude/commands/routine/*.md
+#     <repo>/claude/references/*.md       → ~/.claude/references/*.md
 #     <repo>/claude/bin/codeagent-wrapper → ~/.claude/bin/codeagent-wrapper
 #     <repo>/claude/statusline.sh        → ~/.claude/statusline.sh
 #     <repo>/claude/statusline-transcript.py → ~/.claude/statusline-transcript.py
@@ -292,6 +293,7 @@ echo "  source: $SCRIPT_DIR"
 echo "  target: $HOME"
 
 link_tree "commands/custom"
+link_tree "commands/routine"
 link_tree "references"
 
 # --- Codex agent definitions (symlink .toml files) ---
