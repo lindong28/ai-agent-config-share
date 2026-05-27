@@ -176,3 +176,4 @@ skill written: /abs/path/to/<file>
 - **silent default 关键 input**：input materially shapes output 时，缺失必须 mid-flow 问，不能静默 default
 - **未经 alignment 就 paraphrase 用户原话**：跳过措辞保真度 alignment、静默 paraphrase → 损失非显然信号（决策引导见 §2 写法决策 → 措辞保真度）
 - **force-fit `skill-creation-patterns` 模板**：template 是 case-by-case 备选，照搬而不思考是反模式
+- **为丰满或长度对齐而填充内容**：同一检查按目标类型枚举多条 bullet、或为匹配参照 artifact 密度而展开 → 产出半数以上 bullet 是 padding。去重测试：移除后 model 行为会不同吗？不会 → cut

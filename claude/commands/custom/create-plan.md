@@ -187,9 +187,9 @@ planner 和 user 对齐的过程中，至少要让以下几类信息变清晰。
 
 | 条件 | 落点 |
 |---|---|
-| 默认（长任务启用，可选叠加 spec） | `./plans/<short-name>-<YYYYMMDD>/plan.md`（与 state.md / journal.md / spec.md 共存） |
-| Best-of-N | `./plans/<short-name>-<YYYYMMDD>/plan-<i>.md`，子目录承载 N 份 |
-| Opt-out 长任务 + 无 spec + 单 plan | `./plans/<short-name>-<YYYYMMDD>.md`（平铺） |
+| 默认（长任务启用，可选叠加 spec） | `./plans/<YYYYMMDD>-<short-name>/plan.md`（与 state.md / journal.md / spec.md 共存） |
+| Best-of-N | `./plans/<YYYYMMDD>-<short-name>/plan-<i>.md`，子目录承载 N 份 |
+| Opt-out 长任务 + 无 spec + 单 plan | `./plans/<YYYYMMDD>-<short-name>.md`（平铺） |
 
 - `<short-name>`：从任务描述提 3-5 词 kebab-case；有 spec 输入时复用 spec 所在目录名
 - 同日重名加序号 `-2`、`-3`（平铺）；子目录加 `_v2` 后缀
@@ -273,10 +273,10 @@ plan **不留 open question**。任何 OQ 必须先走升级：
 **子目录形态**（默认 / 长任务启用 / 有 spec）打印同子目录下所有相关文件：
 
 ```
-plan written: /abs/path/to/plans/<name>-<date>/plan.md
-spec:    /abs/path/to/plans/<name>-<date>/spec.md       # 若有 spec
-state:   /abs/path/to/plans/<name>-<date>/state.md      # 长任务默认启用
-journal: /abs/path/to/plans/<name>-<date>/journal.md    # 长任务默认启用
+plan written: /abs/path/to/plans/<date>-<name>/plan.md
+spec:    /abs/path/to/plans/<date>-<name>/spec.md       # 若有 spec
+state:   /abs/path/to/plans/<date>-<name>/state.md      # 长任务默认启用
+journal: /abs/path/to/plans/<date>-<name>/journal.md    # 长任务默认启用
 
 下一步：在新 session 里跑 `claude '实现 <path-to-plan.md>'`
 （implementer 会自动按 plan banner + 全局 CLAUDE.md 长任务协议读 state/journal；spec.md 由 plan 内引用）
@@ -285,7 +285,7 @@ journal: /abs/path/to/plans/<name>-<date>/journal.md    # 长任务默认启用
 **平铺单 plan**（opt-out 长任务 + 无 spec）打印：
 
 ```
-plan written: /abs/path/to/plans/<name>-<date>.md
+plan written: /abs/path/to/plans/<date>-<name>.md
 
 下一步：在新 session 里跑 `claude '实现这份 plan：<path>'`
 ```
@@ -294,7 +294,7 @@ plan written: /abs/path/to/plans/<name>-<date>.md
 
 | # | 角度 | 方案核心 | 范围 | 主要风险 | 文件 |
 |---|------|---------|------|---------|------|
-| 1 | ... | ... | ... | ... | `plans/<name>-<date>/plan-1.md` |
+| 1 | ... | ... | ... | ... | `plans/<date>-<name>/plan-1.md` |
 
 附一句"挑选完后告诉我哪份，我对它跑 §审查 再交付"。用户确认后对所选 plan 跑审查 → 走单 plan handoff 形态。
 

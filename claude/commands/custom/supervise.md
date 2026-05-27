@@ -1,6 +1,6 @@
 ---
 name: supervise
-description: 用 codeagent-wrapper 启动指定 backend（codex / gemini / claude）跑用户口头描述的任务。Claude 作为 supervisor：spawn 前用 AskUserQuestion 跟用户锁定 success criteria + backend；过程中代答 wrapped agent 的简单决策、复杂决策升级给用户；agent 早停时根据 success criteria 续 resume 同 session；任务结束时把观察到的 agent 行为问题 / 工具缺口写到项目层 `docs/issues/observed-issues.md`。触发：显式 `/custom:supervise <task description>`。
+description: 用 codeagent-wrapper 启动指定 backend（codex / gemini / claude）跑用户口头描述的任务。Claude 作为 supervisor：spawn 前用 AskUserQuestion 跟用户锁定 success criteria + backend；过程中代答 wrapped agent 的简单决策、复杂决策升级给用户；agent 早停时根据 success criteria 续 resume 同 session；任务结束时把观察到的 agent 行为问题 / 工具缺口写到项目层 `docs/issues/general.md`。触发：显式 `/custom:supervise <task description>`。
 argument-hint: "[--backend codex|gemini|claude] [--autopilot] <task description>"
 disable-model-invocation: true
 origin: 2026-05-21
@@ -24,7 +24,7 @@ origin: 2026-05-21
 源对话拍过的 ranking，下游 supervisor 取舍按这个顺序：
 
 1. 监督 wrapped agent 完成任务，期间帮用户接管不改方向的决策、复杂决策升级用户
-2. 真实捕获 wrapped agent 在过程中的行为问题 / 工具缺口，沉淀到 `docs/issues/observed-issues.md`，供未来 agent 改进
+2. 真实捕获 wrapped agent 在过程中的行为问题 / 工具缺口，沉淀到 `docs/issues/general.md`，供未来 agent 改进
 3. Agent 早停时由 supervisor 续 resume 同 session，不让用户手动接管上下文
 
 ## 输入契约
@@ -102,11 +102,12 @@ Bash({
 TaskOutput({ task_id, block: true, timeout: 600000 })
 ```
 
-10 分钟未完成是常态，继续轮询，不 kill。仅在三种状态进入第 4 步：
+进入 §4 的条件（四种）：
 
 - Agent 给出明确完成 summary
 - Agent 声称 blocked 并给出 stop report
 - Agent 进程异常退出 / 输出截断 / 无 session id
+- **Agent stuck**：启动 5 分钟后仍无实质输出
 
 每轮等待之间发一条简短中文状态给用户（"Wrapped agent 仍在执行，已等待 X 分钟"），不要静默。
 
@@ -121,10 +122,11 @@ TaskOutput({ task_id, block: true, timeout: 600000 })
 
 | 观察到的现象 | 下一步 |
 |---|---|
-| Agent 给完成 summary + verify 证据 | 核对 lens 是 **agent 给的 verify 证据 ≥ 用户锁定的 success criteria**（每个 criterion 都有可观察证据）；满足 → 进 §5；缺项 → resume 让 agent 补 |
+| Agent 给完成 summary + verify 证据 | 核对两个 lens：(1) **verify 证据 ≥ success criteria**（每个 criterion 有可观察证据）(2) **Stop Gate 归因检查**——agent 把残余工作推给用户的部分，是否通过了 `plan-execution-principles.md` Stop Gate 的归因和替代路径检查。两个 lens 都满足 → 进 §5；任一缺项 → resume 让 agent 补 |
 | Agent 停止但 success criteria 任一项无证据 | 同 session resume；resume-prompt 指出哪几项 criterion 无证据 + supervisor 在 log 里看到的相关线索；回到 §3 |
 | Agent 抛出问题需要用户决策 | 见下方 **Dialogue facet** |
 | Agent 异常 / 无 session id / 输出截断 | 按 wrapper / 适配层问题处理：排查 stderr / 退出码 + 看 `git status` 判断是否已部分完成。**反转成本高（重启丢全部上下文 / resume 损坏 session 后续不可信），supervisor 不要 silent decide**——把诊断结果 + 候选 [resume 同 session / 重启新 session / 放弃交还用户] 通过 `AskUserQuestion` 让用户拍板 |
+| Agent stuck（启动 5 分钟后仍无实质输出） | Stuck session 无可复用上下文——kill 进程，用相同 spawn-prompt 启动新 session（不 resume）。连续两次 stuck → 升级用户（可能是 backend 不可用或 prompt 触发死循环） |
 
 resume 调用形如（同 spawn 的 flag 组 + 后台 + timeout，仅前缀改为 `resume <SESSION_ID>`）：
 
@@ -170,11 +172,11 @@ resume-prompt 只列：哪几项 success criterion 无证据 + 各自的 supervi
 
 **例外**：§4 表格中 Agent 异常 / 无 session id / 输出截断行不受 autopilot 控制——该场景始终升级用户，因为反转成本（重启丢上下文 / resume 损坏 session）无法由 agent 推荐吸收。
 
-### 5. 任务结束：observed-issues.md 落地
+### 5. 任务结束：general.md 落地
 
 **判据**：§4 走到「Agent 完成 + 证据满足 criteria」或「合法 stop（agent 给了完整 stop report + supervisor 同意进无用户阻断）」分支。Agent 异常退出 / 没产出任何可交付物 → 跳过本节，由 §6 handoff 让用户决定。
 
-**对齐**：把 §3 real-time log 里观察到的 wrapped agent 行为问题 / 工具缺口沉淀到 `<WORKDIR>/docs/issues/observed-issues.md`，供未来 agent 改进。
+**对齐**：把 §3 real-time log 里观察到的 wrapped agent 行为问题 / 工具缺口沉淀到 `<WORKDIR>/docs/issues/general.md`，供未来 agent 改进。
 
 **Scope 严格限定**（仅以下入 issue）：
 - Wrapped agent 反复犯同一类错误 / 走弯路 / 漏掉明显手段
@@ -190,7 +192,7 @@ resume-prompt 只列：哪几项 success criterion 无证据 + 各自的 supervi
 
 1. 读本次 real-time log（`<WORKDIR>/logs/supervise/<task-slug>_<YYYYMMDD-HHmm>.md`）提炼候选 issue（一条 log 不等于一条 issue——把同一根因的多条 log 合并）
 2. 候选 issue 列表为空 → 跳过本节
-3. 读 `<WORKDIR>/docs/issues/observed-issues.md`（目录不存在则建目录 + 空文件，再继续）
+3. 读 `<WORKDIR>/docs/issues/general.md`（目录不存在则建目录 + 空文件，再继续）
 4. 对每条候选 issue：
    - 现有 file 有相似 entry（相同行为模式 / 相同工具缺口） → 更新该 entry：在 `Occurrences` 列表 append 一条 `<timestamp> + 当前 session id + 当前 backend + 本次发生情形`，**不新增 top-level entry**
    - 无相似 → 新增 top-level entry，schema 见下
@@ -223,7 +225,7 @@ Type 定义：
 - Verify 证据摘要（每个 success criterion 对应的可观察信号）
 - **Working tree 状态摘要**（`git status` / diff 体量）——若 agent 已 commit 则给出 commit hash；若未 commit 则明示"改动在 working tree，用户后续自行 commit"
 - Supervisor 中间观察的简短总结（resume 次数 / dialogue 升级次数）
-- `observed-issues.md` 落地状态：新增 N 条 / 更新 M 条 / 无 issue
+- `general.md` 落地状态：新增 N 条 / 更新 M 条 / 无 issue
 - Real-time log 路径（`<WORKDIR>/logs/supervise/<task-slug>_<YYYYMMDD-HHmm>.md`），供用户需要时回看
 
 **适用时含**
@@ -242,5 +244,6 @@ Type 定义：
 - **wrapper 报错先归因 wrapper / 适配层**：只有观察到第三方原始响应（HTTP 体 / API error code / 状态页）才能写"外部不可用"。
 - **背景任务 + TaskOutput 轮询**：必须 `run_in_background: true`；不要因为等久就 kill；不要把"在等待"当 stop 理由扔给用户。
 - **语言契约**：与 wrapped agent / 工具交互 English；与用户交互中文。
-- **Real-time log 不替代 observed-issues.md**：log 是 supervisor 自留的过程证据（防 memory compaction），观察问题以 entries 形式落地是 §5 的事。两个不同 consumer——log consumer 是 supervisor 自己，issues file consumer 是未来 agent。
+- **Real-time log 不替代 general.md**：log 是 supervisor 自留的过程证据（防 memory compaction），观察问题以 entries 形式落地是 §5 的事。两个不同 consumer——log consumer 是 supervisor 自己，issues file consumer 是未来 agent。
 - **不接管 task 范围内的代码改动**：Claude 修 wrapper / 适配层允许；替 wrapped agent 写 task 范围内的代码不允许——绕过 supervisor 定位。
+- **Supervisor 的 handoff 也是 stop**：supervisor 把残余工作推给用户时，自身也按 `~/.claude/references/plan-execution-principles.md` Stop Gate 自检——agent 没试完可用路径的情况下，supervisor 不能接受 stop 并转嫁给用户。

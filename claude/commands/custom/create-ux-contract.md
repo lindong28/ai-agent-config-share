@@ -1,144 +1,210 @@
 ---
-description: 用户说"创建 UX contract / bootstrap user-observable 承诺 / 初始化产品 UX contract / create UX contract"。
+description: 从已有产品出发，访谈用户对齐产品全貌（L1）+ 用户视角 verify（L2）+ 验收侧重，写出可被 test-ux 当输入读的验收规格。
 disable-model-invocation: true
 ---
 
 # create-ux-contract
 
-从产品当前的文档 + 实际行为出发，bootstrap 出 `docs/contract/ux-contract.md`（user-observable 承诺）和空的 `docs/issues/ux-issues.md`（issue ledger），作为后续 test-ux 的契约源头。
+入口 command：从已有产品出发，访谈用户对齐**产品全貌（L1）+ 用户视角 verify（L2）+ 验收侧重**，写出可被 test-ux 当输入读的 ux-contract.md。
 
-**协议参照**：`~/.claude/references/ux-test-protocol.md`——两文件的定位、schema、ID 约定、反模式、§什么证据能 justify 哪些 entry。
+ux-contract.md 是面向使用者的**验收规格**——使用者拿它来判断"这些都过了我放心上线"，不含任何实现细节 / 内部状态 / 未来路线。后续 test-ux 在这份规格框定下执行测试。
 
-## Consumer 与产物意识
+## 何时使用
 
-bootstrap 出的两文件主要由两类类 consumer 消费：
+- 产品需要建立系统性的 user-observable 验收规格
+- 后续要跑 test-ux，需要 contract 作为测试基准
 
-- **test-ux**：跑测时按 contract 各段展开验证；contract 描述不到的承诺会被漏检
-- **人 reviewer**：决定 drift / expansion 候选何时合入 contract；当前承诺必须可读、可对比
+## 参数
 
-## Source 处理
+| 参数 | 必需 | 说明 |
+|---|---|---|
+| product context | ✗ | 可附加产品描述 / 入口 / 文档路径等上下文 |
 
-**常见来源（不限于此）**：用户描述，实际产品行为（agent-browser / computer use 观察等），项目文档（PRD / README / CLAUDE.md 等），常识与同类产品惯例。
+---
 
-冲突时**不预设谁赢**，走梯度：
+## 1. Framing：验收规格 + 验收侧重
 
-1. 实质一致只是表述不同 → 合
-2. 能开产品 / 查 docs 原文验证 → 验证而非选边
-3. 仍冲突或影响 contract 关键字段 → AskUserQuestion（情境见 §Gap 对齐）
-4. 低风险且都无法验证 → fall back 到置信度较高的源（例如 用户描述 > 项目文档），并 flag 不确定性
+### 你产出什么、谁来用
 
-> 用户描述粗（如"产品就这样"）不等于 ground truth——回 AskUserQuestion 摸具体。
+交付物 `docs/contracts/ux-contract.md`，**两个读者**：
 
-## 端到端真实使用
+- **用户**：审 contract 完整性——"这些都过了我放心上线"。contract 描述不到的验收规格会被 test-ux 漏检——contract 的完整性直接决定上线保障力度
+- **test-ux subagent**：按 contract 展开测试，验证产品是否满足其中的 user-observable 验收规格
 
-**默认姿态**：本次 bootstrap 的承诺必须来自用户真实可触达的产品入口——真实部署、真实后端、真实账号、真实数据。除非用户显式允许把任务降级为 docs-only contract bootstrap，否则按本原则执行。
+**contract.md 含什么**：
 
-**自助部署优先**：入口不可访问但存在本地化部署路径（本地 dev server / 本地 build / 本地容器 / 模拟器等）且操作只影响本机环境时，主动起服务后继续 bootstrap，不必先问用户。判定"无风险"的 lens：操作可逆、不触达共享或线上资源（生产 DB / 第三方付费或写入型 API / 共享 staging / 真实用户消息通道等）、不影响其他开发者的本地环境。
+- Layer 1 (L1)：产品全貌——产品形态 + 使用方式（使用者拿它做什么）
+- 横切：验收侧重（L1+L2 两层影响，L3 只列方向不决策）
+- Layer 2 (L2)：用户视角 verify（独立于内部实现的「算交付完成」可观测条件）
+- 范围 + 硬限制 + 隐式假设
 
-**BLOCKED 处理**：自助部署不可行 / 自助尝试失败 / 部署需触达上述线上或共享资源 / agent-browser 拉不起 / auth 缺失等时，通过 `AskUserQuestion` 让用户在"修入口 / 换部署 / 显式降级 docs-only / 取消"间决定，不得静默 fall back 到读代码读文档凑 contract。**cost / quota / 时延 / 等待让某条 journey 走不通同样触发 BLOCKED**——让 owner 选 quota override / 降级 docs-only / 取消，不允许在主 session 内自我说服"这里不必走"。
+如果你发现自己开始写"内部状态机 / 代码实现 / 后端架构"——那是 L3，停下来留给 test-ux。
 
-### 什么算端到端
+### 三层意识：contract 是 L1+L2 的载体
 
-**Lens**：真实入口 = 该产品类型下用户生产环境实际触达的那个 artifact（部署 URL / 应用包 / 安装包 / 触发真实后端的 UI）。下表是常见形态的 non-exhaustive anchors，表外形态（hybrid app / Electron / 嵌入式 widget / CLI / 纯 API 等）回 Lens 判定，不要硬塞进表里。
+**Layer 1 (L1) — 产品全貌 + 使用方式**：产品对外暴露的全部 user-observable 能力，**以及使用者拿这个产品做什么**。"是什么"和"用来做什么"同等重要——同样是一个"AI 资讯聚合网站"，用途如果是"每日快速浏览 AI 领域新闻"，验收侧重阅读效率和新鲜度；用途如果是"深度研究 AI 技术趋势"，验收侧重内容深度和检索能力。
 
-| 产品类型 | 真实入口（anchors） |
-| --- | --- |
-| Web | 用户指定的真实部署 URL（production / staging / preview 均可）经浏览器访问，真实网络与真实数据 |
-| Mobile / 小程序 | 体验版 / 正式版 / 测试版包，经原生入口或官方调试工具连真实部署后端 |
-| Desktop | 真实安装包或用户指定 build，连真实本地/远端服务 |
-| API-backed | UI 操作真实触发 API / DB / 权限 / 配额 / 异步任务（可用专门测试账号和测试数据，不替换响应） |
+**Layer 2 (L2) — 用户视角 verify**（TDD-style）：从 L1 使用者视角看「产品 work」的可观测条件。这层**独立于内部实现**——使用者不关心后端怎么做，只关心产品在他们眼里是不是 work。具体形式包含：要执行的操作序列、操作后要观测的点（UI 视觉效果、文字内容、交互反馈、延迟、错误信息等）、怎么判断通过。类比 TDD 的 RED：先写"pass 长什么样"，test-ux 负责去跑。
 
-### mock / 静态分析的位置
+**Layer 3 (L3) — agent-level 高效验证**：从负责执行测试的 agent 角度看，如何高效验证 L2 中的用户视角条件——包括选择交互手段（如 computer-use、agent-browser 等）以及使用用户通常不看的信息（日志、metrics、内部 API、网络请求）。**不属于 contract**，由 test-ux 在 L1+L2 框定下自主决定。contract 的 framing 说明 L3 存在是为了让 contract author 清楚边界：contract 只写用户看得到的，不写 agent 的验证手段和交互工具选择。
 
-- 任何替代真实后端 / 真实数据 / 真实用户身份的手段（mock、内部状态注入、`page.setData`、只读源码 + figma 拼承诺等，统称"mock"）只能作为**辅助理解**——补 docs 不写的边界、对齐字段含义。
-- 主 bootstrap 结论必须落到真实产品观察上；mock 不能成为 contract 条目的唯一来源。
-- 例外：**stable UI 枚举校准**（见反模式段相关条）允许从前端代码常量 / data 配置取值。
+### 横切：验收侧重（贯穿 L1 + L2）
 
-### Journey 覆盖最小集
+验收侧重不属于任何一层，而是**贯穿两层的横切关注点**——用户对产品各维度的相对验收优先级：
 
-bootstrap 阶段对 protocol §什么证据能 justify 哪些 entry 中 journey 级观察的最小执行要求：**至少走通一条主路径 journey（从入口到 success state）**；分支 journey（重抽 / 放弃 / 异常 / resume 等）可走差量观察——只走与主路径不同的那段。整条都没走通的 §Journeys entry 按 §端到端真实使用 BLOCKED 处理。
+- **在 L1**：影响产品描述的深度分布（用户最看重的功能区域描述更详细）
+- **在 L2**：影响 verify 维度的深度和阈值（"功能完整性 > 视觉品质"→ 功能有具体判定条件，视觉只做基本校验）
+- **在 L3**：影响 test-ux 的测试资源分配——**contract 只列方向，不替 test-ux 决策**
 
-## 需要对齐的点
+**关键认知**：用户描述产品时**通常不会主动表达维度偏好**——验收侧重（包括"所有维度均匀覆盖"）是隐含的，需要 contract 阶段显式跟用户对齐。AIGC / UX-heavy 产品尤其常见。
 
-和 user 对齐过程中至少让以下信息变清晰。**不是顺序步骤**——可以并行、迭代、回头补。**AskUserQuestion 遵循 `~/.claude/references/deep-discuss-style.md`：top-down 排序 + 推荐 + pros/cons**。
+**contract 是验收侧重的主谈场**——一旦在 contract 里跟用户拍下，test-ux 直接读 contract 执行，不再追问优先级。
 
-通用 lens：**"如果现在直接写 contract，test-ux 会因为什么没问清楚而漏检？"**
+### 关于顺序
 
-**建议起点**：owner 视角（定义 user-observable 的语境）→ 按 §端到端真实使用 真实使用产品 + 同步读 docs → gap 对齐（reconcile 冲突）。任一环节暴露前置缺失时允许回退补。
+建议访谈顺序：**L1 → 验收侧重 → L2**。L1 收敛产品全貌后立刻讨论侧重，再用对齐过的侧重框定 L2 verify 维度。但**允许迭代回退**——L2 写到一半发现新维度漏了侧重，回头补。**严格顺序不重要，反推方向 + 横切意识重要**。
 
-### 产品形态 + owner 视角
+### contract.md 的位置
 
-**对齐**：产品类型（web / CLI / API / desktop）、owner persona 形态、"现在就想确保被记下的承诺"。
+落点 + 下游 test-ux 如何读：见 §3「输出：ux-contract.md」。
 
-**lens**：什么是 user-observable——这个产品的真实用户从哪里看到承诺被违背？这层语境不清，Surfaces / Journeys / Features 都没落点。
+### 风格与取舍
 
-调用时附了描述先吸收；否则用 AskUserQuestion 问。同步读 PRD / README / CLAUDE.md 等项目文档。
+遵循 `~/.claude/references/deep-discuss-style.md`——contract 阶段质量 ≫ 速度，访谈可以更长、用户介入更高频。
 
-### 观察入口
+---
 
-**对齐**：本次 bootstrap 实际观察的是哪个部署 / 哪个 build / 哪个账号身份。bootstrap 完成时主 session 在向用户的总结里复述这些信息，方便后续 test-ux 复测同一真实产品状态。
+## 2. 需要对齐的点（不限于此）
 
-**lens**："本次要观察的是哪个版本 / 构建？用什么账号或身份？环境与外部服务是否就绪？仅有本地 dev server / 源码时这是否真是用户的可触达对象？"
+contract author 和 user 对齐的过程中，至少要让以下几类信息变清晰。**不是顺序步骤**——可以并行、迭代、回头补；**也不是穷举清单**——产品特性需要的其他对齐点随时加入。
 
-入口不可访问时按 §端到端真实使用 BLOCKED 处理段处理——不静默 fall back。
+通用 lens：**"为了让 contract 能覆盖用户侧重的验收标准并对下游 test-ux 无歧义，我现在缺哪些只能用户回答的信息？"** 剩余决策都能被 agent 合理 default 时，对齐充分。
 
-### 覆盖度 / 时间窗 / 解释力度（owner 拍）
+研究 / 探索 / 实际访问产品确认假设是对齐的有机组成部分——用 computer-use 使用产品、读文档、跑 probe 确认环境——能让你给出更高质量 contract 的动作都该做。
 
-**对齐**：bootstrap 的 ceiling——floor 由"能让 test-ux 跑"定，ceiling 由 owner 在以下轴上的偏好决定。
+**borderline 决策的两条 path**：
 
-**lens**：什么是这版 contract **不该装**的？回答这个比"该装什么"更能定边界。
+- **反转成本高**（写进 contract、test-ux 跟下去再翻盘代价大）→ 立刻 AskUserQuestion
+- **能合理 default**（reviewer 看了能审、翻盘成本低）→ contract author 自己拍 + 写进 contract 末 Defaulted Decision 表给 reviewer 审
 
-**常见轴**（不限于此）：
+**未限定时偏向更全更深**：用户未明确限定范围时，按更全更深取舍，不主动为"快"缩范围；要缩范围让用户显式叫停。
 
-- 列尽所有 user-observable feature vs 只列核心承诺
-- 含路线图 / 即将上线 vs 只当前 v0 actually-implemented
-- 含 planner 合理推断 vs 只 owner 明确承诺
+### 产品全貌 + 使用方式（L1）
 
-### 产品实际行为
+**对齐**：产品对外暴露的 user-observable 能力全景——产品形态、使用形态（入口）、使用方式 (功能集合，使用者拿它做什么)、范围和限制。这是 contract 一切验收规格的反推起点。
 
-**对齐**：按 §端到端真实使用 走真实入口 + 按 §Journey 覆盖最小集 走通主路径，建立"产品现在长什么样 + 实际发生了什么"的直观。
+**lens**：产品是什么形态？使用者画像是谁、怎么使用产品、拿产品用来做什么？什么明确算成功？这个定义往往主观，取决于使用者心中的使用场景，需要主动挖出来。哪些是硬限制或隐式假设？
 
-**lens**：docs / 源码 能告诉你"应该发生什么"；只有真实使用的观察能告诉你"实际发生了什么"——后者是 §Journeys entry 与跨 Surface / temporal 类型 entry 的唯一合格证据来源。
+**常见询问方向锚点**（不限于此，按 lens 展开）：
 
-### Gap 对齐
+- **形态 + 入口**：Web / Mobile / Desktop / API / CLI / 混合——产品类型决定观察手段和验收维度
+- **使用者画像 + 使用方式**：谁在用、用来做什么——包含不同角色（首次访问者 / 回访者 / 管理员等）的核心任务和预期。这个信息影响需要侧重的验收维度和成功定义。
+- **成功定义**：使用者心中的成功画面（往往主观，需主动挖；"质量达标 / 用户可用 / 完成"指什么）
+- **范围 + 硬限制 + 隐式假设**：明确不做什么；合规 / 性能 / 成本 / 兼容性 / 安全边界；contract author 识别但需用户确认的假设
 
-比对：用户描述 vs 文档说法 vs 实际产品行为。遇到冲突或不确定时 → AskUserQuestion。
+**为什么这点是反推起点**：L1 错了，L2 verify 全错——不知道产品是什么、使用者是谁，就无法定义"产品 work 是什么样子"。
 
-常见触发情境（不限于此）：
-- 文档与实际行为不一致
-- 描述与文档/实际任一冲突
-- §Quality Bar 阈值无客观依据（如响应式断点、内容鲜度阈值）
-- §Out of Scope 不确定某项是"故意不做"还是"v0 暂未做"
+#### 端到端真实使用
 
-## 产物
+contract 的验收规格必须来自用户真实可触达的产品入口——真实部署、真实后端、真实账号、真实数据。除非用户显式允许降级为 docs-only contract。
 
-按 protocol §2 / §3 Schema 写两个文件：
+入口不可访问但存在本地化部署路径且操作只影响本机环境时，主动起服务后继续（可逆、不触达共享或线上资源）。
 
-- `docs/contract/ux-contract.md`：按 protocol §2 Schema 的所有段
-- `docs/issues/ux-issues.md`：空 ledger，按 protocol §3 Schema
+**自助部署优先**：入口不可访问但存在本地化部署路径（本地 dev server / 本地 build / 本地容器 / 模拟器等）且操作只影响本机环境时，主动起服务后继续创建 contract。判定"无风险"的 lens：不修改线上数据、不影响线上服务。
 
-**语言**：正文默认用中文。
+**BLOCKED**：自助部署不可行 / auth 缺失 / cost-quota 限制时，通过 AskUserQuestion 让用户在决策，不得静默 fall back。
 
-### 落笔前的证据 gate
+### 验收侧重（横切 L1 + L2）
 
-落笔前对每条 entry 自问"这条由什么 tier 的证据支撑"，按 protocol §什么证据能 justify 哪些 entry 对照。**证据 tier 不够时按 §端到端真实使用 BLOCKED 走，不在 contract 落笔**——没有"基于 X 推断"的中间态。
+**对齐**：用户对产品各维度的相对验收优先级。横切影响见 §1「横切：验收侧重」；本节聚焦**访谈中怎么挖出来 + 怎么让用户拍**。
 
-### 交付总结里必须复述的内容
+**lens**：这个产品的关键质量维度是哪几个？用户更看重哪些、可以宽松哪些？哪些权衡是用户初始描述没显式提到、需要 contract author 主动摆候选让用户拍板的？
 
-向 owner 汇报时，除了入口 / 账号 / build，还要明确：
+**关键动作**：contract author 识别需要拍板的维度权衡 → 梳理候选 + pros/cons → 用 AskUserQuestion 让用户拍板。决策权在用户，contract author 的职责是把选项摆出来。
 
-- 本次实际观察过哪些 journey（按 success state 列）
-- 哪些 journey / §Feature entry 因 BLOCKED 走了 docs-only 降级或取消、未进入 contract，让 owner 看到 contract 缺口
-- 不要用"行为路径已覆盖"之类把静态页证据偷换成 journey 证据的总括语——owner 看不到降级就无法判断 contract 可信度
+**contract 只列 L3 会被影响的方向，不替 test-ux 决策**——例如"用户优先功能完整性"是已确定偏好，但 test-ux "具体怎么验证功能完整性"是 L3 的事。
+
+### 用户视角 verify（L2）
+
+**对齐**：从 L1 使用者视角看「产品 work」的可观测条件。独立于内部实现，应在 contract author 了解产品全貌后收敛——类比 TDD 的 RED：先写"pass 长什么样"，test-ux 去跑。
+
+**前置依赖**：L2 的内容由 L1（产品全貌 + 使用方式）决定；维度深度和阈值由验收侧重决定。如果到这里发现 verify 该测什么不清楚，回头补 L1 或验收侧重。
+
+**lens**：把自己代入使用者画像——产品打开后，使用者会怎么操作？哪些操作和观测能确认产品 work？可观测形式是什么（UI 视觉效果、文字内容、交互反馈、延迟、错误信息）？哪些是 happy path、哪些是边界路径？
+
+写不出 verify、还要等"测了再说"——那是 L1 没收敛清楚，回头补 L1。
+
+**常见询问方向**（不限于此）：
+
+- **happy path verify**：核心使用流程走通时，使用者在每个关键步骤能看到 / 感受到什么？
+- **边界 verify**：空状态、错误状态、极端输入、性能边界——哪些必须被 contract 覆盖？这些情况用户应该看到什么？
+- **verify 的形式不强求 shell**：视觉判断 / 主观质量 / 人工对照都是合法形态
+- **跨入口一致性**：同一功能从不同入口 / 不同角色进入时，verify 条件是否一致？
+
+**关键**：L2 必须独立于内部实现——不写"后端返回 X 结构" / "数据库 Y 表状态"（那是 L3）。也不从代码内部状态反推 verify 维度——按使用者实际经历的路径定。
+
+### 验收规格的 ground truth
+
+**lens**：产品预期从哪里来？哪些来源可信、哪些需要交叉验证？
+
+常见来源：用户描述，实际产品行为（agent-browser 等观察），项目文档（PRD / README），常识与同类产品惯例。
+
+冲突时不预设谁赢——优先验证，仍冲突时走 AskUserQuestion，不静默选边。
+
+---
+
+## 3. 输出：ux-contract.md
+
+- 落点：`docs/contracts/ux-contract.md`
+- 语言：正文默认用中文
+- 格式自由，结构跟着产品走
+
+下表是 contract author 写完后的自检清单（必答项粒度）：
+
+| contract 必须能答出 | 不合格示例 |
+|---|---|
+| **产品形态** + **使用者** + **使用方式**（用来做什么） | "一个网站" / 没说使用者 / 没说用来干嘛 |
+| **功能集合**：产品的 user-observable 能力全景 | 只列了首页，遗漏子页面 / 功能模块 |
+| **范围 / 约束 / 假设**（明确不做什么；硬限制；需用户确认的假设） | "差不多就行" / 没列边界 |
+| **验收侧重 + 两层影响**：维度优先级（包括均匀覆盖）+ 如何影响 L1 描述深度和 L2 验证阈值；不适用时需说明原因 | 未经对齐就说"都重要" / 没列 / 只一句泛话 |
+| **用户视角 verify**（L2）：从使用者视角看「算交付完成」的可观测条件，覆盖 happy + 边界；形式可以是操作+观测、视觉判断、延迟阈值、截图对比等——必须独立于内部实现 | "应该 OK" / 写到内部实现细节 |
+| **verify 基于真实产品观察**（降级需用户显式授权 + 标注） | 纯 docs 推测 / mock 替代真实使用 |
+| 哪些决策是 contract author 自己拍的（"我默认 X，因为 Y"） | 没列 → reviewer 无从审 |
+
+**contract 不写**（这些归别处）：
+- 实现细节 / 内部状态 / 数据结构 / 后端架构
+- 已知 bug（→ ux-issues.md）
+- 待办事项 / 修复计划 / 未来路线
+- agent-level 验证手段（日志 / metrics / 内部 API 调用）
+
+### 不留 Open Question：升级路径
+
+contract **不留 open question**。任何 OQ 必须先走升级：
+
+1. **能 research 的** → contract author 自查（访问产品、查文档、跑 probe）
+2. **research 也答不出的** → 当场用 AskUserQuestion 问用户
+3. **用户明确同意 default X** → 记为 Defaulted Decision，不留 OQ
+4. **用户答"后面再说"或回答模糊** → 给出具体 default + 一句理由，再问一次 Y/N 确认；确认后再记 Defaulted Decision
+
+### Handoff
+
+写完且自检通过后打印：
+
+```
+contract written: <abs-path>/docs/contracts/ux-contract.md
+
+本次覆盖：<实际观察的核心功能区域>
+未覆盖 / 降级：<BLOCKED 项，让用户看到缺口>
+
+下一步：
+  - 用户审 contract：确认验收规格完整性
+  - 执行测试：在新 session 里跑 `/test-ux`
+```
 
 ## 反模式
 
-- **跳过实际使用产品** —— 违反 §端到端真实使用 默认姿态 / 自助部署优先；规则与例外详见该段
-- **mock / 内部状态 / figma 替代真实使用** —— 替代真实后端 / 账号 / 数据跑出的状态只能作为辅助理解线索，不得作为 contract 条目的唯一来源（参见 §端到端真实使用）
-- **从代码反推 surface/feature** —— bootstrap 阶段禁用于"发现"新 surface/feature，可能误把 internal 路由当公开承诺。但**校准 stable UI 枚举**（见下条）是允许的例外
-- **stable UI 枚举仅靠单次观察推断** —— 对页面分节、合法 slug、tier、状态等**离散有限枚举**，必须从 source-of-truth（前端代码常量、data 配置、PRD 表）取值；仅看某一天 UI 渲染的结果推断枚举会丢"空时不渲染"的项（例：观察看到日报 4 节就写"4 节"，实际代码定义 5 节、当天第 5 节恰好为空）
-- **把 v1/v2/v3 路线图条目当 §Out of Scope** —— 这些是 PRD/VISION 已说明的"未来做"项，§Out of Scope 仅装"故意永不做" + "v0 不做未来不限"两类
-- **§Features 的"不做"字段列"可能没必要的边界"** —— 仅列 owner 明确不做的项；猜测不写
-- **bootstrap 阶段写 issue** —— 本 command 仅推断 contract；issue 留给 test-ux
-- **拿不足 tier 的证据填高 tier entry** —— 例：用静态页观察支撑 §Journeys entry、用代码阅读支撑跨 Surface / temporal 类型 §Feature entry。protocol §什么证据能 justify 哪些 entry 是硬约束；不够时走 BLOCKED 处理，不要默写
-- **让 journey 验证悄悄滑过去** —— 任务规划写"必要时走 X journey"留逃避空间、用 cost / quota / 时延等借口在主 session 内自我说服不必走、交付总结用"行为路径已覆盖"之类总括语遮盖未走通的 journey；这三种动作同性质——按规则该 BLOCKED 时就 BLOCKED，让 owner 决策
+- **mock 替代真实使用**：mock / page.setData / 本地 fixture 跑出的状态当成"用户会遇到的问题"——只算诊断线索，必须真实环境复测后才能进入 contract
+- **存在性统计替代体验判断**：只数"有没有图片 / 有没有链接"，不看图片实际占屏、标题是否可扫读、自然点击是否到达预期入口
+- **只看存在不看语义**：确认列表有内容、分类有结果，但不检查结果是否符合分类语义、排序是否符合可见标签
+- **内部实现写入 contract**："后端返回 JSON 格式为 X" / "数据库 Y 表"——这些是 L3，不属于 contract
+- **待办事项写入 contract**：contract 是当前验收规格；待修的 bug 归 ux-issues.md

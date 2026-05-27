@@ -65,8 +65,6 @@ description: 模拟真实用户试用产品（web / desktop / mobile / 任何可
 
 ### 观察维度
 
-每条带一句说明该维度在本产品中为何关键。
-
 **lens**："用户使用这个产品的主要方式有哪些？哪些通用维度必须覆盖、哪些产品独有失败模式容易被通用模板漏掉？"
 
 **常见思考方向（不限于此）**：
@@ -125,8 +123,8 @@ Web 产品默认要覆盖：
 - 该 subagent 负责的 persona（单 subagent 时可为完整 persona 列表，多 subagent 时为分到的子集）
 - 已对齐的观察维度列表
 - 用户操作覆盖清单：入口、tab/filter、搜索/分页、深链接、边界路径；明确哪些必须全覆盖、哪些可抽样
-- 引用 pattern 来源：`~/.claude/references/ux-test-patterns.md`；若存在 `./docs/contract/ux-test-patterns.md`（本项目动态积累）也一并引用。subagent 自己按分配的 persona / 维度 / 操作 / 现场页面挑适用 pattern 应用
-- 产出落点：`plans/<product-slug>-user-test-<YYYY-MM-DD>/`；该 subagent 写到 `issues/<round-slug>/<subagent-slug>-issues.md`；证据存到该目录下的 `evidence/` 子目录
+- 引用 pattern 来源：`~/.claude/references/ux-test-patterns.md`；若存在 `./docs/contracts/ux-test-patterns.md`（本项目动态积累）也一并引用。subagent 自己按分配的 persona / 维度 / 操作 / 现场页面挑适用 pattern 应用
+- 产出落点：`plans/<YYYYMMDD>-<product-slug>-user-test/`；该 subagent 写到 `issues/<round-slug>/<subagent-slug>-issues.md`；证据存到该目录下的 `evidence/` 子目录
 - 工具：根据产品类型选择（agent-browser / computer use / 产品原生接入），用法见对应工具文档或 ~/.claude/CLAUDE.md
 - 每个 persona 按对齐后的所有维度扫一遍
 - 每个 persona 至少覆盖一遍用户操作清单中的核心路径；多 persona 可分摊非核心路径，但必须在产出里说明覆盖关系
@@ -144,9 +142,9 @@ Web 产品默认要覆盖：
 
 handoff 还必须核对覆盖清单：说明哪些用户操作已覆盖、哪些未覆盖、未覆盖是否可接受。若发现明显高概率路径未覆盖（例如公开站点的某个主 category 深链接），主 session 应补测或再派发 subagent，不应只转述已有报告。
 
-handoff 还必须基于 pattern 文件抽查 pattern 应用：来源为 `~/.claude/references/ux-test-patterns.md`，若存在 `./docs/contract/ux-test-patterns.md` 也算。给定本产品类型和已分配维度 / 操作，issues 证据是否显示 subagent 命中了显然该用的 pattern（如 feed 页面应见到时间排序语义检查、移动 drawer 应见到隐藏元素焦点检查）。明显该用而未用 → 补测或再派 subagent。
+handoff 还必须基于 pattern 文件抽查 pattern 应用：来源为 `~/.claude/references/ux-test-patterns.md`，若存在 `./docs/contracts/ux-test-patterns.md` 也算。给定本产品类型和已分配维度 / 操作，issues 证据是否显示 subagent 命中了显然该用的 pattern（如 feed 页面应见到时间排序语义检查、移动 drawer 应见到隐藏元素焦点检查）。明显该用而未用 → 补测或再派 subagent。
 
-完成上述 issue handoff、覆盖核查、pattern 应用抽查后，主 session 可选地把本轮暴露的、两个 pattern 文件都未覆盖的失败 shape 追加到 `./docs/contract/ux-test-patterns.md`（路径相对项目根目录；目录或文件不存在时先 `mkdir -p ./docs/contract` 再新建，沿用 user-scope 同一格式）；新增条数与文件路径并入 handoff 汇总。这一步优先级低于 issue 工作，时间或上下文紧时直接跳过。
+完成上述 issue handoff、覆盖核查、pattern 应用抽查后，主 session 可选地把本轮暴露的、两个 pattern 文件都未覆盖的失败 shape 追加到 `./docs/contracts/ux-test-patterns.md`（路径相对项目根目录；目录或文件不存在时先 `mkdir -p ./docs/contracts` 再新建，沿用 user-scope 同一格式）；新增条数与文件路径并入 handoff 汇总。这一步优先级低于 issue 工作，时间或上下文紧时直接跳过。
 
 ## issue 字段契约（subagent 必须遵守）
 
