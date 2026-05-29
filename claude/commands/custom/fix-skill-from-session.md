@@ -124,10 +124,9 @@ fix 过程中至少要让以下几类信息变清晰。**这不是顺序步骤**
 
 ### 审核
 
-完成 Edit 后调用 `/custom:review-skill <path>`；invoke 时重点围绕改动的内容进行审核。
+完成 Edit 后执行 `/custom:review-skill` 审核目标文件中本次 fix 的改动部分。
 
-- **独立性**：spawn general-purpose subagent 跑（不要 inline 自查替代）。
-- **收敛性**：主 session 判断 finding 是否需修。需修 → 改 → 重审。循环到一轮无需修。
+- **收敛性**：判断 finding 是否需修。需修 → 改 → 重审。循环到一轮无需修。
 
 ---
 

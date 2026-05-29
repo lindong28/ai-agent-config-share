@@ -8,7 +8,7 @@ disable-model-invocation: true
 
 ## 参数
 
-`/custom:session-import <archive-path>`
+`/routine:session-import <archive-path>`
 
 archive-path 为 session-export 产出的 tar.gz 文件路径（必需）。
 

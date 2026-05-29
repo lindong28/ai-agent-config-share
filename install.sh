@@ -12,6 +12,7 @@
 #     <repo>/codex/agents/*.toml         → ~/.codex/agents/*.toml
 #     <repo>/claude/skills/agent-browser → ~/.claude/skills/agent-browser
 #                                      → ~/.codex/skills/agent-browser
+#     <repo>/claude/skills/create-commit → ~/.claude/skills/create-commit
 #   Sub-installers:
 #     <repo>/tt-web/install.sh           # localhost token-usage dashboard
 #   npm global packages:
@@ -319,6 +320,16 @@ if [ -d "$AGENT_BROWSER_SKILL" ]; then
     echo "Installing agent-browser skill:"
     link_one "$AGENT_BROWSER_SKILL" "$HOME/.claude/skills/agent-browser"
     link_one "$AGENT_BROWSER_SKILL" "$HOME/.codex/skills/agent-browser"
+fi
+
+# --- create-commit skill (Claude-only; referenced by /custom:execute-plan) ---
+
+CREATE_COMMIT_SKILL="$SCRIPT_DIR/claude/skills/create-commit"
+
+if [ -d "$CREATE_COMMIT_SKILL" ]; then
+    echo
+    echo "Installing create-commit skill:"
+    link_one "$CREATE_COMMIT_SKILL" "$HOME/.claude/skills/create-commit"
 fi
 
 # --- codeagent-wrapper binary (arm64 macOS; required by /custom:execute-plan) ---

@@ -18,10 +18,11 @@ ai-agent-config-share 是一个 AI coding agent 的共享配置仓库，为 Clau
 |---|---|
 | `CLAUDE.md` | 用户级行为指引入口（手动 merge 到 `~/.claude/CLAUDE.md`，不 symlink） |
 | `settings.json` | 环境变量、权限白名单、MCP server 列表、模型选择（手动 merge 到 `~/.claude/settings.json`） |
-| `commands/custom/` | Slash command 定义（`/custom:create-plan`、`/custom:execute-plan`、`/custom:test-ux` 等），是用户触发工作流的入口 |
-| `commands/routine/` | 日常运维命令（session 导入 / 导出） |
-| `references/` | 被 CLAUDE.md 和 commands 引用的协议文档（plan 执行原则、skill 创建原则、UX 测试协议等），是行为规则的 source of truth |
-| `skills/agent-browser/` | 浏览器自动化 skill（agent-browser CLI 的用法、认证模式、模板脚本），被 `test-ux` 等命令消费 |
+| `commands/custom/` | Slash command 定义（`/custom:create-plan`、`/custom:execute-plan`、`/custom:test-ux`、`/custom:create-ux-contract`、`/custom:execute-ux-contract` 等），是用户触发工作流的入口 |
+| `commands/routine/` | 日常运维命令（`/routine:session-export` / `/routine:session-import`） |
+| `references/` | 被 CLAUDE.md 和 commands 引用的协议文档（plan 执行原则、skill 创建原则、UX 测试 patterns、ux-contract 审查原则等），是行为规则的 source of truth |
+| `skills/agent-browser/` | 浏览器自动化 skill（agent-browser CLI 的用法、认证模式、模板脚本），被 `test-ux` / `execute-ux-contract` 等命令消费 |
+| `skills/create-commit/` | commit 工作流 skill（审查 working tree、生成 message、确认后 commit），被 `execute-plan` / `execute-ux-contract` 的 commit 步骤委托 |
 | `bin/codeagent-wrapper` | arm64 macOS 二进制，包装 Codex / Gemini CLI 为统一接口，被 `execute-plan` 和 `supervise` 命令调用 |
 | `statusline.sh` + `statusline-transcript.py` | Claude Code statusline 脚本：解析运行时 JSON 输入，渲染多行终端状态栏 + 持久化 `~/.claude/tt-status.json` 供 tt-web 消费 |
 
@@ -96,7 +97,7 @@ ai-agent-config-share 是一个 AI coding agent 的共享配置仓库，为 Clau
 - 可观测性层独立于行为定义层（statusline 和 tt-web 不依赖 commands / references）
 - 安装层横切所有层（install.sh 同时处理 symlink、npm 包、settings.json）
 
-**跨工具共享**：agent-browser skill 同时 symlink 到 `~/.claude/skills/` 和 `~/.codex/skills/`。CLAUDE.md 和 AGENTS.md 虽然分属两个工具，但通过引用相同的 `references/` 文件（plan-execution-principles.md、long-task-protocol.md 等）保持行为一致性。
+**跨工具共享**：agent-browser skill 同时 symlink 到 `~/.claude/skills/` 和 `~/.codex/skills/`；create-commit skill 仅 Claude-only（symlink 到 `~/.claude/skills/`）。CLAUDE.md 和 AGENTS.md 虽然分属两个工具，但通过引用相同的 `references/` 文件（plan-execution-principles.md、long-task-protocol.md 等）保持行为一致性。
 
 ## Key Abstractions
 
@@ -110,14 +111,25 @@ ai-agent-config-share 是一个 AI coding agent 的共享配置仓库，为 Clau
 
 每一级产出的 verify 步骤是下一级的输入契约——spec verify 约束 plan verify，plan verify 约束 execute 的完成判定。
 
+### ux-contract 工作流三件套
+
+与 spec → plan → execute 平行的另一条 verify 驱动流水线，专注产品上线前的 UX 验收：
+
+- **create-ux-contract**：从已部署产品出发访谈用户，写出 ux-contract（L1 产品全貌 + L2 用户视角 verify + 验收侧重），内部串 review-ux-contract 循环至收敛
+- **review-ux-contract**：按 `ux-contract-review-principles.md` 审查契约完整性
+- **execute-ux-contract**：supervisor 把已审过的 ux-contract 翻译为 test plan，驱动 Codex 跑端到端 UX 测试 + 修复闭环，直到 Critical/High issue 清零
+
+ux-contract 是契约的锚点——execute 阶段不可自行修改它（发现矛盾时 AskUserQuestion 上升给用户），与 spec → plan → execute 中 verify 贯穿不变是同一设计立场。它与 `test-ux` 是两条独立入口：`test-ux` 从自由文本 / PRD 做一次性 ad-hoc 模拟测试；`execute-ux-contract` 以已审契约为基准做带修复闭环的系统性验收。
+
 ### Supervisor 模式
 
-`execute-plan` 和 `supervise` 两个命令实现了 Claude-as-supervisor 的编排模式：
+`execute-plan`、`supervise`、`execute-ux-contract` 三个命令实现了 Claude-as-supervisor 的编排模式：
 
 - Claude（主 session）通过 `codeagent-wrapper` 在后台启动 Codex / Gemini / Claude 实例
 - 后台 agent 执行任务，主 session 通过 `TaskOutput` 轮询进度
 - 主 session 按 Stop Gate 判定后台 agent 是否真正完成，未完成则 resume 同一 session
 - `execute-plan` 额外支持 UX 验收闭环：完成后自动 `test-ux`，将 Critical/High issue 回灌给同一 Codex session
+- `execute-ux-contract` 把已审过的 ux-contract 翻译成 test plan，再用独立的 test session + fix session（各自独立 Codex session）跑测试-修复循环，直到 Critical/High issue 清零；commit 步骤委托 create-commit skill
 
 ### Stop Gate
 

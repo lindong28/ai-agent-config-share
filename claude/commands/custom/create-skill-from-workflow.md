@@ -32,7 +32,7 @@ origin: 2026-05-01
 
 严格遵循 `~/.claude/references/deep-discuss-style.md` 的风格（提问 / 展示 / 让用户拍板）,`AskUserQuestion` 走多轮逐步推进。其他参考：
 
-- `~/.claude/references/skill-review-principles.md` — 6 条原则是 skill 质量的权威；本 command 只是"应用流程"。**冲突时原则文件赢**
+- `~/.claude/references/skill-review-principles.md` — skill 质量的权威；本 command 只是"应用流程"。**冲突时原则文件赢**
 
 本 skill 的关键 framing：
 
@@ -154,10 +154,9 @@ origin: 2026-05-01
 
 ### 验证
 
-调用 `/custom:review-skill <path>` 完成审查。
+完成写入后执行 `/custom:review-skill <path>` 审核产出的 skill 文件。
 
-- **独立性**：spawn general-purpose subagent 跑（不要 inline 自查替代）。
-- **收敛性**：主 session 判断 finding 是否需修。需修 → 改 → 重审。循环到一轮无需修。
+- **收敛性**：判断 finding 是否需修。需修 → 改 → 重审。循环到一轮无需修。
 
 ### Handoff
 

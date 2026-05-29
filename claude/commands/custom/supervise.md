@@ -122,8 +122,7 @@ TaskOutput({ task_id, block: true, timeout: 600000 })
 
 | 观察到的现象 | 下一步 |
 |---|---|
-| Agent 给完成 summary + verify 证据 | 核对两个 lens：(1) **verify 证据 ≥ success criteria**（每个 criterion 有可观察证据）(2) **Stop Gate 归因检查**——agent 把残余工作推给用户的部分，是否通过了 `plan-execution-principles.md` Stop Gate 的归因和替代路径检查。两个 lens 都满足 → 进 §5；任一缺项 → resume 让 agent 补 |
-| Agent 停止但 success criteria 任一项无证据 | 同 session resume；resume-prompt 指出哪几项 criterion 无证据 + supervisor 在 log 里看到的相关线索；回到 §3 |
+| Agent 停止（无论是否声称完成） | 核对两个 lens：(1) **verify 证据 ≥ success criteria**（每个 criterion 有可观察证据）(2) **Stop Gate 检查**——agent 把残余工作推给用户的部分，必须通过 `plan-execution-principles.md` §0 的全部 5 个 gate（必要性/归因/替代路径/verify拆分/交接）。"Agent 声称 blocked" 不等于 "gate 已通过"——supervisor 必须独立验证每个 gate，而不是接受 agent 的 self-report。两个 lens 都满足 → 进 §5；任一缺项 → resume，resume-prompt 指出哪几项 criterion 无证据 + supervisor 在 log 里看到的相关线索；回到 §3 |
 | Agent 抛出问题需要用户决策 | 见下方 **Dialogue facet** |
 | Agent 异常 / 无 session id / 输出截断 | 按 wrapper / 适配层问题处理：排查 stderr / 退出码 + 看 `git status` 判断是否已部分完成。**反转成本高（重启丢全部上下文 / resume 损坏 session 后续不可信），supervisor 不要 silent decide**——把诊断结果 + 候选 [resume 同 session / 重启新 session / 放弃交还用户] 通过 `AskUserQuestion` 让用户拍板 |
 | Agent stuck（启动 5 分钟后仍无实质输出） | Stuck session 无可复用上下文——kill 进程，用相同 spawn-prompt 启动新 session（不 resume）。连续两次 stuck → 升级用户（可能是 backend 不可用或 prompt 触发死循环） |

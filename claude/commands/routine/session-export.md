@@ -4,11 +4,11 @@ disable-model-invocation: true
 
 # session-export
 
-将当前 Claude Code session 打包为可跨机器迁移的 tar.gz 压缩包。在目标机器上用 `/custom:session-import` 导入后可 `claude --resume` 恢复对话。
+将当前 Claude Code session 打包为可跨机器迁移的 tar.gz 压缩包。在目标机器上用 `/routine:session-import` 导入后可 `claude --resume` 恢复对话。
 
 ## 参数
 
-`/custom:session-export [session-id]`
+`/routine:session-export [session-id]`
 
 - 无参数：导出当前 session（从 `$CLAUDE_CODE_SESSION_ID` 获取）
 - 指定 session-id：导出历史 session

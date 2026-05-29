@@ -266,7 +266,9 @@ plan **不留 open question**。任何 OQ 必须先走升级：
 
 ### 审查
 
-自检通过后、handoff 之前，对 plan 跑 `/custom:review-plan <plan path>` 进行循环审查（命令定义见 `~/.claude/commands/custom/review-plan.md`，按其 3 阶段循环跑到无新发现）。循环未终止不进入 handoff——review-plan 的 gate 比 §3 表格更全，跳过会让 implementer 撞上未发现的 plan 缺陷。
+自检通过后、handoff 之前，执行 `/custom:review-plan <plan path>` 进行循环审查。循环未终止不进入 handoff——review-plan 的 gate 比 §3 表格更全，跳过会让 implementer 撞上未发现的 plan 缺陷。
+
+- **收敛性**：判断 finding 是否需修。需修 → 改 → 重审。循环到一轮无需修。
 
 ### Handoff
 

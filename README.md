@@ -1,6 +1,6 @@
 # ai-agent-config-share
 
-Claude Code 和 Codex CLI 的共享 agent 配置，包括 slash commands、行为指引、agent 定义、浏览器自动化 skill，以及本地 token usage dashboard（tt-web）。安装脚本自动处理 symlink 和配置合并。
+Claude Code 和 Codex CLI 的共享 agent 配置，包括 slash commands、行为指引、agent 定义、skill，以及本地 token usage dashboard（tt-web）。安装脚本自动处理 symlink 和配置合并。
 
 ## 文档导航
 
@@ -78,4 +78,4 @@ Dashboard 上 "Claude 5h / 7d quota" 两张卡片的数据来自 `~/.claude/tt-s
 
 ---
 
-*Last synced from upstream: 2026-05-27 11:00 GMT+8*
+*Last synced from upstream: 2026-05-29 10:36 GMT+8*

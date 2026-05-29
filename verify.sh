@@ -143,6 +143,7 @@ check_symlink_tree "references"     "$SRC_ROOT/references"           "$HOME/.cla
 check_symlink_tree "codex-agents"   "$SCRIPT_DIR/codex/agents"       "$HOME/.codex/agents"           "*.toml"
 check_symlink      "agent-browser/claude" "$SRC_ROOT/skills/agent-browser" "$HOME/.claude/skills/agent-browser"
 check_symlink      "agent-browser/codex"  "$SRC_ROOT/skills/agent-browser" "$HOME/.codex/skills/agent-browser"
+check_symlink      "create-commit"        "$SRC_ROOT/skills/create-commit" "$HOME/.claude/skills/create-commit"
 check_symlink      "codeagent-wrapper"    "$SRC_ROOT/bin/codeagent-wrapper" "$HOME/.claude/bin/codeagent-wrapper"
 check_symlink      "statusline.sh"        "$SRC_ROOT/statusline.sh"         "$HOME/.claude/statusline.sh"
 check_symlink      "statusline-transcript.py" "$SRC_ROOT/statusline-transcript.py" "$HOME/.claude/statusline-transcript.py"
