@@ -1,0 +1,8 @@
+# Shared dependencies for the repo-root uv venv ($REPO_DIR/.venv).
+# Serves lightweight CLI tools that don't declare their own deps:
+#   - ip-check (tt-web/ip_check) -> requests
+#   - tt-web server              -> colorama
+# Heavy self-contained packages (e.g. claude/mcp-servers/wexin-read-mcp) keep
+# their own pyproject and are run via `uv run`; do NOT add them here.
+requests
+colorama

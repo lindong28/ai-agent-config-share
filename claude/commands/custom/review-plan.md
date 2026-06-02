@@ -32,13 +32,13 @@ description: 审查指定 plan 文件并按原则修复。
 
 ### 2. 决策
 
-基于 subagent 报告 + 主 session 判断，整理为 `AskUserQuestion` 让用户决策。注意 bias：主 session 看过自己写的内容，对 subagent 发现做反驳前先自检"我是在反驳还是在辩护"。不预设修复让用户照单全收。
+基于 subagent 报告 + 主 session 判断，整理为 `AskUserQuestion` 让用户决策。注意 bias：主 session 看过自己写的内容，对 subagent 发现做反驳前先自检"我是在反驳还是在辩护"。当一个 subagent 的发现或反驳要否决另一个时，先核实它依赖的事实主张（"某条目存在/缺失""同类条目都如此"）再裁决——subagent 会臆造存在性事实，未核实的错误前提会击败正确发现。不预设修复让用户照单全收。
 
 ### 3. 落地
 
 按用户选择 Edit。若有改动，回到第 1 步——按 Phase 1 完整流程重跑；无改动则循环终止。
 
-若审查发现现有原则未覆盖某类问题，提议改进 `~/.claude/references/plan-review-principles.md`（用户决定）。
+若审查发现现有原则未覆盖某类问题，用 AskUserQuestion 把「是否改进 `~/.claude/references/plan-review-principles.md`」作为一项决策交用户拍板——principles 缺口是高杠杆发现，只在 prose 里附带提及会被略过、用户遗忘后同类坑复发。改完后执行 `/custom:review-principles plan-review-principles.md` 循环审查改动——principles 文件本身也要过 meta-原则。
 
 ---
 

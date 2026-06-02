@@ -8,4 +8,10 @@ while [ -L "$SOURCE" ]; do
   [[ "$SOURCE" != /* ]] && SOURCE="$DIR/$SOURCE"
 done
 SCRIPT_DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
-cd "$SCRIPT_DIR" && exec python3 -m ip_check "$@"
+# Prefer the repo-root shared venv (has `requests`); fall back to system python3
+# (ip_check will then error clearly on the missing dependency rather than silently
+# running against the wrong interpreter).
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+VENV_PY="$REPO_ROOT/.venv/bin/python"
+PY="$VENV_PY"; [ -x "$PY" ] || PY="python3"
+cd "$SCRIPT_DIR" && exec "$PY" -m ip_check "$@"

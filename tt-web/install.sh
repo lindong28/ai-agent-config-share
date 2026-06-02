@@ -28,12 +28,13 @@ IPCHECK_BIN="$ROOT_DIR/ip-check"
 chmod +x "$IPCHECK_BIN"
 ln -sfn "$IPCHECK_BIN" "$BIN_DIR/ip-check"
 
-# requests dependency (used by ip-check)
-if ! python3 -c "import requests" >/dev/null 2>&1; then
-  echo "Installing 'requests' (required by ip-check)..."
-  python3 -m pip install --user requests || {
-    echo "WARN: pip install failed. ip-check will not work until 'requests' is installed."
-    echo "      Try: python3 -m pip install --user requests"
-  }
+# requests dependency (used by ip-check) is provided by the repo-root shared
+# venv created in the top-level install.sh. We only verify here — never install,
+# so venv creation stays single-sourced and doesn't drift between scripts.
+REPO_DIR="${REPO_DIR:-$(git -C "$ROOT_DIR" rev-parse --show-toplevel)}"
+VENV_PY="$REPO_DIR/.venv/bin/python"
+if [ ! -x "$VENV_PY" ] || ! "$VENV_PY" -c "import requests" >/dev/null 2>&1; then
+  echo "WARN: ip-check needs the shared venv ($VENV_PY) with 'requests'."
+  echo "      Run the repo-root install.sh first (it creates the shared venv)."
 fi
 echo "ip-check installed"

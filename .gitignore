@@ -1,0 +1,3 @@
+# Shared uv-managed Python venv created by install.sh (ip-check / tt-web deps).
+# Runtime artifact — recreated on install, never committed.
+.venv/

@@ -22,6 +22,8 @@ tt-web stop
 
 Default URL is `http://127.0.0.1:39001`; if that port is occupied, the CLI increments to the next free port and writes it to `state/port`.
 
+`tt-web` is symlinked into `~/.local/bin` (usable from any directory). For the repo's uniform service-ops convention (see [`service-operations-protocol.md`](../claude/references/service-operations-protocol.md)), the equivalent entry points `./tt-web/{start,stop,status,uninstall}.sh` wrap the same dispatcher; `./tt-web/uninstall.sh` stops the server and removes the `~/.local/bin` symlinks.
+
 ## Check
 
 ```bash

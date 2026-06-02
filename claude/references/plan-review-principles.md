@@ -6,13 +6,13 @@ Behavioral guidelines for reviewing implementation plans — plan files written 
 
 **These guidelines are working if:** plans describe the minimum work that achieves the goal; verification steps run as written; nothing the user needs (docs, root README updates) gets discovered post-ship.
 
-**Loop:** For each principle, check 1–12. Loop until no principle is violated.
+**Loop:** For each principle, check 1–14. Loop until no principle is violated.
 
 ---
 
 ## Priority and conflict resolution
 
-Principles are listed in **tiebreaker priority order** — when two give conflicting guidance, the lower-numbered principle wins. Principles 4 and 13 are conditional (apply only when their scope is matched); when they apply, their position in the order stands.
+Principles are listed in **tiebreaker priority order** — when two give conflicting guidance, the lower-numbered principle wins. Principles 4, 13, and 14 are conditional (apply only when their scope is matched); when they apply, their position in the order stands.
 
 **Escape valve**: when applying this order would contradict your judgment of what serves the plan's goal, ask the user before applying.
 
@@ -275,3 +275,22 @@ When reviewing, flag:
 - **Determinism not addressed**: deterministic outputs need the contract stated; non-deterministic outputs need the sampling strategy / seed / temperature / retry policy stated. "It depends on the model" is not an answer.
 
 Ask yourself: "Could a downstream evaluator design eval cases from the plan alone, without re-reading the implementation to figure out where to hook in?" If no, flag.
+
+---
+
+## 14. Existence Is Not Completeness
+
+**An existence check (≥1 hit / file exists / output produced) is built to fail only on total absence, never on a shortfall. When the success definition involves completeness, coverage, or count-consistency, the verify assertion must be strong enough to fail on a shortfall — an expected-vs-actual comparison, not an existence hit.**
+
+The same passing check masks the missing data: "search the source name returns ≥1 article" passes even when the source has 10 articles and only 1 comes back. The shortfall can live *upstream* of the edited layer (ingestion / pipeline coverage a component check like "is the column indexed?" can't see) or inside the edited layer itself (a dedup dropping 9 of 10 records) — both pass the existence check identically.
+
+**The numeric baseline need not be fixed at plan time** — the implementer derives it dynamically from real data; what the plan fixes is the comparison *action* (expected from the real input, checked against actual), where an unexplained or hand-waved gap is a defect, not a pass. A plan line like "search-by-source-name return count ≈ the source's own published total" suffices.
+
+Applies when the change affects "how much data the user can see / get" — connect a source → searching it surfaces its (full / expected) content; process N inputs → produce the corresponding count; migrate X rows → target holds X. Pure binary features (exists / doesn't) or changes not touching data volume need not apply — say so explicitly rather than fabricate a coverage check.
+
+When reviewing, flag:
+- A verify criterion that stops at existence (≥1 hit / exists / has output) while the success definition involves completeness / coverage / count-consistency.
+- A verify that checks only the layer the change touched — a component check (column indexed, function called) or one stage of a data flow — instead of the end-to-end count the user actually gets, so a shortfall anywhere (upstream, or in the edited layer itself) escapes.
+- Verify that asks for expected-vs-actual but hard-codes the count at plan time when the real baseline is only knowable at implementation — should require the implementer to derive expected dynamically and compare.
+
+Ask yourself: "If the success definition involves how completely the user should see, can this verify's assertion fail on a shortfall — or only on total absence?" If only on total absence, flag.

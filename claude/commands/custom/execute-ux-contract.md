@@ -44,8 +44,9 @@ origin: 2026-05-28
 | 引用 | 何时读 | 读什么 |
 |---|---|---|
 | `~/.claude/references/long-task-protocol.md` | 生成 plan.md 时 | §8 banner 格式（plan 有此 banner 时整个协议自动 BINDING） |
-| `~/.claude/references/plan-execution-principles.md` | 任何 Codex session stop 时、supervisor 考虑停止时 | Stop Gate 段；§4 交接格式 |
+| `~/.claude/references/plan-execution-principles.md` | 任何 Codex session stop 时、supervisor 考虑停止时、构造 fix/test prompt 时、裁决 step pass 时 | Stop Gate 段；§3 sample-pass + §4 判据与产物诚实性；§5 交接信息 |
 | `~/.claude/references/ux-test-patterns.md`（+ `./docs/contracts/ux-test-patterns.md` 若存在） | 构造 test prompt 时 | 测试方法论 + 执行 patterns |
+| `~/.claude/references/domain-registry.md` 指明的 domain 测试模式文件（仅 contract 声明对应产品类型时） | 构造 test prompt 时 | 对应 domain 的失败形状 |
 
 ---
 
@@ -71,6 +72,8 @@ origin: 2026-05-28
 
 L3 是可选增强，不替代 L2 判定——L2 pass 但 L3 发现异常 → 记为 issue 但不阻断 L2 判定。
 
+**domain 验收段翻译（仅 contract 含 domain 验收段时）**：该段每项不是二元 pass/fail，而是 **judgment + evidence**——翻译成的 test step 要：(a) 在机制验收已要求的**同一次端到端 playthrough** 上顺带采该项写明的**证据类型**；(b) 额外跑一个该 domain **最易失败的切片**（如游戏开局 churn 期）；(c) 对照该项写的**意图 bar** 判断（judge 模型 / 人工），附证据。失败形状参考 `~/.claude/references/domain-registry.md` 指明的 domain 测试模式文件。
+
 **落点**：`plans/<YYYYMMDD>-<HHmm>-<contract-slug>-ux-test/`（contract-slug 由 ux-contract 文件名去后缀推导，HHmm 为执行开始时的 24 小时制时分）
 
 | 文件 | 内容 |
@@ -91,7 +94,7 @@ plan.md banner 按 `~/.claude/references/long-task-protocol.md` §8 格式。
 
 **端到端原则**：test session 的核心结论必须来自真实部署的产品入口。什么算端到端：
 
-| 产品类型 | 真实入口 |
+| 产品形态 | 真实入口 |
 |---|---|
 | Web | 用户指定验收 URL（production / staging / preview）经浏览器访问，真实网络与真实数据 |
 | Mobile / 小程序 | 体验版 / 正式版 / 测试版包，经原生入口或调试工具连真实后端 |
@@ -100,7 +103,9 @@ plan.md banner 按 `~/.claude/references/long-task-protocol.md` §8 格式。
 
 表外形态回到默认姿态判定。mock（替代真实后端/数据/用户身份的手段）只作辅助诊断——解释端到端现象或定位根因，不替代端到端结论。
 
-**工具选择 lens**：根据产品类型选择合适的端到端模拟方式——agent-browser 适合 Web 产品的浏览器交互，computer use 适合需要原生 UI 操作的桌面/移动应用，产品原生接入（CLI、API client 等）适合非 GUI 产品。具体工具用法见对应工具文档。
+**最终产物不可被历史/中段态替代**——若产品有可与 L2 观测分离的异步/持久化最终产物（生成类的图/视频/GIF、文档类的导出文件、数据类的落库记录等），在 contract 中识别它，把它的本轮真实产出写成至少一条 test step 的 pass 判据；判定规则见 `plan-execution-principles.md` §4「产物不可替代」。纯 UI 行为类契约（导航、校验提示、布局、状态切换）没有可分离的最终产物，其端到端结论由 L2 翻译出的 test step 直接承载，本轮真实性由 §2.2 真实性核对统一保证。
+
+**工具选择 lens**：根据产品形态选择合适的端到端模拟方式——agent-browser 适合 Web 产品的浏览器交互，computer use 适合需要原生 UI 操作的桌面/移动应用，产品原生接入（CLI、API client 等）适合非 GUI 产品。具体工具用法见对应工具文档。
 
 启动 Codex（后台 + 独立 session）：
 
@@ -112,23 +117,25 @@ Bash({
 })
 ```
 
-`<WORKDIR>` 必须来自 Bash `pwd`。从 wrapper 输出中捕获 Codex session id（handoff 需要）。
+`<WORKDIR>` 必须来自 Bash `pwd`。从 wrapper 输出中捕获 Codex session id（handoff 需要）；并从**后台 Bash 任务结果**捕获 `.output` 路径记下（即下文 `<output-file>`）——这是 harness 对后台任务 stdout+stderr 的完整捕获，**不是** wrapper banner 里 `Log:` 指向的 `codeagent-wrapper-<PID>.log`。
 
 **Test prompt 构造**——信息在文件中已有则给路径让 Codex 自己读，只在 prompt 中传递文件中没有的指令：
 
 引用文件（Codex 读取详情）：
 - `plan.md` 路径（含 test steps、产品访问信息、pass/fail 判据）
 - ux-contract 路径（issue 中引用 L2 条目的来源）
-- 本 command 文件 §2.1 端到端原则 + §Issue 格式
+- 本 command 文件 §2.1 全部三段（端到端原则 / 最终产物真实性 / 工具选择）+ §Issue 格式
 - `~/.claude/references/ux-test-patterns.md`
-- `~/.claude/references/plan-execution-principles.md`（Stop Gate）
+- `~/.claude/references/domain-registry.md` 指明的 domain 测试模式文件（仅 contract 声明对应产品类型时）
+- `~/.claude/references/plan-execution-principles.md`（Stop Gate + §4 判据与产物诚实性）
 - `journal.md` 路径（Codex 可追加执行过程中的观察和经验，不修改已有内容）
 
 本轮次指令（不在上述文件中的信息）：
 - 首轮次：执行 plan.md 中全量 test steps；后续轮次：执行 supervisor 指定的 test step ID 列表
+- 对涉及最终产物的 pass 判据，报告中附本轮真实产出证据（生成时间戳 / 新建产物路径 / 实时触发记录），不得用既有文件或上一轮产物充当 pass 证据
 - 产出路径：`<plans 子目录实际路径>/issues/round-<N>-test.md`；无 issue 时也要写 "all pass" 报告
 
-等待轮询：`TaskOutput({ block: true, timeout: 600000 })`，10 分钟未完成是常态，继续轮询。每轮次等待之间发简短中文状态。
+等待轮询：每轮用 `~/.claude/bin/poll-progress.sh <output-file>` 增量读新增进度行，据此判断 Codex 在推进 / 完成 / blocked / stuck；10 分钟未完成是常态，继续轮询不 kill。每轮次等待之间发简短中文状态。裁决取证、或 poll-progress.sh 回显含「跳过 N 行」（单轮新增超回显上限触发截断）时，必须先 `Read(<output-file>)` 全量再裁决——被跳过的中段在增量模式下不再出现，blocked / Stop Gate / verify 证据可能正落其中；poll-progress.sh 只读不改源文件，完整记录始终在盘上。resume 同 session 会产生新后台任务 = 新 `.output` 文件，对新文件重新记录路径并从 0 起轮询。
 
 #### 2.2 Supervisor 裁决（test → fix 之间）
 
@@ -138,7 +145,11 @@ Bash({
 |---|---|
 | Codex 过早 stop（未执行完 test steps 或未满足 Stop Gate） | resume 同一 session 继续，指出哪些 test steps 未执行 |
 | 正常完成，有 issue 报告 | 逐条裁决（见下方核心原则） |
-| 正常完成，全部 pass | 更新 state.md，进入 §3 Commit |
+| 正常完成，全部 pass | 先做 pass 真实性核对（见下），通过才更新 state.md，进入 §3 Commit |
+
+**裁决每条 pass 前必做真实性核对**（按 `plan-execution-principles.md` §3 + §4）：证据是否来自本轮真实链路（非历史 / 缓存 / 上次 session 产物）、是否覆盖 plan pass 判据的**全部**维度、有没有被降级成中段态或弱验证（形态见 §4「判据不可降级」）？任一存疑 → 不写 pass，要求 Codex 补跑本轮真实链路；判据本身需要松动 → 先 AskUserQuestion，不静默改判据。
+
+**domain 验收项的裁决**（judgment + evidence，非二元 pass/fail）：核对的不是"pass/fail 对不对"，而是 **证据是否充分**（该项写明的证据类型、最易失败切片是否都采全）+ **判断是否对照了契约写的意图 bar**（而非 Codex 临时换标准）。证据不足 → 要求补采；判断与 bar 冲突、或 bar 本身需调整 → AskUserQuestion，不静默改 bar。
 
 逐条 issue 裁决的核心原则：
 - 发现 ux-contract 本身有误（L2 描述与产品预期矛盾）→ AskUserQuestion 报告具体矛盾 + 建议修复 ux-contract 还是修复产品，**不静默调整 test plan**
@@ -185,9 +196,9 @@ Bash({
 
 **Scope**：
 - 进 commit：fix session 在本次 test-fix 循环中修改的代码
-- 不进 commit：plan.md / state.md / journal.md（audit trail）；ux-contract（不可变）；repo 中与本次 fix 无关的 in-flight 改动
+- 不进 commit：plan.md / state.md / journal.md（audit trail）；ux-contract（不可变）；repo 中与本次 fix 无关的 in-flight 改动；runtime / build artifact
 
-**执行**：必须用 create-commit skill 完成本次 commit（不自行手写 message）——skill 定义的 message 格式是本 command 的 commit 标准，其中「不附 Co-Authored-By」在本 command 内优先于全局 Bash 默认的 Co-Authored-By trailer。执行 skill 时按上述 Scope 显式 `git add` 只 stage fix session 的改动——skill 默认会包含全部 tracked 修改，不显式限定会把无关的 in-flight 改动带进 commit。
+**执行**：调用 `~/.claude/skills/create-commit/SKILL.md`，将上述 Scope 约束作为文件 staging 的判断依据。message 沿用 skill 定义的格式（不自行手写）。
 
 ### 4. Handoff
 
@@ -208,7 +219,7 @@ Bash({
 - 发现的 ux-contract 矛盾（supervisor 在 §2.2 标记的）
 - journal.md 中值得用户关注的 lesson / decision
 
-若最终是合法 stop 而非完成，按 plan-execution-principles §4 格式交接。
+若最终是合法 stop 而非完成，按 plan-execution-principles §5 格式交接。
 
 ---
 
@@ -232,5 +243,6 @@ Bash({
 | 不变量 | 为什么 |
 |---|---|
 | **ux-contract 不可变（supervisor 不自行修改）** | 发现矛盾时 AskUserQuestion 让用户决策；静默改 ux-contract 会让 review 的投资失效 |
-| **背景任务 + TaskOutput 轮询** | 不阻塞 supervisor session；不因等久就 kill；不把"在等待"当 stop 理由 |
+| **背景任务 + 增量轮询** | 不阻塞 supervisor session；主轮询姿势见 §2.1（增量读新增、必要时全量兜底）；不因等久就 kill；不把"在等待"当 stop 理由 |
 | **核对 Codex 产出 ≥ verify gate** | 不因 Codex 报告 "Done" 就进下一步——逐项检查实际执行结果和证据；同样不因 Codex 声称 "blocked / 外部不可解" 就转交用户——按 Stop Gate 独立验证 Codex 可控缓解已穷尽 |
+| **判据与产物诚实性（判据不可降级 / 产物不可替代）** | 见 `plan-execution-principles.md` §4：supervisor 不可单方面放松 plan 写下的 pass 判据，也不可用历史/缓存/中段态冒充本轮真实产出；需降级先按 §2.2 AskUserQuestion。绕过会让整个 contract 失去验收基准 |

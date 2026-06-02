@@ -20,10 +20,11 @@ ai-agent-config-share 是一个 AI coding agent 的共享配置仓库，为 Clau
 | `settings.json` | 环境变量、权限白名单、MCP server 列表、模型选择（手动 merge 到 `~/.claude/settings.json`） |
 | `commands/custom/` | Slash command 定义（`/custom:create-plan`、`/custom:execute-plan`、`/custom:test-ux`、`/custom:create-ux-contract`、`/custom:execute-ux-contract` 等），是用户触发工作流的入口 |
 | `commands/routine/` | 日常运维命令（`/routine:session-export` / `/routine:session-import`） |
-| `references/` | 被 CLAUDE.md 和 commands 引用的协议文档（plan 执行原则、skill 创建原则、UX 测试 patterns、ux-contract 审查原则等），是行为规则的 source of truth |
+| `references/` | 被 CLAUDE.md 和 commands 引用的协议文档（plan 执行原则、skill 创建原则、UX 测试 patterns、ux-contract 审查原则等），是行为规则的 source of truth。`domain-registry.md` 注册产品类型（功能型 / 游戏）并路由到 `references/game/` 下的 domain 专属验收原则；`service-operations-protocol.md` 定义仓库服务统一动词脚本约定 |
 | `skills/agent-browser/` | 浏览器自动化 skill（agent-browser CLI 的用法、认证模式、模板脚本），被 `test-ux` / `execute-ux-contract` 等命令消费 |
 | `skills/create-commit/` | commit 工作流 skill（审查 working tree、生成 message、确认后 commit），被 `execute-plan` / `execute-ux-contract` 的 commit 步骤委托 |
 | `bin/codeagent-wrapper` | arm64 macOS 二进制，包装 Codex / Gemini CLI 为统一接口，被 `execute-plan` 和 `supervise` 命令调用 |
+| `bin/poll-progress.sh` | 增量读后台任务 `.output` 文件的轮询脚本，被 supervisor 三命令（`execute-plan` / `supervise` / `execute-ux-contract`）调用，替代原 TaskOutput 阻塞轮询 |
 | `statusline.sh` + `statusline-transcript.py` | Claude Code statusline 脚本：解析运行时 JSON 输入，渲染多行终端状态栏 + 持久化 `~/.claude/tt-status.json` 供 tt-web 消费 |
 
 ### codex/ — Codex CLI 行为层
@@ -50,13 +51,15 @@ ai-agent-config-share 是一个 AI coding agent 的共享配置仓库，为 Clau
 | `web/` | 前端静态文件（HTML + JS + CSS），Chart.js 驱动的图表 |
 | `ip_check/` | 网络诊断子模块（DNS / IPv6 / 公网 IP / 代理检测），独立 CLI `ip-check` |
 | `tests/` | pytest 测试套件 |
+| `start.sh` / `stop.sh` / `status.sh` / `uninstall.sh` | tt-web 生命周期脚本，遵循 `service-operations-protocol.md` 统一动词约定，包装 tt-web dispatcher |
 
 ### 安装与验证
 
 | 文件 | 职责 |
 |---|---|
-| `install.sh` | 主安装脚本：symlink 创建 + npm 全局包安装 + 依赖检查 + settings.json statusLine 写入 + tt-web 子安装。交互式冲突解决（y/N/a/s） |
+| `install.sh` | 主安装脚本：symlink 创建 + npm 全局包安装 + 依赖检查 + settings.json statusLine 写入 + tt-web 子安装 + 共享 uv venv 创建（`brew install uv` → `.venv/`，供 ip-check / tt-web 使用）。交互式冲突解决（y/N/a/s） |
 | `verify.sh` | 只读验证脚本：检查所有 symlink 是否指向本 repo、依赖是否就位、settings.json 是否接好、手动 merge 文件是否含必要锚点。exit code = FAIL 数 |
+| `requirements.txt` | 仓库根共享 Python 依赖（requests / colorama），由 install.sh 用 uv 安装到 `.venv/`（uv-managed CPython 3.13）。ip-check 和 tt-web 原 `pip install --user` 改由此 venv 提供 |
 
 ### docs/ — 项目文档
 
@@ -126,7 +129,7 @@ ux-contract 是契约的锚点——execute 阶段不可自行修改它（发现
 `execute-plan`、`supervise`、`execute-ux-contract` 三个命令实现了 Claude-as-supervisor 的编排模式：
 
 - Claude（主 session）通过 `codeagent-wrapper` 在后台启动 Codex / Gemini / Claude 实例
-- 后台 agent 执行任务，主 session 通过 `TaskOutput` 轮询进度
+- 后台 agent 执行任务，主 session 通过 `poll-progress.sh` 增量读 `.output` 文件轮询进度（全量兜底），替代原 TaskOutput 阻塞轮询
 - 主 session 按 Stop Gate 判定后台 agent 是否真正完成，未完成则 resume 同一 session
 - `execute-plan` 额外支持 UX 验收闭环：完成后自动 `test-ux`，将 Critical/High issue 回灌给同一 Codex session
 - `execute-ux-contract` 把已审过的 ux-contract 翻译成 test plan，再用独立的 test session + fix session（各自独立 Codex session）跑测试-修复循环，直到 Critical/High issue 清零；commit 步骤委托 create-commit skill

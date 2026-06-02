@@ -7,6 +7,7 @@
 #     <repo>/claude/commands/routine/*.md → ~/.claude/commands/routine/*.md
 #     <repo>/claude/references/*.md       → ~/.claude/references/*.md
 #     <repo>/claude/bin/codeagent-wrapper → ~/.claude/bin/codeagent-wrapper
+#     <repo>/claude/bin/poll-progress.sh  → ~/.claude/bin/poll-progress.sh
 #     <repo>/claude/statusline.sh        → ~/.claude/statusline.sh
 #     <repo>/claude/statusline-transcript.py → ~/.claude/statusline-transcript.py
 #     <repo>/codex/agents/*.toml         → ~/.codex/agents/*.toml
@@ -348,6 +349,17 @@ if [ -f "$CODEAGENT_WRAPPER" ]; then
     link_one "$CODEAGENT_WRAPPER" "$HOME/.claude/bin/codeagent-wrapper"
 fi
 
+# --- poll-progress.sh (incremental .output reader; used by supervisor commands) ---
+
+POLL_PROGRESS="$SCRIPT_DIR/claude/bin/poll-progress.sh"
+
+if [ -f "$POLL_PROGRESS" ]; then
+    echo
+    echo "Installing poll-progress.sh:"
+    chmod +x "$POLL_PROGRESS"
+    link_one "$POLL_PROGRESS" "$HOME/.claude/bin/poll-progress.sh"
+fi
+
 # --- statusline scripts (produce ~/.claude/tt-status.json for tt-web) ---
 
 STATUSLINE_FILES=(statusline.sh statusline-transcript.py)
@@ -447,6 +459,24 @@ fi
 
 echo
 echo "Symlink install done. installed=$installed  overwritten=$overwritten  already_linked=$already_linked  skipped=$skipped"
+
+# --- Shared Python venv (uv-managed) for lightweight CLI tools ---
+# ip-check (requests) and tt-web (colorama) share one repo-root venv so we don't
+# sprinkle ad-hoc `pip install`s across sub-installers (and dodge Homebrew
+# Python's PEP 668 block). Pinned to a uv-managed CPython so `brew upgrade python`
+# can't rot the venv. Honors UPDATE_EXISTING: fresh venvs install deps; existing
+# ones only on consent. Exported REPO_DIR lets the tt-web sub-installer find it.
+export REPO_DIR="$SCRIPT_DIR"
+command -v uv >/dev/null 2>&1 || brew install uv
+VENV_DIR="$REPO_DIR/.venv"
+venv_created=0
+if [ ! -d "$VENV_DIR" ]; then
+  uv venv --python 3.13 "$VENV_DIR"
+  venv_created=1
+fi
+if [ "$venv_created" = "1" ] || [ "$UPDATE_EXISTING" = "1" ]; then
+  uv pip install --python "$VENV_DIR/bin/python" -r "$REPO_DIR/requirements.txt"
+fi
 
 # --- tt-web sub-installer (localhost token-usage dashboard) ---
 

@@ -65,6 +65,7 @@ origin: 2026-05-21
 
 **常见询问方向**（不限于此）：
 - 可观察的 verify 信号（测试通过 / 文件存在 / 命令成功 / 输出符合某 shape）
+- criterion 要匹配的任务真实门槛：量级 / 覆盖类任务（采集 / 抓取 / 批量 / 搜索）锁预期量级或下界（应得多少 / 覆盖哪些），别让"命中 ≥1 / 有输出"等存在性信号冒充——存在性检查按设计只在数据全无时 fail、漏一半照样 pass。数值基线不必在锁定时固定，可要求 wrapped agent 基于真实数据动态推算
 - 输出物的形态 + 落点（文件路径 / commit / PR / 屏幕截图）
 - "no regression" 是否在 scope（哪些既有行为不能坏）
 - 失败时的 fallback 期待（agent 必须给出 stop report 还是直接放弃）
@@ -92,39 +93,47 @@ Bash({
   - 用户原始 task 描述（保留原话，不要 paraphrase）
   - 用户锁定的 success criteria（§1 facet 产出）
   - Blocked 时：列已尝试 / 卡在哪个具体动作 / 需要用户给什么决策、做什么事情——不要把部分完成包装为已完成
-- 从 wrapper 输出捕获 `session id`——后续 resume 完全依赖它。捕不到时视为 wrapper / 适配层问题——排查 stderr / 退出码 / 输出截断，不要直接交给用户。
+- 从 wrapper banner（stdout 文本流）捕获 `session id`——后续 resume 完全依赖它。捕不到时视为 wrapper / 适配层问题——排查 stderr / 退出码 / `.output` 数据截断，不要直接交给用户。
 
 捕获 session id 后立刻在 `<WORKDIR>/logs/supervise/<task-slug>_<YYYYMMDD-HHmm>.md` 起一个 real-time log（详见 §3）。`<task-slug>` 从用户 task description 取前 3-5 个关键词转 kebab-case（e.g. `fix-auth-token-refresh`）；`<YYYYMMDD-HHmm>` 是 spawn 时刻。
 
-### 3. 等待 + 实时观察日志
+### 3. 增量轮询 + 实时观察日志
+
+spawn 后从**后台 Bash 任务结果**捕获 `.output` 路径并写入 real-time log（即下文的 `<output-file>`）：这是 harness 对后台 bash 任务 stdout+stderr 的完整捕获，**不是** wrapper banner 里 `Log:` 指向的 `codeagent-wrapper-<PID>.log`。每轮轮询调用形如：
 
 ```
-TaskOutput({ task_id, block: true, timeout: 600000 })
+Bash({ command: "~/.claude/bin/poll-progress.sh <output-file>" })
 ```
+
+`poll-progress.sh` 只读新增进度行（默认每轮最多回显 80 行），据此判断 wrapped agent 是在推进 / 完成 / blocked / stuck。
 
 进入 §4 的条件（四种）：
 
 - Agent 给出明确完成 summary
 - Agent 声称 blocked 并给出 stop report
-- Agent 进程异常退出 / 输出截断 / 无 session id
+- Agent 进程异常退出 / `.output` 数据截断 / 无 session id
 - **Agent stuck**：启动 5 分钟后仍无实质输出
 
 每轮等待之间发一条简短中文状态给用户（"Wrapped agent 仍在执行，已等待 X 分钟"），不要静默。
+
+**§4 裁决的证据基线永远是 `Read(<output-file>)` 全量**——增量轮询（`poll-progress.sh`）只决定『何时该裁决 / 介入』，不充当裁决证据本身。因为 `poll-progress.sh` 每轮都推进 cursor：单轮新增超过回显上限时，超出部分被跳过、在增量模式下永不再现，而 blocked / stop report / verify 证据可能正落其中——只有全量 Read 保证证据完整。`poll-progress.sh` 只读不改源文件，完整记录始终在盘上；context 压缩后恢复 / 排查异常亦用全量 Read。resume 会产生**新的后台任务 = 新 `.output` 文件**，对新文件重新记录路径并从 0 开始轮询。
 
 **实时观察日志**——保护 supervisor 自己不被 memory compaction 抹掉中间观察：
 
 - 落点：`<WORKDIR>/logs/supervise/<task-slug>_<YYYYMMDD-HHmm>.md`（目录不存在则建）
 - 写入时机：每收到 agent 输出 / 每次和 agent 对话 / 每次 resume / 每次用户决策
-- 写入内容：`<timestamp> <one-line observation>`——除了 agent 这一轮的进度，**必含根因怀疑**（同一类卡点是不是反复出现 / 这是 skill 缺口还是 task 描述歧义 / 关联到之前哪条 log），不只是进度流水。§5 提炼 issue 完全依赖这层观察
+- 写入内容：`<timestamp> <one-line observation>`——除了 agent 这一轮的进度和当前 `.output` 路径，**必含根因怀疑**（同一类卡点是不是反复出现 / 这是 skill 缺口还是 task 描述歧义 / 关联到之前哪条 log），不只是进度流水。§5 提炼 issue 完全依赖这层观察
 - log 是 supervisor 自留的过程证据，**不直接是 issue**——issue 在 §5 任务结束时从 log 提炼
+
+**环境争用监测（supervisor 主动管理执行环境，不只是管 agent）**——轮询时若 agent 在**反复对抗一个可解的环境争用**（cron 周期抢占、端口/锁被占等），supervisor 主动做**可逆干预**清掉它让 agent 干净推进（停干扰服务 / 隔离测试环境 / 释放资源，优先用项目已有生命周期脚本，须可逆、收尾恢复）；**反转成本高或可逆性不确定（尤其触及线上）就 `AskUserQuestion`**，呈现现状 + 候选干预 + 推荐。这与「不因慢就 kill」不同：那条防过早杀慢 agent，这条要清掉挡路的争用，不是干等它自己磨过去。
 
 ### 4. 判定 wrapped agent 输出并裁决
 
 | 观察到的现象 | 下一步 |
 |---|---|
-| Agent 停止（无论是否声称完成） | 核对两个 lens：(1) **verify 证据 ≥ success criteria**（每个 criterion 有可观察证据）(2) **Stop Gate 检查**——agent 把残余工作推给用户的部分，必须通过 `plan-execution-principles.md` §0 的全部 5 个 gate（必要性/归因/替代路径/verify拆分/交接）。"Agent 声称 blocked" 不等于 "gate 已通过"——supervisor 必须独立验证每个 gate，而不是接受 agent 的 self-report。两个 lens 都满足 → 进 §5；任一缺项 → resume，resume-prompt 指出哪几项 criterion 无证据 + supervisor 在 log 里看到的相关线索；回到 §3 |
+| Agent 停止（无论是否声称完成） | 先 `Read(<output-file>)` 全量取证（见 §3），再裁决；核对两个 lens：(1) **verify 证据 ≥ success criteria**（每个 criterion 有可观察证据；存在性 / 通过性证据——命中 ≥1 / 有输出 / 文件存在 / exit 0——不自动满足 §1 锁定的量级 / 覆盖类 criterion，PASS≠任务完成）(2) **Stop Gate 检查**——agent 把残余工作推给用户的部分，必须通过 `plan-execution-principles.md` §0 的全部 5 个 gate（必要性/归因/替代路径/verify拆分/交接）。"Agent 声称 blocked" 不等于 "gate 已通过"——supervisor 必须独立验证每个 gate，而不是接受 agent 的 self-report。两个 lens 都满足 → 进 §5；任一缺项 → resume，resume-prompt 指出哪几项 criterion 未达成 + supervisor 在 log 里看到的相关线索；回到 §3 |
 | Agent 抛出问题需要用户决策 | 见下方 **Dialogue facet** |
-| Agent 异常 / 无 session id / 输出截断 | 按 wrapper / 适配层问题处理：排查 stderr / 退出码 + 看 `git status` 判断是否已部分完成。**反转成本高（重启丢全部上下文 / resume 损坏 session 后续不可信），supervisor 不要 silent decide**——把诊断结果 + 候选 [resume 同 session / 重启新 session / 放弃交还用户] 通过 `AskUserQuestion` 让用户拍板 |
+| Agent 异常 / 无 session id / `.output` 数据截断（进程异常致数据残缺，非 §3 `poll-progress.sh` 回显层面的跳过） | 按 wrapper / 适配层问题处理：排查 stderr / 退出码 + 看 `git status` 判断是否已部分完成。**反转成本高（重启丢全部上下文 / resume 损坏 session 后续不可信），supervisor 不要 silent decide**——把诊断结果 + 候选 [resume 同 session / 重启新 session / 放弃交还用户] 通过 `AskUserQuestion` 让用户拍板 |
 | Agent stuck（启动 5 分钟后仍无实质输出） | Stuck session 无可复用上下文——kill 进程，用相同 spawn-prompt 启动新 session（不 resume）。连续两次 stuck → 升级用户（可能是 backend 不可用或 prompt 触发死循环） |
 
 resume 调用形如（同 spawn 的 flag 组 + 后台 + timeout，仅前缀改为 `resume <SESSION_ID>`）：
@@ -137,7 +146,7 @@ Bash({
 })
 ```
 
-resume-prompt 只列：哪几项 success criterion 无证据 + 各自的 supervisor 证据 / log 摘要 + （若用户后续追加过决策）补充上下文。不复述 success criteria 全文——同 session 已有。
+resume-prompt 只列：哪几项 success criterion 未达成（无证据；存在性 / 通过性证据 PASS 但未达锁定的量级 / 覆盖门槛）+ 各自的 supervisor 证据 / log 摘要 + （若用户后续追加过决策）补充上下文。不复述 success criteria 全文——同 session 已有。
 
 #### Dialogue facet（agent 提问 / agent 需要用户决策）
 
@@ -169,7 +178,7 @@ resume-prompt 只列：哪几项 success criterion 无证据 + 各自的 supervi
 
 **不升级用户**，即使决策看起来重大。Autopilot 模式的契约是用户接受 agent 推荐的决策质量，用户通过 §6 handoff 里的决策点列表做事后审查。
 
-**例外**：§4 表格中 Agent 异常 / 无 session id / 输出截断行不受 autopilot 控制——该场景始终升级用户，因为反转成本（重启丢上下文 / resume 损坏 session）无法由 agent 推荐吸收。
+**例外**：§4 表格中 Agent 异常 / 无 session id / `.output` 数据截断行不受 autopilot 控制——该场景始终升级用户，因为反转成本（重启丢上下文 / resume 损坏 session）无法由 agent 推荐吸收。
 
 ### 5. 任务结束：general.md 落地
 
@@ -241,8 +250,9 @@ Type 定义：
 下面这些 SOTA Claude 默认不会做，失守会让本 command 退化（其他执行时刻的细则在 §1–§6 各自 source-of-truth 里，本节只收录跨节、单一上游 anchor 抓不住的不变量）：
 
 - **wrapper 报错先归因 wrapper / 适配层**：只有观察到第三方原始响应（HTTP 体 / API error code / 状态页）才能写"外部不可用"。
-- **背景任务 + TaskOutput 轮询**：必须 `run_in_background: true`；不要因为等久就 kill；不要把"在等待"当 stop 理由扔给用户。
+- **背景任务 + 增量轮询**：必须 `run_in_background: true`；主轮询姿势见 §3（增量读新增、必要时全量兜底）；不要因为等久就 kill；不要把"在等待"当 stop 理由扔给用户。**但"不被动 kill"≠"被动等"**：agent 反复对抗可解环境争用时主动可逆干预、不确定就 ask，见 §3「环境争用监测」。
 - **语言契约**：与 wrapped agent / 工具交互 English；与用户交互中文。
 - **Real-time log 不替代 general.md**：log 是 supervisor 自留的过程证据（防 memory compaction），观察问题以 entries 形式落地是 §5 的事。两个不同 consumer——log consumer 是 supervisor 自己，issues file consumer 是未来 agent。
+- **commit 经 create-commit、只 stage 自己的改动**：supervisor 提交自己的改动（如 §5 的 general.md 落地）时，按 `~/.claude/skills/create-commit/SKILL.md` 执行，且仅 stage 本次要提交的文件、不带入 wrapped agent 的 task 改动（其去向按 §6）；message 沿用 skill 格式不自行手写。与 execute-plan / execute-ux-contract 一致。
 - **不接管 task 范围内的代码改动**：Claude 修 wrapper / 适配层允许；替 wrapped agent 写 task 范围内的代码不允许——绕过 supervisor 定位。
 - **Supervisor 的 handoff 也是 stop**：supervisor 把残余工作推给用户时，自身也按 `~/.claude/references/plan-execution-principles.md` Stop Gate 自检——agent 没试完可用路径的情况下，supervisor 不能接受 stop 并转嫁给用户。
