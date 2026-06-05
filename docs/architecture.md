@@ -21,6 +21,7 @@ ai-agent-config-share 是一个 AI coding agent 的共享配置仓库，为 Clau
 | `commands/custom/` | Slash command 定义（`/custom:create-plan`、`/custom:execute-plan`、`/custom:test-ux`、`/custom:create-ux-contract`、`/custom:execute-ux-contract` 等），是用户触发工作流的入口 |
 | `commands/routine/` | 日常运维命令（`/routine:session-export` / `/routine:session-import`） |
 | `references/` | 被 CLAUDE.md 和 commands 引用的协议文档（plan 执行原则、skill 创建原则、UX 测试 patterns、ux-contract 审查原则等），是行为规则的 source of truth。`domain-registry.md` 注册产品类型（功能型 / 游戏）并路由到 `references/game/` 下的 domain 专属验收原则；`service-operations-protocol.md` 定义仓库服务统一动词脚本约定 |
+| `agents/` | Claude sub-agent 定义（`doc-updater`：按 `docs-organization-protocol.md` 维护项目文档），被 `/custom:update-docs` 及 execute 类命令的文档同步步骤 spawn |
 | `skills/agent-browser/` | 浏览器自动化 skill（agent-browser CLI 的用法、认证模式、模板脚本），被 `test-ux` / `execute-ux-contract` 等命令消费 |
 | `skills/create-commit/` | commit 工作流 skill（审查 working tree、生成 message、确认后 commit），被 `execute-plan` / `execute-ux-contract` 的 commit 步骤委托 |
 | `bin/codeagent-wrapper` | arm64 macOS 二进制，包装 Codex / Gemini CLI 为统一接口，被 `execute-plan` 和 `supervise` 命令调用 |

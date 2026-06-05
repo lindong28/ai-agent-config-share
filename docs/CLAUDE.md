@@ -9,6 +9,7 @@
 | [architecture.md](architecture.md) | Mutable snapshot | 需要理解项目模块结构、分层方式、关键抽象时 |
 | [philosophy.md](philosophy.md) | 设计哲学 | 需要理解 commands 的设计取舍和人机协作原则时 |
 | [command-guide.md](command-guide.md) | 使用指南 | 需要查阅 command 用法和工作流组合时 |
+| [issues/](issues/README.md) | [Agent] issue 跟踪器（按 domain 分文件） | 规划"接下来做什么" / 评估项目健康、或发现 harness 自身问题需记录时 |
 
 ## 写入规则
 

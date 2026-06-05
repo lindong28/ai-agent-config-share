@@ -6,6 +6,7 @@
 #     <repo>/claude/commands/custom/*.md  → ~/.claude/commands/custom/*.md
 #     <repo>/claude/commands/routine/*.md → ~/.claude/commands/routine/*.md
 #     <repo>/claude/references/*.md       → ~/.claude/references/*.md
+#     <repo>/claude/agents/*.md           → ~/.claude/agents/*.md
 #     <repo>/claude/bin/codeagent-wrapper → ~/.claude/bin/codeagent-wrapper
 #     <repo>/claude/bin/poll-progress.sh  → ~/.claude/bin/poll-progress.sh
 #     <repo>/claude/statusline.sh        → ~/.claude/statusline.sh
@@ -297,6 +298,7 @@ echo "  target: $HOME"
 link_tree "commands/custom"
 link_tree "commands/routine"
 link_tree "references"
+link_tree "agents"
 
 # --- Codex agent definitions (symlink .toml files) ---
 

@@ -14,8 +14,8 @@ description: 模拟真实用户试用产品（web / desktop / mobile / 任何可
 
 ## 角色分工
 
-- **主 session**：对齐 + 派发 subagent + 读报告 handoff
-- **Subagent**：以真实用户身份使用已部署产品、记录观察、采集端到端证据、写自己负责的 issues 文件
+- **主 session（supervisor）**：与用户对齐 + 经 `codeagent-wrapper --backend codex` 派发 codex session + 等其停止后裁决产出 + 读报告 handoff。本文 **codex session**（简称 session）指经 wrapper 启动的测试执行单元，所有用户模拟测试都由它跑。
+- **codex session**：以真实用户身份使用已部署产品、记录观察、采集端到端证据、写自己负责的 issues 文件
 
 产出对象是 coding agent，不是给人读的体验报告——主观感受语言剔，结构化字段留。
 
@@ -41,7 +41,7 @@ description: 模拟真实用户试用产品（web / desktop / mobile / 任何可
 
 ## 需要和用户对齐的点（不限于此）
 
-**通用 lens**："为了不让 subagent 走偏，我现在缺哪些只能用户回答的信息？"
+**通用 lens**："为了不让 codex session 走偏，我现在缺哪些只能用户回答的信息？"
 
 以下是要对齐的几类——**不强制顺序，可并行 / 迭代 / 回退**。任一对齐暴露上层缺失（理解错了产品类型、persona 假设崩了）就回去补。展示与提问风格遵循 `~/.claude/references/deep-discuss-style.md`。
 
@@ -86,13 +86,13 @@ description: 模拟真实用户试用产品（web / desktop / mobile / 任何可
 - Onboarding-heavy 产品："首次访问者多久能感知到价值？哪里会被卡住放弃？"
 - 数据可视化产品："能否一路钻取到根因？跨视图数据是否一致？"
 
-数量以"覆盖你能预期的失败模式 + subagent 能在产出 issue 时收敛到具体维度"为准。
+数量以"覆盖你能预期的失败模式 + codex session 能在产出 issue 时收敛到具体维度"为准。
 
 ### 用户操作覆盖面
 
 **lens**："真实用户会点哪些入口、切哪些 tab/filter、改哪些参数、从哪些深链接进入？如果我只测了默认路径，哪些明显用户动作会被漏掉？"
 
-在派发 subagent 前，主 session 必须提炼一份**用户操作覆盖清单**，写进简报。清单不是 QA 打勾表，而是防止遗漏高概率用户路径的地图；subagent 执行时仍然要像真实用户一样使用产品，遇到困惑、断裂、异常就记录 issue。
+在派发 codex session 前，主 session 必须提炼一份**用户操作覆盖清单**，写进简报。清单不是 QA 打勾表，而是防止遗漏高概率用户路径的地图；codex session 执行时仍然要像真实用户一样使用产品，遇到困惑、断裂、异常就记录 issue。
 
 Web 产品默认要覆盖：
 
@@ -115,38 +115,84 @@ Web 产品默认要覆盖：
 
 ---
 
-## Subagent 简报契约
+## codex session 派发与裁决
 
-主 session 对齐充分后 spawn general-purpose subagent 执行测试。**主 session 在本次调用开始时生成本轮 `<round-slug>`（同一轮所有 subagent 共用，用于在 `issues/` 下隔离不同轮次的产出）**；**多 subagent 并行时再为每个 subagent 分配唯一 `<subagent-slug>`**（如 persona name 或编号），避免同轮内输出文件冲突。简报必含：
+主 session 对齐充分后，经 `codeagent-wrapper --backend codex` 后台启动一个或多个 codex session 执行测试。**session 数 = persona / 覆盖清单如何切分**：由主 session 按产品规模定，切分时每个 session 拿一个 persona / 操作子集，规模小时一个 session 覆盖全部即可。**本次调用开始时生成本轮 `<round-slug>`（所有 session 共用，用于在 `issues/` 下隔离不同轮次的产出）**；**并行多 session 时再为每个 session 分配唯一 `<session-slug>`**（如 persona name 或编号），避免同轮内输出文件冲突。
+
+### 启动
+
+每个 session 一次调用，后台并行：
+
+```
+Bash({
+  command: "~/.claude/bin/codeagent-wrapper --progress --backend codex - <WORKDIR> <<'EOF'\n<test-prompt>\nEOF",
+  run_in_background: true,
+  timeout: 7200000,
+})
+```
+
+- `<WORKDIR>` 来自 Bash `pwd`——**禁止从 `$HOME` / 环境变量推断**。
+- `run_in_background: true` 是硬约束（不可阻塞主 session）。
+- 每个 session 从 wrapper banner（stdout 文本流）捕获 `session id`（resume 依赖它），从**后台 Bash 任务结果**捕获 `.output` 路径（即下文 `<output-file>`；harness 对该任务 stdout+stderr 的完整捕获，**不是** banner 里 `Log:` 指向的 `codeagent-wrapper-<PID>.log`）。捕不到 session id 视为 wrapper / 适配层问题——排查 stderr / 退出码，不直接交用户。
+
+### test-prompt 内容
+
+文件里已有的信息**给路径让 session 自己读**，prompt 只传文件中没有的本轮指令。应覆盖以下几类（按产品适用）：
+
+**传给 session 的素材**：
 
 - 产品访问入口 + 提炼后的预期功能摘要 + 真实验收环境（按 §验收入口 对齐到的相关项）
-- 该 subagent 负责的 persona（单 subagent 时可为完整 persona 列表，多 subagent 时为分到的子集）
+- 该 codex session 负责的 persona（单 session 时可为完整 persona 列表，多 session 时为分到的子集）
 - 已对齐的观察维度列表
 - 用户操作覆盖清单：入口、tab/filter、搜索/分页、深链接、边界路径；明确哪些必须全覆盖、哪些可抽样
-- 引用 pattern 来源：`~/.claude/references/ux-test-patterns.md`；若存在 `./docs/contracts/ux-test-patterns.md`（本项目动态积累）也一并引用。subagent 自己按分配的 persona / 维度 / 操作 / 现场页面挑适用 pattern 应用
-- 产出落点：`plans/<YYYYMMDD>-<product-slug>-user-test/`；该 subagent 写到 `issues/<round-slug>/<subagent-slug>-issues.md`；证据存到该目录下的 `evidence/` 子目录
 - 工具：根据产品类型选择（agent-browser / computer use / 产品原生接入），用法见对应工具文档或 ~/.claude/CLAUDE.md
+
+**让 session 自己读的引用**：
+
+- pattern 来源：`~/.claude/references/ux-test-patterns.md`；若存在 `./docs/contracts/ux-test-patterns.md`（本项目动态积累）也一并引用。session 自己按分配的 persona / 维度 / 操作 / 现场页面挑适用 pattern 应用
+- `~/.claude/commands/custom/test-ux.md` 的 §端到端真实使用、§issue 字段契约、§反模式 三段——分别作为证据约束、issue 字段、行为反模式的来源
+
+**执行与行为约束**：
+
 - 每个 persona 按对齐后的所有维度扫一遍
 - 每个 persona 至少覆盖一遍用户操作清单中的核心路径；多 persona 可分摊非核心路径，但必须在产出里说明覆盖关系
 - 覆盖产品支持的所有交付形态（web 的桌面+移动响应、desktop app 的所支持 OS、mobile app 的 iOS/Android 等——按产品实际范围）
-- web 产品至少抽查默认缩放之外的阅读状态（如 125% / 150% 浏览器缩放、窄桌面宽度或系统大字号等），尤其是有参照产品时要比较双方断点是否同步、首屏阅读流是否一起重排。
-- 行为约束：**像真实用户使用实际部署产品，不是跑 QA checklist，也不是操纵内部状态**。遇到困惑 / 不顺 / 异常时记录 issue；不要预设清单挨个验证打勾。
-- 证据约束遵循 §端到端真实使用
-- 附文末"反模式"段到简报
+- web 产品额外抽查默认缩放之外的阅读状态（如 125% / 150% 浏览器缩放、窄桌面宽度或系统大字号等），尤其是有参照产品时要比较双方断点是否同步、首屏阅读流是否一起重排
+- **像真实用户使用实际部署产品，不是跑 QA checklist，也不是操纵内部状态**：遇到困惑 / 不顺 / 异常时记录 issue，不要预设清单挨个验证打勾；以产品的真实用户语言操作（中文产品就用中文输入 / 阅读）
+
+**产出**：
+
+- 落点：`plans/<YYYYMMDD>-<product-slug>-user-test/`；该 codex session 写到 `issues/<round-slug>/<session-slug>-issues.md`；证据存到该目录下的 `evidence/` 子目录
+- issue 文件用中文写（代码 / 标识符 / URL 原文保留）
 
 以上是下游开展测试所需的最小集——主 session 可按具体情况补充其他上下文（产品类型摘要、特殊关注点、已知 limitation 等）。
 
+### 等待与裁决
+
+**不强制盯每个 session 的中间过程**——默认**等每个后台 session 停止后**（后台任务结束时 harness 会通知），`Read(<output-file>)` 全量 + 读其 issues 文件再裁决。等久是常态，不因慢就 kill（`timeout` 兜底）。每个 session 裁决两件事（用户已显式降级为 mock / 静态审查的 session 按其降级范围裁决，不套真实入口要求）：
+
+1. **覆盖完成度**：是否覆盖了分到的 persona / 维度 / 操作清单，核心正向路径是否真实跑通。
+2. **证据合规**：是否符合 §端到端真实使用（核心结论来自真实入口，mock 仅作辅助诊断）。
+
+据此分三种结局：
+
+- **过关**（两项都满足）→ 进 Handoff。
+- **未覆盖完 / 早停 / 核心路径未真实跑通**（session 仍可信）→ **resume 同一 session**（前缀改为 `resume <SESSION_ID>`，其余 flag / 后台 / timeout 同启动）续跑，**不为这种正常早停启新 session 重测**（丢上下文、双倍 token）；指出缺哪几项 + 已观察到的线索，回到本段重新裁决。
+- **session 异常退出 / `.output` 截断 / resume 后不可信**（进程残缺，非「正常早停」）→ 先排查 stderr / 退出码 + `git status`，再把诊断 + 候选 [resume 同 session / 重启新 session / 放弃交还用户] 经 `AskUserQuestion` 让用户拍板——反转成本高（重启丢全部上下文 / resume 损坏 session 不可信），主 session 不 silent decide。
+
+读完最终输出后若想核对执行中段细节（证据真实性、覆盖是否真做），可再 `Read` 同一 `<output-file>`（含完整执行过程）——可选，不强制。
+
 ## Handoff
 
-所有 subagent 完成后，读产出目录下 `issues/<round-slug>/` 中所有 `<subagent-slug>-issues.md`，主 session 对每条 issue 做合理性判断和证据类型审查（规则与 BLOCKED 判定按 §端到端真实使用），不确定的整理为 `AskUserQuestion` 让用户决策。向用户汇总保留下来的 issues，附完整文件路径。
+所有 codex session 经 §等待与裁决 过关后，读产出目录下 `issues/<round-slug>/` 中所有 `<session-slug>-issues.md`，主 session 对每条 issue 做合理性判断和证据类型审查（规则与 BLOCKED 判定按 §端到端真实使用），不确定的整理为 `AskUserQuestion` 让用户决策。向用户汇总保留下来的 issues，附完整文件路径。
 
-handoff 还必须核对覆盖清单：说明哪些用户操作已覆盖、哪些未覆盖、未覆盖是否可接受。若发现明显高概率路径未覆盖（例如公开站点的某个主 category 深链接），主 session 应补测或再派发 subagent，不应只转述已有报告。
+handoff 还必须核对覆盖清单：说明哪些用户操作已覆盖、哪些未覆盖、未覆盖是否可接受。若发现明显高概率路径未覆盖（例如公开站点的某个主 category 深链接），主 session 应**再派 codex session 补测**（不亲自代跑），不应只转述已有报告。
 
-handoff 还必须基于 pattern 文件抽查 pattern 应用：来源为 `~/.claude/references/ux-test-patterns.md`，若存在 `./docs/contracts/ux-test-patterns.md` 也算。给定本产品类型和已分配维度 / 操作，issues 证据是否显示 subagent 命中了显然该用的 pattern（如 feed 页面应见到时间排序语义检查、移动 drawer 应见到隐藏元素焦点检查）。明显该用而未用 → 补测或再派 subagent。
+handoff 还必须基于 pattern 文件抽查 pattern 应用：来源为 `~/.claude/references/ux-test-patterns.md`，若存在 `./docs/contracts/ux-test-patterns.md` 也算。给定本产品类型和已分配维度 / 操作，issues 证据是否显示 codex session 命中了显然该用的 pattern（如 feed 页面应见到时间排序语义检查、移动 drawer 应见到隐藏元素焦点检查）。明显该用而未用 → 再派 codex session 补测。
 
 完成上述 issue handoff、覆盖核查、pattern 应用抽查后，主 session 可选地把本轮暴露的、两个 pattern 文件都未覆盖的失败 shape 追加到 `./docs/contracts/ux-test-patterns.md`（路径相对项目根目录；目录或文件不存在时先 `mkdir -p ./docs/contracts` 再新建，沿用 user-scope 同一格式）；新增条数与文件路径并入 handoff 汇总。这一步优先级低于 issue 工作，时间或上下文紧时直接跳过。
 
-## issue 字段契约（subagent 必须遵守）
+## issue 字段契约（codex session 必须遵守）
 
 每条 issue 要让 coding agent 能回答下列问题——给出能回答的信息即合规，形式不强求字段名一致：
 
@@ -171,3 +217,11 @@ handoff 还必须基于 pattern 文件抽查 pattern 应用：来源为 `~/.clau
 - **存在性统计替代体验判断**：只数"有没有图片 / 有没有链接 / 有没有内容"，不看图片实际占屏、标题是否可扫读、用户自然点击标题或正文时是否到达预期入口 → 漏掉阅读体验问题
 - **只看存在不看语义**：确认列表有内容、分类有结果、时间有显示，但不检查结果是否符合分类语义、时间线是否按可见时间排序 → 漏掉"模型页混入非模型内容"、"时间线实际按分数排序"这类问题
 - **mock 替代真实使用**：用 mock API / `page.setData` / 组件 handler / 源码 / 本地 fixture 跑出状态后写成"用户会遇到的问题" → 只算诊断线索，必须真实环境复测后才能进入最终 issue 清单
+
+---
+
+## 关键不变量
+
+下面这条 SOTA Claude 默认不会做、且**单一上游 section 抓不住**（跨节才成立），失守会让本 command 退化：
+
+- **wrapper 报错先归因 wrapper / 适配层**：只有观察到第三方原始响应（HTTP 体 / API error code / 状态页）才能写"外部不可用"。

@@ -2,7 +2,6 @@
 name: supervise
 description: 用 codeagent-wrapper 启动指定 backend（codex / gemini / claude）跑用户口头描述的任务。Claude 作为 supervisor：spawn 前用 AskUserQuestion 跟用户锁定 success criteria + backend；过程中代答 wrapped agent 的简单决策、复杂决策升级给用户；agent 早停时根据 success criteria 续 resume 同 session；任务结束时把观察到的 agent 行为问题 / 工具缺口写到项目层 `docs/issues/general.md`。触发：显式 `/custom:supervise <task description>`。
 argument-hint: "[--backend codex|gemini|claude] [--autopilot] <task description>"
-disable-model-invocation: true
 origin: 2026-05-21
 ---
 

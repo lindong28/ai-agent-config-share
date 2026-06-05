@@ -2,6 +2,17 @@
 
 > Append-only（最新在前）。仅记录用户可感知的变更。
 
+## 2026-06-04
+
+- 新增：`references/docs-organization-protocol.md` + `references/docs-format-templates.md` — 项目文档组织协议（BINDING），定义 7 类文档、三层消费者（User / Developer / Agent）、task 产物 → 项目文档的提升机制与各文档统一格式模板；由 `claude/CLAUDE.md`「Docs Organization Protocol」绑定加载
+- 新增：`doc-updater` agent + `/custom:update-docs` 命令 — 按文档组织协议维护 `docs/` 与根目录 README/CHANGELOG，被 execute 类命令的文档同步步骤及手动 `/custom:update-docs` 调用
+- 新增：`/custom:resolve-issues` 命令 — 基于目标的批量 issue 解决，含 consumer 范围 triage、依赖序派发、新 issue 闭环回灌
+- 新增：游戏 UX 验收扩展 — `references/game/ux-contract-review-principles.md` 新增 G0 规格锚定（Spec Anchoring）原则，`references/game/ux-test-patterns.md` 新增 GP4（行动反馈出屏 / 结果埋深）、GP5（核心玩法承诺落空 / 失败条件缺失）测试 pattern
+- 变更：`/custom:test-ux` 执行模型从 subagent 迁移到 codeagent-wrapper codex session，支持早停后 resume 续测，结构化的启动 / 等待 / 裁决流程
+- 变更：`/custom:review-skill` optimize 模式细化为基于 wrapper-vs-program 边界的精简检测
+- 变更：`install.sh` / `verify.sh` 覆盖 `claude/agents/` 目录（doc-updater 等 sub-agent 定义）
+- 修复：`/custom:supervise` 移除 `disable-model-invocation` frontmatter 标志，恢复命令可被模型调用
+
 ## 2026-06-02
 
 - 新增：`poll-progress.sh` — 后台任务进度增量轮询脚本，被 supervisor 三命令（`execute-plan` / `supervise` / `execute-ux-contract`）使用，替代原 TaskOutput 阻塞轮询；install.sh 自动 symlink 到 `~/.claude/bin/`
