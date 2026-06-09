@@ -2,6 +2,7 @@ import argparse
 import json
 import logging
 import mimetypes
+import os
 import subprocess
 import time
 from collections import defaultdict
@@ -9,6 +10,7 @@ from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
+from zoneinfo import ZoneInfo
 
 from aggregators import extract_metric, load_all_entries, pivot
 from parsers import claude_status, codex
@@ -82,6 +84,36 @@ def health(_query):
     return {"ok": True}
 
 
+def _valid_zone(name):
+    if not name:
+        return None
+    try:
+        ZoneInfo(name)
+    except Exception:
+        return None
+    return name
+
+
+def local_timezone():
+    """IANA name of the machine's current timezone, resolved live so it can't
+    drift from the system configuration. Prefers /etc/localtime (the OS-level
+    setting the system clock uses, re-read on every call and updated whenever the
+    user changes timezone) over the TZ env var, which is frozen per-process at
+    launch and would otherwise pin a stale zone. Returns None when unresolved."""
+    try:
+        link = os.readlink("/etc/localtime")
+    except OSError:
+        link = ""
+    marker = "zoneinfo/"
+    idx = link.rfind(marker)
+    zone = _valid_zone(link[idx + len(marker):]) if idx != -1 else None
+    return zone or _valid_zone(os.environ.get("TZ"))
+
+
+def timezone_endpoint(_query):
+    return {"timezone": local_timezone()}
+
+
 def network(query):
     force = query.get("force", [None])[0] == "1"
     now = time.time()
@@ -122,6 +154,7 @@ def network(query):
 
 ROUTES = {
     "/api/health": health,
+    "/api/timezone": timezone_endpoint,
     "/api/overview": overview,
     "/api/pivot": pivot_endpoint,
     "/api/sessions": sessions_endpoint,

@@ -38,3 +38,36 @@ if [ ! -x "$VENV_PY" ] || ! "$VENV_PY" -c "import requests" >/dev/null 2>&1; the
   echo "      Run the repo-root install.sh first (it creates the shared venv)."
 fi
 echo "ip-check installed"
+
+# --- post-install network health hint ---
+# Run ip-check once and surface a remediation pointer ONLY when it finds a real
+# risk (verdict "high": IPv6 leak / CN DNS / timezone mismatch). Stays silent when
+# the environment is clean (low / proxy-in-use). Never aborts the install — a
+# network probe must not block setup, so every failure path returns 0. Note: this
+# makes one set of outbound calls (ip-api etc.), adding a few seconds to install.
+network_health_hint() {
+  [ -x "$BIN_DIR/ip-check" ] || return 0
+  local py="$VENV_PY"; [ -x "$py" ] || py="python3"
+  "$py" -c "import requests" >/dev/null 2>&1 || return 0   # deps missing → ip-check can't run; the WARN above already covers it
+  local json
+  json="$("$BIN_DIR/ip-check" --json 2>/dev/null)" || return 0
+  # Script via stdin (`-`); JSON + runbook path via argv so stdin isn't contended.
+  "$py" - "$json" "$ROOT_DIR/NETWORK-REMEDIATION.md" <<'PY' || true
+import sys, json
+raw, runbook = sys.argv[1], sys.argv[2]
+try:
+    data = json.loads(raw)
+except Exception:
+    sys.exit(0)
+if data.get("verdict") != "high":
+    sys.exit(0)
+findings = [c["text"] for c in data.get("conclusions", []) if c.get("level") == "bad"]
+print("")
+print("⚠ ip-check found network risks (verdict: high):")
+for text in findings:
+    print("    ✗ " + text)
+print("  How to fix: " + runbook)
+print("  Re-check after fixing: ip-check")
+PY
+}
+network_health_hint || true

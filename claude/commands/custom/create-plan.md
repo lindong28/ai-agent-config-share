@@ -51,6 +51,7 @@ plan 必须把三层在文档中串起来——每层在 plan 里应该写什么
 - **L1**：最终产物形态、使用者、调用模式、范围 / 约束 / 假设——**有 spec 时引用 spec，不重述**
 - **L2**：用户视角 verify——**有 spec 时仍要 inline 写在 plan 里**，但形式从 spec 的"用户审用措辞"翻译成 implementer-executable 步骤（命令+预期输出 / subagent 模拟用户流程 / 截图比对脚本 / 评测分数检查等）。spec 是契约源头，plan 是 implementer 执行版；维度一致，形式不同。详见 §3「必答项表格」+ `~/.claude/references/plan-review-principles.md` Principle 11
 - **L3**：用户决策与取舍、planner research 得到的 actionable facts（API 调用模板、外部规范、可复用代码具体定位）、内部 verify
+- **横切 — UX 契约影响**：plan 改变用户可感知行为且产品有 `docs/contracts/ux-contract.md` 时，把用户可感知那片 L1/L2 投影到 ux-contract 对应 section 是 plan 的 deliverable；详见 §2「UX 契约影响」facet（无影响则一句话 skip）
 
 ### 横切：取舍偏好（贯穿 L1 + L2 + L3）
 
@@ -144,6 +145,18 @@ planner 和 user 对齐的过程中，至少要让以下几类信息变清晰。
 
 **关键**：L2 verify 必须独立于内部实现来描述——既不写"内部数据结构 X 长这样" / "内部状态机 Y 转移到 Z"（那是 L3 内部 verify），也不从代码内部状态机 / pipeline 反推 verify 维度（尤其多阶段 / 多状态 / 多页面产品，要按使用者实际经历的路径定）。
 
+### UX 契约影响（条件化）
+
+> ux-contract 的 L1/L2 与 plan 的 L1/L2 **同构**（ux-contract L1 产品全貌 ↔ plan L1 最终产物、ux-contract L2 用户视角 verify ↔ plan L2）。所以本 facet 不另起一套机制：plan 改变用户可感知行为时，**把用户可感知那片 L1/L2 投影到 ux-contract 对应 section** 就是 plan 的 deliverable（详见 docs-organization-protocol §4.6 主路径）。投影出的契约 delta 进 plan 的 **user-facing surface**（plan 中供用户审阅签字的那部分，见 plan-review-principles §5）。
+
+**触发条件**：plan 改变**用户可感知行为**（新功能 / 行为变化 / 功能移除）**且**产品有 `docs/contracts/ux-contract.md`。纯内部 / 重构 / 无用户可感知变化、或产品无该文件 → 在 plan 的「UX 契约影响」段显式标「无影响 + 一句理由」后 skip，不强行对齐。
+
+**契约 delta 的 L2 verify**：投影出的 section 变更，其 verify 进 plan 的 L2，与 plan L2 同形态（implementer-executable），只是维度锚定在 ux-contract 该 section、并按 ux-contract 的验收 lens 校（**该 lens 见 create-ux-contract §1，维度非穷举**）。
+
+**取舍是否需用户拍**：走 §2 开头 borderline 决策两条 path——直观、无新增取舍的翻译 planner 自己拍；浮现超出现有 L1/L2 的取舍则 `AskUserQuestion` 对齐、记**决策**。
+
+**plan 中的产出**：「UX 契约影响」段写明——(a) 有无影响（无则一句理由即 skip）；(b) 动哪个 / 哪些 ux-contract section + 该 section 投影出的 L2 条目（进 user-facing surface）；(c) 对齐过的取舍决策（若有）；(d) 给 execute-plan 的指令：apply 投影出的契约 delta 进 ux-contract §X、按列出的 L2 条目验证——已批准意图，apply 之，不要自行新增本段未记录的改动。
+
 ### 设计决策 + 内部 verify（L3）
 
 **对齐**：在 L1 + L2 框定下，需要用户拍板的具体设计决策；以及伴随每个设计决策的内部 verify。
@@ -212,6 +225,7 @@ planner 和 user 对齐的过程中，至少要让以下几类信息变清晰。
 | **取舍偏好 + 三层影响**：用户在产品/UX/工程维度上的相对优先级，以及它在 L1 产物形态、L2 verify 维度阈值、L3 实现取舍各自塑造了什么；不适用任务（binary feature 等）需说明原因 | "随便选" / 没列 / 只列一句"用户说要好用" |
 | **用户视角 verify**（L2：覆盖 happy + error path 的可观测条件，独立于内部实现；**必须 implementer-executable form**——命令+预期输出 / subagent 模拟用户流程 / 截图比对脚本 / 评测分数断言 / 结构化 rubric。有 spec 时是 spec dimension 的翻译版，每条 spec dimension 必须有 plan 对应步骤） | "跑一下应该 OK" / "实现完了再看" / "类型对了就行" / "使用者满意"（spec 措辞照搬不翻译） |
 | **内部 verify**（L3：每个非平凡设计决策对应的实现侧自检——unit test / 类型签名 / contract test / 关键不变式断言；agent 可独立跑） | "走个 lint" / "看下编译过没过" |
+| **UX 契约影响**（用户可感知行为变化且产品有 ux-contract.md 时）：动哪个 / 哪些 ux-contract section + 该 section 投影出的 L2 条目（用 ux-contract 验收 lens 写、进 user-facing surface）+ 对齐过的取舍决策（若有）+ 给 execute-plan 的 apply 指令；无影响 / 产品无 ux-contract 需一句理由 skip | 用户可感知行为变化但 plan 对 ux-contract 只字未提（默认 drift）/ 记了契约 delta 却无对应 L2 verify |
 | **verify 步骤的人机边界**：每条 verify 标识 agent 可独立完成 vs 需人工介入；人工项必须说明自动化先兜底了哪些 | 没标 → implementer 不知道哪步会被 block |
 | 用户需要在 phase 边界做什么决策、为什么做、看什么材料做、怎么最短路径打开材料、如何回复 | "用户选一个方案" / "用户看一下 mock" |
 | 用户首见面 / 顶层入口文档是否需要同步 | 没提 |

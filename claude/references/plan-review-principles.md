@@ -6,13 +6,13 @@ Behavioral guidelines for reviewing implementation plans — plan files written 
 
 **These guidelines are working if:** plans describe the minimum work that achieves the goal; verification steps run as written; nothing the user needs (docs, root README updates) gets discovered post-ship.
 
-**Loop:** For each principle, check 1–14. Loop until no principle is violated.
+**Loop:** For each principle, check 1–15. Loop until no principle is violated.
 
 ---
 
 ## Priority and conflict resolution
 
-Principles are listed in **tiebreaker priority order** — when two give conflicting guidance, the lower-numbered principle wins. Principles 4, 13, and 14 are conditional (apply only when their scope is matched); when they apply, their position in the order stands.
+Principles are listed in **tiebreaker priority order** — when two give conflicting guidance, the lower-numbered principle wins. Principles 4, 13, 14, and 15 are conditional (apply only when their scope is matched); when they apply, their position in the order stands.
 
 **Escape valve**: when applying this order would contradict your judgment of what serves the plan's goal, ask the user before applying.
 
@@ -294,3 +294,18 @@ When reviewing, flag:
 - Verify that asks for expected-vs-actual but hard-codes the count at plan time when the real baseline is only knowable at implementation — should require the implementer to derive expected dynamically and compare.
 
 Ask yourself: "If the success definition involves how completely the user should see, can this verify's assertion fail on a shortfall — or only on total absence?" If only on total absence, flag.
+
+---
+
+## 15. UX Contract Sync Coverage (conditional)
+
+**Applies only when the plan changes user-facing product behavior AND the product has `docs/contracts/ux-contract.md`. Skip for pure-internal / refactor plans, and for products with no ux-contract.**
+
+`ux-contract.md` is the whole-product user-acceptance spec. When a plan changes user-facing behavior, the user-facing slice of its L1/L2 must be projected onto the affected contract section. Example: a plan adds an export-CSV button and records its new L2 verify, but records no delta to the contract's toolbar section → the next UX test still accepts the old toolbar, and the contract no longer describes the product.
+
+When reviewing, flag:
+- The plan's record doesn't let a reviewer confirm `ux-contract.md` still describes the shipped product — behavior the contract **already describes** changed but has **no section delta** (or a delta that **mis-locates / under-describes** it), or a **net-new user-facing surface** got **no new section** added. (A change **below contract granularity**, or explicitly **outside the contract's declared scope**, legitimately needs no contract change — passes when the plan records that consciously and the reason actually holds.)
+- The plan records a contract delta but its L2 verify is point-functional only, **missing the contract's acceptance lens** — the question `create-ux-contract` §1 governs: *what about this delta can only the user accept, beyond "the function works"?* (recurring instances: 验收侧重 / pass-threshold / coverage tradeoff / domain-specific acceptance for product types listed in `~/.claude/references/domain-registry.md` — not an exhaustive set.)
+- The plan changes user-facing behavior but skips this principle **without the reviewer being able to confirm the skip is both intentional and that its stated reason actually holds** — e.g., the "无契约文件 → skip" note is missing, or it's present but a `ux-contract.md` actually exists / the change is in fact contract-covered.
+
+Ask yourself: "If this plan's user-facing change shipped, would `ux-contract.md` still describe the product accurately — e.g., is the affected section's change captured correctly, and is it L2-verified with the contract's acceptance lens, not just point-functional?"

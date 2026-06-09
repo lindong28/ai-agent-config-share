@@ -13,7 +13,7 @@
 | `/custom:review-skill <path> [optimize]` | 按 `skill-review-principles.md` 审查 skill/command；`optimize` 叠加体积优化维度 | 同上 |
 | `/custom:create-skill-from-workflow` | 把刚执行的工作流提取为可复用 skill / command | 内部自动调 `/custom:review-skill` 循环 |
 | `/custom:fix-skill-from-session [问题]` | 扫 session 中 skill / command 的错行为，定位 source-level 修复 | 内部自动调 `/custom:review-skill` 循环 |
-| `/custom:execute-plan <plan.md>` | Claude 作为 supervisor 启动 Codex 实施 plan.md：按 Stop Gate 收敛；plan 有 UX 入口则自动跑 `/custom:test-ux` 把 Critical/High issue 回灌 Codex 直到清 | 是（Stop Gate + UX 验收双循环） |
+| `/custom:execute-plan <plan.md>` | Claude 作为 supervisor 启动 Codex 实施 plan.md：按 Stop Gate 收敛；§4 UX gate 按 plan 声明分流——有「UX 契约影响」则 apply 契约 + 契约驱动验证（4a/4b），有 UX 入口则跑探索式 `/custom:test-ux`（4c），issue 回灌 Codex 直到清 | 是（Stop Gate + UX 验收双循环） |
 | `/custom:supervise [--backend codex\|gemini\|claude] [--autopilot] <task>` | Claude 作为 supervisor 用 codeagent-wrapper 跑**开放式任务（无 plan.md）**：spawn 前锁定 success criteria + backend，过程中代答简单决策 / 升级复杂决策（`--autopilot` 则全程不打扰），agent 早停则 resume 续命，结束把 agent 行为问题沉淀到 `docs/issues/general.md` | 是（按 success criteria + Stop Gate resume 收敛） |
 | `/custom:resolve-issues [--source <path>] <目标>` | 围绕一个目标批量解决项目 issue：按目标 triage（核实存在性 + consumer scope，回写陈旧项），用户批准后按依赖顺序委派 agent 逐个解决并闭环回灌新 issue | 是（逐 issue 委派 + 回灌循环） |
 | `/custom:test-ux <产品/PRD>` | 从自由文本 / PRD 做一次性 ad-hoc 模拟测试：模拟用户测试**已部署**的产品（web / desktop / mobile），输出 issue 清单 | 否（codeagent-wrapper 启动 codex session 执行，可 resume 续跑） |
@@ -24,6 +24,8 @@
 | `/custom:update-docs [type...]` | 按 `docs-organization-protocol.md` 更新项目文档（docs/ + 根目录 README/CHANGELOG）；不指定类型则全部，为每类并行 spawn `doc-updater` agent | 否（并行 subagent 单次执行） |
 
 注：所有 `create-*` / `fix-*` 命令**已经在内部 invoke 对应的 review 循环**. 但有时候内置的循环还是不够，需要额外手动多次触发review。
+
+注：`deep-discuss` skill（`/deep-discuss` 或自动触发）——任务 tradeoff 重、想先一起把方案想清再动手、但还不值得产出 plan.md 时用；产出共识而非 plan，谈拢后可衔接 `/custom:create-plan`。
 
 ---
 
@@ -47,7 +49,7 @@
    - 复杂场景: 手动多次触发 review，直到人工判断 Claude Code 基本查不出问题
 
 5. Claude Code 中执行：/custom:execute-plan plans/<date>-<name>/plan.md
-   - Claude supervise Codex 实施，按 Stop Gate 收敛；plan 有 UX 入口时自动跑 test-ux 闭环
+   - Claude supervise Codex 实施，按 Stop Gate 收敛；§4 UX gate：有「UX 契约影响」则 apply 契约 + 契约驱动验证，有 UX 入口则跑探索式 test-ux，issue 回灌直到清
 ```
 
 ### B. 不需要 spec 的快速 plan
@@ -62,7 +64,7 @@
    - 复杂场景: 手动多次触发 review，直到人工判断 Claude Code 基本查不出问题
 
 3. Claude Code 中执行：/custom:execute-plan plans/<date>-<name>/plan.md
-   - Claude supervise Codex 实施，按 Stop Gate 收敛
+   - Claude supervise Codex 实施，按 Stop Gate 收敛；§4 UX gate 按 plan 声明分流（契约影响 → apply + 契约验证；UX 入口 → 探索式 test-ux）
 ```
 
 ### C. 产品上线前 UX 测试（ad-hoc）

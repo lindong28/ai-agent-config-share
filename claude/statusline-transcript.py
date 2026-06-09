@@ -23,6 +23,8 @@ import time
 from pathlib import Path
 
 CACHE_DIR = Path.home() / ".claude" / "statusline-cache"
+CACHE_KEEP_N = 200        # max parse-result cache files to retain (self-eviction)
+CACHE_EVICT_BATCH = 500   # max files to unlink per run (bounds first-run drain cost)
 SKIP_TOOLS = frozenset(("TodoWrite", "TaskCreate", "TaskUpdate", "TaskGet", "TaskList"))
 _KNOWLEDGE_MARKERS = ("/skills/", "/agents/")
 
@@ -297,6 +299,20 @@ def main() -> None:
         CACHE_DIR.mkdir(parents=True, exist_ok=True)
         cache_payload = {**result, "_key": cache_key}
         cache_file.write_text(json.dumps(cache_payload, ensure_ascii=False))  # type: ignore[union-attr]
+    except Exception:
+        pass
+
+    # ── Evict stale cache (bounded, self-capping) ──
+    # cache_key embeds the transcript mtime+size, so every edit births a new hash
+    # file and orphans the prior one — unchecked this grew to 36k files. Keep only
+    # the most-recent CACHE_KEEP_N (never .speed.json, which statusline.sh owns);
+    # cap deletions/run so the first pass over a large backlog can't stall a render.
+    try:
+        entries = [p for p in CACHE_DIR.glob("*.json") if p.name != ".speed.json"]
+        if len(entries) > CACHE_KEEP_N:
+            entries.sort(key=lambda p: p.stat().st_mtime)
+            for p in entries[: min(len(entries) - CACHE_KEEP_N, CACHE_EVICT_BATCH)]:
+                p.unlink(missing_ok=True)
     except Exception:
         pass
 

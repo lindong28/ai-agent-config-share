@@ -125,9 +125,9 @@ Web 产品默认要覆盖：
 
 ```
 Bash({
-  command: "~/.claude/bin/codeagent-wrapper --progress --backend codex - <WORKDIR> <<'EOF'\n<test-prompt>\nEOF",
+  command: "CODEX_TIMEOUT=21600000 ~/.claude/bin/codeagent-wrapper --progress --backend codex - <WORKDIR> <<'EOF'\n<test-prompt>\nEOF",
   run_in_background: true,
-  timeout: 7200000,
+  timeout: 21900000,
 })
 ```
 

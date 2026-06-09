@@ -59,6 +59,7 @@ When reviewing:
 - Flag enumerated trigger / scenario / criterion lists that give concrete bullets but never state the underlying lens (the shared judgment criterion the bullets exemplify). The model can extrapolate to listed cases but not to neighbors. Constructive recommendation: extract the lens, then keep the minimum anchors needed to span the lens's distinct cases.
 - Flag procedural detail (exact command, exact file path) where a principle would generalize further.
 - Flag NEVER-class absolutism about the skill's own structure or evolution. Skills are artifacts that evolve; those statements freeze unverified assumptions and cannot survive their own first audit.
+- Flag cross-references that are provenance — even a non-duplicating pointer (to a downstream gate, consumer, or source) is author-serving if its removal wouldn't change executor behavior; sweep references, not just prose.
 
 Positive form: one sentence stating the rule, one sentence explaining why it matters, then stop. If a rule is inescapably about HOW, lead with the WHY so the model can still extrapolate.
 

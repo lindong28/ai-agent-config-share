@@ -335,6 +335,34 @@ if [ -d "$CREATE_COMMIT_SKILL" ]; then
     link_one "$CREATE_COMMIT_SKILL" "$HOME/.claude/skills/create-commit"
 fi
 
+# --- deep-discuss skill (Claude-only; tradeoff discussion, no plan.md) ---
+
+DEEP_DISCUSS_SKILL="$SCRIPT_DIR/claude/skills/deep-discuss"
+
+if [ -d "$DEEP_DISCUSS_SKILL" ]; then
+    echo
+    echo "Installing deep-discuss skill:"
+    link_one "$DEEP_DISCUSS_SKILL" "$HOME/.claude/skills/deep-discuss"
+fi
+
+# --- Claude hooks (symlinked per-file so we never clobber an existing ~/.claude/hooks) ---
+# Only the hook scripts are linked here. Activation requires wiring two entries into
+# ~/.claude/settings.json (PreToolUse:ask-recommend-gate + Stop:desktop-notify) plus
+# ECC_DISABLED_HOOKS="stop:desktop-notify" — the reference shape lives in claude/settings.json
+# and the README 安装 prompt walks Claude Code through the merge.
+
+HOOKS_SRC="$SCRIPT_DIR/claude/hooks"
+
+if [ -d "$HOOKS_SRC" ]; then
+    echo
+    echo "Installing Claude hook scripts (wire into settings.json via the README 安装 prompt):"
+    mkdir -p "$HOME/.claude/hooks/lib"
+    for rel in ask-recommend-gate.js desktop-notify.js lib/llm-judge.js lib/utils.js; do
+        src="$HOOKS_SRC/$rel"
+        [ -f "$src" ] && link_one "$src" "$HOME/.claude/hooks/$rel"
+    done
+fi
+
 # --- codeagent-wrapper binary (arm64 macOS; required by /custom:execute-plan) ---
 
 CODEAGENT_WRAPPER="$SCRIPT_DIR/claude/bin/codeagent-wrapper"

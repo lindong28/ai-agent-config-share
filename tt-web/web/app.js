@@ -4,6 +4,42 @@
 
   const palette = ["#0f766e", "#2563eb", "#b7791f", "#be4458", "#4d7c0f", "#7c3aed", "#0e7490", "#a16207"];
 
+  // Absolute timestamps are rendered in the timezone the server (this machine)
+  // currently resolves from its OS/TZ setting — never a hardcoded zone, and never
+  // the browser's own zone (which can be a stale value cached at browser startup).
+  // The server reads the live setting per request, so the display can't drift from
+  // the actual system configuration. Until the server's zone is fetched, fall back
+  // to the browser's local zone.
+  let serverTimeZone = null;
+
+  let _timezonePromise = null;
+  function ensureTimezone() {
+    if (!_timezonePromise) {
+      _timezonePromise = fetch(new URL("/api/timezone", window.location.origin))
+        .then((response) => (response.ok ? response.json() : null))
+        .then((json) => {
+          if (json && typeof json.timezone === "string") {
+            serverTimeZone = json.timezone;
+          }
+        })
+        .catch(() => {});
+    }
+    return _timezonePromise;
+  }
+
+  function fmtAbs(date) {
+    const opts = serverTimeZone ? { timeZone: serverTimeZone } : undefined;
+    try {
+      const main = date.toLocaleString(undefined, opts);
+      const part = new Intl.DateTimeFormat("en-US", Object.assign({ timeZoneName: "shortOffset" }, opts))
+        .formatToParts(date)
+        .find((p) => p.type === "timeZoneName");
+      return part ? main + " " + part.value : main;
+    } catch (e) {
+      return date.toLocaleString();
+    }
+  }
+
   function qs(selector, root) {
     return (root || document).querySelector(selector);
   }
@@ -45,6 +81,7 @@
   }
 
   async function api(path, query) {
+    const tzReady = ensureTimezone();
     const url = new URL(path, window.location.origin);
     Object.entries(query || {}).forEach(([key, value]) => {
       if (Array.isArray(value)) {
@@ -57,7 +94,9 @@
     if (!response.ok) {
       throw new Error(`${response.status} ${response.statusText}`);
     }
-    return response.json();
+    const json = await response.json();
+    await tzReady;
+    return json;
   }
 
   function bindShell(load) {
@@ -219,9 +258,9 @@
     }
     const resetAt = new Date(epoch * 1000);
     if (resetAt.getTime() < Date.now()) {
-      return "reset passed " + resetAt.toLocaleString();
+      return "reset passed " + fmtAbs(resetAt);
     }
-    return "resets " + resetAt.toLocaleString();
+    return "resets " + fmtAbs(resetAt);
   }
 
   function renderProviderQuota(provider, block) {
@@ -501,7 +540,7 @@
 
   function formatDate(iso) {
     const date = new Date(iso);
-    return Number.isNaN(date.getTime()) ? iso : date.toLocaleString();
+    return Number.isNaN(date.getTime()) ? iso : fmtAbs(date);
   }
 
   async function initOverview() {
@@ -541,7 +580,7 @@
         <td><span class="pill">${escapeHtml(row.agent_id)}</span></td>
         <td>${escapeHtml(shortText(row.project, 54))}</td>
         <td>${escapeHtml(row.model)}${row.estimated ? ' <span class="muted">推算</span>' : ""}</td>
-        <td>${new Date(row.started_at).toLocaleString()}</td>
+        <td>${formatDate(row.started_at)}</td>
         <td class="numeric">${moneyPrecise(row.cost_usd)}</td>
         <td class="numeric">${integer(row.tokens)}</td>
         <td class="numeric">${integer(row.messages)}</td>
@@ -570,7 +609,7 @@
     const items = entries
       .map(
         (entry) => `<li>
-          <span>${new Date(entry.timestamp).toLocaleString()}</span>
+          <span>${formatDate(entry.timestamp)}</span>
           <span>${escapeHtml(entry.model)}</span>
           <span>${integer(entry.input_tokens)} in</span>
           <span>${integer(entry.output_tokens)} out</span>

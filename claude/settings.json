@@ -15,7 +15,7 @@
     "ECC_ENABLE_INSAITS": "0",
     "ECC_QUALITY_GATE_FIX": "true",
     "ECC_QUALITY_GATE_STRICT": "true",
-    "ECC_DISABLED_HOOKS": "",
+    "ECC_DISABLED_HOOKS": "stop:desktop-notify",
     "ECC_HOOK_PROFILE": "standard",
     "COGFS_SELF": "agent_lindong",
     "COGFS_NAMESPACE": "default"
@@ -34,6 +34,7 @@
       "Task",
       "WebSearch",
       "WebFetch",
+      "Monitor",
       "mcp__weixin-reader__*",
       "mcp__web-search-prime__*",
       "mcp__web-reader__*",
@@ -60,6 +61,36 @@
       "Bash(*codeagent-wrapper*)",
       "Bash(~/.claude/bin/codeagent-wrapper --backend gemini*)",
       "Bash(~/.claude/bin/codeagent-wrapper --backend codex*)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "AskUserQuestion",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$HOME/.claude/hooks/ask-recommend-gate.js\"",
+            "timeout": 28
+          }
+        ],
+        "description": "Gate AskUserQuestion: block (exit 2) when options lack a clearly-marked recommendation + reason; agent must re-issue with both. Tiered LLM judge (GLM → Anthropic API → claude -p subscription; see hooks/lib/llm-judge.js) reads tool_input.questions directly; fail-open on no-backend/error/timeout. Enforces CLAUDE.md 'Surface Choices (Real Ones), Recommend One'.",
+        "id": "pre:ask-user-question:recommend-gate"
+      }
+    ],
+    "Stop": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$HOME/.claude/hooks/desktop-notify.js\"",
+            "timeout": 6
+          }
+        ],
+        "description": "Desktop notification when Claude finishes responding: Ghostty OSC9 (clicking focuses the originating tab) with terminal-notifier as fallback elsewhere. Replaces the ECC plugin's stop:desktop-notify (disabled via ECC_DISABLED_HOOKS) so the logic lives in version control, not a third-party plugin cache.",
+        "id": "stop:desktop-notify-local"
+      }
     ]
   },
   "model": "claude-opus-4-6[1m]",

@@ -15,7 +15,8 @@ STATE_DIR="$ROOT_DIR/state"
 PID_FILE="$STATE_DIR/pid"
 PORT_FILE="$STATE_DIR/port"
 LOG_FILE="$STATE_DIR/server.log"
-HOST="127.0.0.1"
+BIND_HOST="${TT_WEB_BIND:-0.0.0.0}"
+CONNECT_HOST="127.0.0.1"
 BASE_PORT="${TT_WEB_PORT:-39001}"
 
 usage() {
@@ -32,7 +33,7 @@ is_running() {
 
 find_port() {
   local port="$BASE_PORT"
-  while nc -z "$HOST" "$port" >/dev/null 2>&1; do
+  while nc -z "$CONNECT_HOST" "$port" >/dev/null 2>&1; do
     port=$((port + 1))
   done
   echo "$port"
@@ -43,7 +44,7 @@ start() {
   if is_running; then
     local port
     port="$(cat "$PORT_FILE" 2>/dev/null || echo "$BASE_PORT")"
-    echo "tt-web already running: http://$HOST:$port (pid $(cat "$PID_FILE"))"
+    echo "tt-web already running: http://$CONNECT_HOST:$port (pid $(cat "$PID_FILE"))"
     return 0
   fi
 
@@ -51,7 +52,7 @@ start() {
   port="$(find_port)"
   : > "$LOG_FILE"
   local pid
-  pid="$(python3 - "$ROOT_DIR/server.py" "$HOST" "$port" "$LOG_FILE" <<'PY'
+  pid="$(python3 - "$ROOT_DIR/server.py" "$BIND_HOST" "$port" "$LOG_FILE" <<'PY'
 import os
 import sys
 
@@ -73,8 +74,8 @@ PY
   echo "$port" > "$PORT_FILE"
 
   for _ in 1 2 3 4 5 6 7 8 9 10; do
-    if curl -fsS "http://$HOST:$port/api/health" >/dev/null 2>&1; then
-      echo "tt-web started: http://$HOST:$port (pid $pid)"
+    if curl -fsS "http://$CONNECT_HOST:$port/api/health" >/dev/null 2>&1; then
+      echo "tt-web started: http://$CONNECT_HOST:$port (pid $pid)"
       return 0
     fi
     sleep 0.2
@@ -116,7 +117,7 @@ status() {
   pid="$(cat "$PID_FILE")"
   port="$(cat "$PORT_FILE" 2>/dev/null || echo "$BASE_PORT")"
   uptime="$(ps -o etime= -p "$pid" 2>/dev/null | awk '{$1=$1; print}')"
-  echo "tt-web running: pid=$pid port=$port uptime=${uptime:-unknown} url=http://$HOST:$port"
+  echo "tt-web running: pid=$pid port=$port uptime=${uptime:-unknown} url=http://$CONNECT_HOST:$port"
 }
 
 open_dashboard() {
@@ -125,7 +126,17 @@ open_dashboard() {
   fi
   local port
   port="$(cat "$PORT_FILE")"
-  open "http://$HOST:$port"
+
+  if [ -n "${SSH_CONNECTION:-}" ]; then
+    local ts_host
+    ts_host="$(tailscale status --json 2>/dev/null | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("Self",{}).get("DNSName",""))' 2>/dev/null)"
+    ts_host="${ts_host%%.*}"  # extract short hostname (e.g. "macmini" from "macmini.tail4399e6.ts.net.")
+    : "${ts_host:=$(hostname)}"
+    local url="http://$ts_host:$port"
+    printf '\e]8;;%s\e\\%s\e]8;;\e\\\n' "$url" "$url"
+  else
+    open "http://$CONNECT_HOST:$port"
+  fi
 }
 
 case "${1:-}" in

@@ -12,8 +12,8 @@
 
 遵循 `~/.claude/references/docs-organization-protocol.md` 维护项目文档。
 
-- **plan 完成后**：按协议 §5 同步机制将项目级信息同步到 docs/。
-- **自由 session**（不走 execute-plan / execute-ux-contract，它们已在 commit 步自动同步）：改动产生**用户可感知变化**时，落 commit 前先同步 [User] 档（README / CHANGELOG），ux-contract 演化走协议 §4.6 issue 路径；开发者档（architecture / adr / experiences）留给手动 `/custom:update-docs`。
+- **plan 完成后**：按协议 §5 同步机制将项目级信息同步到 docs/。其中**用户可感知变更的 ux-contract 同步走协议 §4.6 主路径**——由 create-plan 条件化对齐、execute-plan 应用 + 测试（§4 的 4a/4b）。
+- **自由 session**（不走 execute-plan / execute-ux-contract，它们已在 commit 步自动同步）：改动产生**用户可感知变化**时，落 commit 前先同步 [User] 档（README / CHANGELOG），ux-contract 演化走协议 §4.6 fallback（issue 路径）；开发者档（architecture / adr / experiences）留给手动 `/custom:update-docs`。
 
 ## Surface Choices (Real Ones), Recommend One (BINDING)
 - For every set of options you give the user, surface them via `AskUserQuestion` (never inline prose), marking which one you recommend and why. Applies to every genuine choice the user owns (artifact shape, tradeoff, aesthetic), not work you could do yourself — regardless of stakes. 你自己能做、却包装成"你来做 X"/等用户执行的，是转嫁不是 choice → Plan Execution Principles §0 Stop Gate。

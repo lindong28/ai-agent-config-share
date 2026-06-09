@@ -31,7 +31,12 @@ git clone git@github.com:Picnic-PGC/dongs-agent-config.git
    - codex/AGENTS.md   → ~/.codex/AGENTS.md
    - codex/config.toml → ~/.codex/config.toml
 
-3. install.sh 输出里如有 [WARN] / [CONFLICT]（典型：settings.json 已有 statusLine 但指向别处、codex CLI 未装、GITHUB_PAT 未设置），整理出来问我怎么处理。
+3. 接线 hooks 到 settings.json——share 不整体安装 settings.json，hook 脚本已由 install.sh symlink 到 ~/.claude/hooks/，但还需把两条接线并入我的 ~/.claude/settings.json：
+   - 以仓库 claude/settings.json 的 `hooks` 段为参考，把这两条按 `id` 幂等并入 ~/.claude/settings.json（已有同 id 则跳过；缺 `hooks` / `PreToolUse` / `Stop` 数组则创建）：`pre:ask-user-question:recommend-gate`（PreToolUse / AskUserQuestion）、`stop:desktop-notify-local`（Stop / `*`）。
+   - 把 env 里 `ECC_DISABLED_HOOKS` 设为 `stop:desktop-notify`（让本地 desktop-notify 取代 ECC 插件那个）。
+   - 改 settings.json 前先给我看将写入的 diff。可选：desktop-notify 在非 Ghostty 终端的 fallback 需要 `terminal-notifier`（macOS `brew install terminal-notifier`），没有也不影响 Ghostty OSC9。
+
+4. install.sh 输出里如有 [WARN] / [CONFLICT]（典型：settings.json 已有 statusLine 但指向别处、codex CLI 未装、GITHUB_PAT 未设置），整理出来问我怎么处理。
 ```
 
 ## 验证安装
@@ -78,4 +83,4 @@ Dashboard 上 "Claude 5h / 7d quota" 两张卡片的数据来自 `~/.claude/tt-s
 
 ---
 
-*Last synced from upstream: 2026-06-05 10:25 GMT+8*
+*Last synced from upstream: 2026-06-09 16:37 GMT+8*

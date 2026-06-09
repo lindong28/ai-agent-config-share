@@ -79,9 +79,9 @@ origin: 2026-05-21
 
 ```
 Bash({
-  command: "~/.claude/bin/codeagent-wrapper --progress --backend <BACKEND> - <WORKDIR> <<'EOF'\n<spawn-prompt>\nEOF",
+  command: "CODEX_TIMEOUT=21600000 ~/.claude/bin/codeagent-wrapper --progress --backend <BACKEND> - <WORKDIR> <<'EOF'\n<spawn-prompt>\nEOF",
   run_in_background: true,
-  timeout: 7200000,
+  timeout: 21900000,
 })
 ```
 
@@ -139,9 +139,9 @@ resume 调用形如（同 spawn 的 flag 组 + 后台 + timeout，仅前缀改�
 
 ```
 Bash({
-  command: "~/.claude/bin/codeagent-wrapper --progress --backend <BACKEND> resume <SESSION_ID> - <WORKDIR> <<'EOF'\n<resume-prompt>\nEOF",
+  command: "CODEX_TIMEOUT=21600000 ~/.claude/bin/codeagent-wrapper --progress --backend <BACKEND> resume <SESSION_ID> - <WORKDIR> <<'EOF'\n<resume-prompt>\nEOF",
   run_in_background: true,
-  timeout: 7200000,
+  timeout: 21900000,
 })
 ```
 

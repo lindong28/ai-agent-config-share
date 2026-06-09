@@ -263,7 +263,10 @@ Lens：当你需要理解"用户能做什么"或"测试应该覆盖什么"时。
 
 ux-contract.md 的写入 lens：当你的变更改变了用户能感知到的产品行为时——新功能、行为变化、功能移除。纯实现重构 / 内部调整不触发。
 
-**执行路径**：ux-contract.md 基于真实端到端产品观察建立，不依赖读代码或文档推断——agent 不直接写入，而是将演化候选写入 `docs/issues/ux-contract-issues.md`（见 §4.8），由用户通过专用 command 处理（`/custom:create-ux-contract`）。
+**执行路径**：ux-contract.md 基于真实端到端产品观察建立，不依赖读代码或文档推断，且**绝不由 agent 静默改**——永远经显式用户对齐。按变更是否经过一个【含显式用户对齐阶段 + 持续自主执行阶段】的工作流分两条路径：
+
+- **主路径（经对齐 + 自主执行的工作流）**：契约更新在【用户对齐阶段】**条件化对齐**、在【自主执行阶段】**应用 + 测试**；契约最终文本随实现一并产出。
+- **Fallback（其余变更 / 自由 session）**：agent 不直接写入，而是将演化候选写入 `docs/issues/ux-contract-issues.md`（见 §4.8），由用户通过专用 command（`/custom:create-ux-contract`）处理。
 
 ux-test-patterns.md 的写入 lens：当你在测试过程中发现一个"值得以后也留意"的模式——某个 feature 容易出的边界情况、某个 journey 中常见的陷阱、某类变更容易影响的区域。
 
@@ -418,7 +421,7 @@ task 产物服务于一个具体任务的执行过程。任务完成后，其中
 | journal.md `[decision]` | adr/ | 写入判断见 §4.4 写入 lens |
 | journal.md `[lesson]` / `[fact]` | experiences/ | 写入判断见 §4.7 写入 lens；写入与 topic 匹配的文件 |
 | state.md Open Issues（任务结束时仍 open） | issues/ | 写入判断见 §4.8 写入 lens；写入与 domain 匹配的文件 |
-| 任务完成 + 产出包含用户可感知变化 | contracts/ + CHANGELOG.md（根目录） | 用户的产品体验是否发生了变化？ux-contract.md 走 issue 间接路径（见 §4.6），ux-test-patterns.md 可直接写入 |
+| 任务完成 + 产出包含用户可感知变化 | contracts/ + CHANGELOG.md（根目录） | 用户的产品体验是否发生了变化？ux-contract.md 走 §4.6 执行路径（主路径：随实现 apply；否则 → issue 间接路径），ux-test-patterns.md 可直接写入 |
 
 ### 提升不是复制粘贴
 

@@ -14,7 +14,7 @@ description: >-
 
 ## 流程
 
-1. **了解当前状态**：`git status --short`、`git diff --stat`、`git log --oneline -5`。读核心 diff 理解改动性质。
+1. **了解当前状态**：`git branch --show-current`、`git status --short`、`git diff --stat`、`git log --oneline -5`。读核心 diff 理解改动性质。
 
 2. **决定 staging 范围**：
 
@@ -45,7 +45,7 @@ description: >-
 | 多改动 | 自由文本总结 | 每个改动一条 `<type>(scope): <desc>` bullet |
 
 - Subject ≤72 chars；description 用英文
-- Types: `feat` `fix` `refactor` `docs` `test` `chore` `perf` `ci` `style` `build`
+- Types: `feat` `fix` `refactor` `docs` `test` `chore` `perf` `ci` `style` `build` `revert`
 - Body 仅在 subject + diff 不足以让 reviewer 推出非显然设计决策时加
 - Per-bullet derivability test：每条候选 bullet 自问「reviewer 能从 subject + diff 推出来吗」，能 → drop
 - 不附 Co-Authored-By

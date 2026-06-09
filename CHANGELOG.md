@@ -2,6 +2,18 @@
 
 > Append-only（最新在前）。仅记录用户可感知的变更。
 
+## 2026-06-09
+
+- 新增：`deep-discuss` skill — 在动手前一起把 tradeoff 想清，但不产出 plan.md；遵循 `references/deep-discuss-style.md`，install.sh 自动 symlink
+- 新增：Claude hooks 子系统（首次纳入 share）——`ask-recommend-gate`（PreToolUse 门控 `AskUserQuestion`：选项缺明确推荐 + 理由时 block，分层 LLM 判官 GLM → Anthropic API → `claude -p` 订阅，fail-open）+ `desktop-notify`（Stop 时桌面通知：Ghostty OSC9 点击聚焦原 tab、其余终端 terminal-notifier fallback）。install.sh 按文件 symlink hook 脚本（不覆盖既有 `~/.claude/hooks`）；settings.json 接线（两条 hook + `ECC_DISABLED_HOOKS`）走 README「安装」prompt 手动合并
+- 变更：UX 契约同步集成进 `create-plan` → `execute-plan` 流水线 —— create-plan 新增「UX 契约影响」facet（把用户可感知变更投影到 `ux-contract.md` 对应 section，进 plan 的 user-facing surface）；execute-plan §4 UX gate 重构为 4a 应用契约 / 4b 契约驱动验证 / 4c 探索式 test-ux；`docs-organization-protocol.md` §4.6 拆为主路径（契约随实现 apply + 测试）/ fallback（issue 间接路径）
+- 变更：tt-web 时间戳改按机器系统时区渲染（带 UTC 偏移标签，服务端 `/api/timezone` 每次实时解析 `/etc/localtime`，不随浏览器陈旧时区漂移）；支持 Tailnet 远程访问（SSH 下 `tt-web open` 输出可点击的 tailnet URL）；新增 `tt-web/NETWORK-REMEDIATION.md` 网络风险修复 runbook（IPv6 泄漏 / CN DNS / 时区不一致），install 末尾仅在 `ip-check` verdict=high 时提示、不阻断安装
+- 变更：`create-commit` skill 支持 `revert` type，流程开头加 `git branch --show-current`
+- 变更：supervisor 三命令（`execute-plan` / `supervise` / `execute-ux-contract`）的 Codex spawn 加 `CODEX_TIMEOUT=21600000` 前缀、后台 timeout 提到 21900000（容纳更长任务）
+- 变更：`bin/codeagent-wrapper` 二进制更新——新增 watchdog（盯静默挂起的 agent）、claude backend 的 resume、browser opt-out 开关、并 bump spawn timeout，修复若干 wrapper 执行问题（skip-permissions exec 等）；影响上述三个 supervisor 命令的可靠性
+- 变更：`settings.json` 允许 `Monitor` 工具
+- 变更：`references/plan-review-principles.md` 新增 Principle 15「UX Contract Sync Coverage」；`references/skill-review-principles.md` 新增「provenance 交叉引用」检测项
+
 ## 2026-06-04
 
 - 新增：`references/docs-organization-protocol.md` + `references/docs-format-templates.md` — 项目文档组织协议（BINDING），定义 7 类文档、三层消费者（User / Developer / Agent）、task 产物 → 项目文档的提升机制与各文档统一格式模板；由 `claude/CLAUDE.md`「Docs Organization Protocol」绑定加载
