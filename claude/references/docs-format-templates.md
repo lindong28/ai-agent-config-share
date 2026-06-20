@@ -146,6 +146,8 @@
 
 **Status**：`open` / `resolved` / `wontfix`。
 
+**归档**：判定 `resolved` / `wontfix` 后，按 `docs-organization-protocol.md` §4.8 把整条移入 `docs/issues/archive/closed.md`（同一条目格式，不改写）；open 条目留在 domain 文件。
+
 **Type 枚举**（各 domain 按需扩展）：
 
 | 文件 | 参考枚举 |
@@ -164,3 +166,45 @@
 | 其他 | 有助于验证和解决 issue 的上下文信息 |
 
 **字段使用 lens**：让下一个 reviewer（人或 LLM）只看这条 entry 就能回答核心问题。缺哪个字段就补哪个；上面字段不够用时自由追加字段。无实质答案的字段应省略，不做填空式冗充。
+
+---
+
+## 4.11 operations/
+
+operations/ 是目录而非单一格式——文件类型多样（services / monitoring / incidents / runbooks）。各文件按内容选合适格式。下面是最常见的 `services.md` 模板。
+
+### services.md
+
+每行让读者一眼回答一个服务的：是什么 / 谁守护 / 现状 / 怎么做生命周期操作 / 细节在哪。下表是这组问题的常见列化，字段按项目增减。
+
+```markdown
+# 服务清单
+
+> Mutable snapshot. 项目长期运行的服务 + Supervisor + Instructions 位置。
+
+## 服务
+
+| 服务 | Supervisor | 当前状态 | 运维入口 | Instructions |
+|---|---|---|---|---|
+| <name> | <launchd / cron / docker / systemd / manual> | <已加载 / 待 load / 已停用> | <repo own：install/uninstall/status 子集；vendored：原生接口> | <文件路径 + 章节> |
+
+## 隐含依赖
+
+按需列出"不在 repo 内但影响服务运行"的依赖：
+
+| 依赖 | 必须的设置 | 验证方式 |
+|---|---|---|
+| <依赖，如 Docker daemon> | <必须的设置，如 "Start at login"> | <验证，如 `docker info`> |
+
+## 验证
+
+一次性把所有服务跑通的命令清单——新机器部署或大改动后跑一遍。
+
+## 卸载 / 切换
+
+服务从自启切回手动、或换 supervisor 时的步骤。
+```
+
+### 其它 operations/ 文件
+
+`monitoring.md` / `incidents.md` / `runbooks/<scenario>.md` 等没有强制模板——按内容写成 Mutable snapshot 或时间序列条目。incidents.md 内部可参考 experiences/ 的条目格式（按日期 append-only）。

@@ -63,7 +63,7 @@ origin: 2026-05-31
 **对齐**：每个候选 issue 是否纳入本轮、是否需要先纠正。
 
 **lens**：对每个 issue 回答（不限于此，无实质答案的问题略过）——
-- **还存在吗**：对照该 issue 主题的真实来源核实问题是否仍在——代码 bug 看代码 / 状态，文档·配置·流程 issue 看对应文档或仓库现状，UX·文案 issue 看实际产品；有关联 plan 时也看其 `state.md` / commit。**已修却标 open、或描述与现状不符的，先回写纠正**（标 `resolved` / 改描述）。陈旧的 issue 文件会让你把已修的当 blocker、把已变的判据当现状——以主题真实来源为准，不以 issue 文件文本为准。
+- **还存在吗**：对照该 issue 主题的真实来源核实问题是否仍在——代码 bug 看代码 / 状态，文档·配置·流程 issue 看对应文档或仓库现状，UX·文案 issue 看实际产品；有关联 plan 时也看其 `state.md` / commit。**已修却标 open、或描述与现状不符的，先回写纠正**（已修 → 标 `resolved` 并按 `docs-organization-protocol.md` §4.8 归档；仅描述不符 → 就地改描述、留 open）。陈旧的 issue 文件会让你把已修的当 blocker、把已变的判据当现状——以主题真实来源为准，不以 issue 文件文本为准。
 - **描述准吗**：issue 描述的现象 / 定位是否与该主题真实来源（代码 / 文档 / 实际产品）的现状一致
 - **consumer 是谁**：解决后受益的是 user / developer / agent——决定它是否落在 goal 的 scope
 - **goal 需要吗**：纳入本轮 ⟺ consumer 类 ∈ goal 关心的类 且 问题仍在
@@ -103,7 +103,7 @@ origin: 2026-05-31
 **Doc 同步（commit 前先做）**：本节 commit 切片内（simple issue 产物 / issue 文件回写 / 未走 execute-plan 的改动）有**用户可感知的变化**时，按 `~/.claude/references/docs-organization-protocol.md` §5 spawn `doc-updater`（`interactive=false`）同步。complex issue 的代码 + doc 同步已由 execute-plan §5 commit，**不重复触发**（CHANGELOG append-only，重复 spawn 致重复 entry）。
 
 **Scope**：
-- 进 commit：本轮 issue 修复的代码 + A2 / 阶段 B 的 issue 文件回写（陈旧项 → resolved、新 issue 归档）+ doc 同步产出
+- 进 commit：本轮 issue 修复的代码 + A2 / 阶段 B 的 issue 文件回写（陈旧项 → resolved：从 domain 文件删条 + 写入 `archive/closed.md` 两侧改动；新 issue 写入对应 domain 文件）+ doc 同步产出
 - 不进 commit：repo 中**与本轮无关的 in-flight 改动**——resolve-issues 常对着有前序 session 未提交工作的 repo 跑，勿卷入；runtime / build artifact；过程性 log
 - 某文件本轮回写**叠在前序未提交内容之上**（无法按文件拆开）→ 整体留给用户连同其历史工作处理，本节不单独提交，阶段 D 注明
 

@@ -253,5 +253,5 @@ Type 定义：
 - **语言契约**：与 wrapped agent / 工具交互 English；与用户交互中文。
 - **Real-time log 不替代 general.md**：log 是 supervisor 自留的过程证据（防 memory compaction），观察问题以 entries 形式落地是 §5 的事。两个不同 consumer——log consumer 是 supervisor 自己，issues file consumer 是未来 agent。
 - **commit 经 create-commit、只 stage 自己的改动**：supervisor 提交自己的改动（如 §5 的 general.md 落地）时，按 `~/.claude/skills/create-commit/SKILL.md` 执行，且仅 stage 本次要提交的文件、不带入 wrapped agent 的 task 改动（其去向按 §6）；message 沿用 skill 格式不自行手写。与 execute-plan / execute-ux-contract 一致。
-- **不接管 task 范围内的代码改动**：Claude 修 wrapper / 适配层允许；替 wrapped agent 写 task 范围内的代码不允许——绕过 supervisor 定位。
+- **不接管 task 范围内的代码改动**：Claude 修 wrapper / 适配层允许；替 wrapped agent 写 task 范围内的代码不允许——绕过 supervisor 定位。**限定**：AIGC / 语义质量任务下，prompt / rubric / 评分协议等品味工件不算"代码"、设计权归 supervisor——详见 `~/.claude/commands/custom/execute-plan.md` §4.5「AIGC / 语义质量任务的监督升格」。
 - **Supervisor 的 handoff 也是 stop**：supervisor 把残余工作推给用户时，自身也按 `~/.claude/references/plan-execution-principles.md` Stop Gate 自检——agent 没试完可用路径的情况下，supervisor 不能接受 stop 并转嫁给用户。

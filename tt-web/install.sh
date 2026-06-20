@@ -6,6 +6,67 @@ BIN_DIR="$HOME/.local/bin"
 VENDOR_DIR="$ROOT_DIR/web/vendor"
 CHART_FILE="$VENDOR_DIR/chart.umd.min.js"
 CHART_URL="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"
+SERVICE="${1:-web}"
+ROLLUP_LABEL="com.ttweb.rollup"
+ROLLUP_PLIST="$HOME/Library/LaunchAgents/$ROLLUP_LABEL.plist"
+ROLLUP_LOG="$ROOT_DIR/state/rollup-daemon.log"
+ROLLUP_INTERVAL_SECONDS="${TT_WEB_ROLLUP_INTERVAL_SECONDS:-3600}"
+
+usage() {
+  echo "usage: ./install.sh [web|rollup-daemon]" >&2
+}
+
+install_rollup_daemon() {
+  mkdir -p "$ROOT_DIR/state" "$HOME/Library/LaunchAgents"
+  chmod +x "$ROOT_DIR/tt-web"
+  ROLLUP_LABEL="$ROLLUP_LABEL" \
+  ROLLUP_PLIST="$ROLLUP_PLIST" \
+  ROLLUP_LOG="$ROLLUP_LOG" \
+  ROLLUP_INTERVAL_SECONDS="$ROLLUP_INTERVAL_SECONDS" \
+  ROOT_DIR="$ROOT_DIR" \
+  python3 - <<'PY'
+import os
+import plistlib
+from pathlib import Path
+
+root = Path(os.environ["ROOT_DIR"])
+plist = {
+    "Label": os.environ["ROLLUP_LABEL"],
+    "ProgramArguments": [str(root / "tt-web"), "rollup"],
+    "RunAtLoad": True,
+    "StartInterval": int(os.environ["ROLLUP_INTERVAL_SECONDS"]),
+    "WorkingDirectory": str(root),
+    "StandardOutPath": os.environ["ROLLUP_LOG"],
+    "StandardErrorPath": os.environ["ROLLUP_LOG"],
+    "EnvironmentVariables": {"PYTHONPATH": str(root)},
+}
+Path(os.environ["ROLLUP_PLIST"]).write_bytes(plistlib.dumps(plist, sort_keys=False))
+PY
+  launchctl bootout "gui/$(id -u)/$ROLLUP_LABEL" >/dev/null 2>&1 || true
+  launchctl bootstrap "gui/$(id -u)" "$ROLLUP_PLIST"
+  echo "tt-web rollup-daemon installed: $ROLLUP_LABEL"
+  echo "  interval: ${ROLLUP_INTERVAL_SECONDS}s"
+  echo "  plist: $ROLLUP_PLIST"
+  echo "  log: $ROLLUP_LOG"
+  echo "  verify: ./tt-web/status.sh rollup-daemon"
+}
+
+if [ "$#" -gt 1 ]; then
+  usage
+  exit 2
+fi
+
+case "$SERVICE" in
+  web) ;;
+  rollup-daemon)
+    install_rollup_daemon
+    exit 0
+    ;;
+  *)
+    usage
+    exit 2
+    ;;
+esac
 
 mkdir -p "$ROOT_DIR/state" "$VENDOR_DIR" "$BIN_DIR"
 chmod +x "$ROOT_DIR/tt-web"

@@ -20,7 +20,7 @@ CONNECT_HOST="127.0.0.1"
 BASE_PORT="${TT_WEB_PORT:-39001}"
 
 usage() {
-  echo "usage: tt-web {start|stop|restart|status|open}"
+  echo "usage: tt-web {start|stop|restart|status|open|rollup}"
 }
 
 is_running() {
@@ -139,6 +139,20 @@ open_dashboard() {
   fi
 }
 
+run_rollup() {
+  mkdir -p "$STATE_DIR"
+  PYTHONPATH="$ROOT_DIR${PYTHONPATH:+:$PYTHONPATH}" python3 - <<'PY'
+import rollup
+
+result = rollup.run()
+print(
+    "tt-web rollup updated: {buckets_written} buckets over {days_recomputed} days; last_rollup_ts={last_rollup_ts}".format(
+        **result
+    )
+)
+PY
+}
+
 case "${1:-}" in
   start)
     start
@@ -155,6 +169,9 @@ case "${1:-}" in
     ;;
   open)
     open_dashboard
+    ;;
+  rollup)
+    run_rollup
     ;;
   *)
     usage

@@ -26,6 +26,9 @@
             <option value="7d">7d</option>
             <option value="30d" selected>30d</option>
             <option value="90d">90d</option>
+            <option value="6m">6m</option>
+            <option value="1y">1y</option>
+            <option value="2y">2y</option>
             <option value="all">All</option>
           </select>
           <select id="sort" aria-label="Sort">
@@ -43,7 +46,7 @@
             <h2>Session details</h2>
             <span id="session-count" class="status-line">— sessions</span>
           </div>
-          <p class="estimate-note">Rows with unknown pricing show —. Codex rows marked 推算 are estimated.</p>
+          <p class="estimate-note">Rows with unknown pricing show —. Codex and GLM-5.1/5.2 rows marked 推算 are estimated. Sessions 只显示仍存在的原始日志（Claude 通常约 30 天，Codex 可能更久）；更久的聚合统计见 Explore。</p>
           <div class="table-wrap">
             <table>
               <thead>

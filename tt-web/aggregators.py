@@ -1,5 +1,6 @@
 import subprocess
 import os
+import threading
 from collections import OrderedDict, defaultdict
 from dataclasses import replace
 from datetime import timedelta
@@ -14,6 +15,7 @@ ALL_DIMS = TIME_DIMS | {"project", "model", "agent"}
 METRICS = {"cost", "input", "output", "cache_read", "cache_creation", "total", "messages"}
 _GLOBAL_USAGE_CACHE = None
 _PROJECT_CACHE = {}
+_LOAD_LOCK = threading.RLock()
 
 
 def pivot(
@@ -110,23 +112,24 @@ def extract_metric(entry, metric):
 
 
 def identify_project(path, cache):
-    if path in cache:
-        return cache[path]
-    try:
-        result = subprocess.run(
-            ["git", "-C", path, "config", "--get", "remote.origin.url"],
-            capture_output=True,
-            text=True,
-            timeout=2,
-        )
-        if result.returncode == 0 and result.stdout.strip():
-            project = normalize_remote(result.stdout.strip())
-        else:
+    with _LOAD_LOCK:
+        if path in cache:
+            return cache[path]
+        try:
+            result = subprocess.run(
+                ["git", "-C", path, "config", "--get", "remote.origin.url"],
+                capture_output=True,
+                text=True,
+                timeout=2,
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                project = normalize_remote(result.stdout.strip())
+            else:
+                project = path
+        except (subprocess.TimeoutExpired, FileNotFoundError):
             project = path
-    except (subprocess.TimeoutExpired, FileNotFoundError):
-        project = path
-    cache[path] = project
-    return project
+        cache[path] = project
+        return project
 
 
 def normalize_remote(remote):
@@ -143,15 +146,16 @@ def normalize_remote(remote):
 
 
 def load_all_entries(force_reload=False):
-    global _GLOBAL_USAGE_CACHE
-    if _GLOBAL_USAGE_CACHE is None:
-        from cache import MtimeCache
+    with _LOAD_LOCK:
+        global _GLOBAL_USAGE_CACHE
+        if _GLOBAL_USAGE_CACHE is None:
+            from cache import MtimeCache
 
-        _GLOBAL_USAGE_CACHE = MtimeCache(_usage_paths, _parse_usage_file)
-    if force_reload:
-        _GLOBAL_USAGE_CACHE.clear()
-    entries = _GLOBAL_USAGE_CACHE.load()
-    return _with_calculated_costs(entries)
+            _GLOBAL_USAGE_CACHE = MtimeCache(_usage_paths, _parse_usage_file)
+        if force_reload:
+            _GLOBAL_USAGE_CACHE.clear()
+        entries = _GLOBAL_USAGE_CACHE.load()
+        return _with_calculated_costs(entries)
 
 
 def _with_calculated_costs(entries):

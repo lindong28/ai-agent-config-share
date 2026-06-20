@@ -16,7 +16,7 @@ BINDING rule via CLAUDE.md。`docs/CLAUDE.md` 存在时协议生效——agent �
 
 三个互相支撑的机制：
 
-1. **7 种文档类型**——覆盖从架构到变更记录的项目知识光谱
+1. **多种文档类型**——覆盖从架构到变更记录的项目知识光谱
 2. **docs/CLAUDE.md**——Claude Code 自动加载，agent 在 docs/ 下工作时协议规则自动 in context
 3. **提升机制**——**task 产物**（Long Task Protocol 产出的 state.md 和 journal.md）中有项目级价值的条目提升为持久化文档
 
@@ -61,8 +61,12 @@ User 是拿到源代码后需要部署、使用、运维的人——部署（环
     │   ├── ux-issues.md                   # 产品 UX 问题
     │   ├── ux-contract-issues.md          # Contract 定义问题
     │   └── general.md                     # 通用问题
-    └── references/                        # 详细参考手册（项目特定，消费者因文件而异）
-        └── <name>.md                      # 部署/配置/运维指南 [User]；字段定义/API 契约 [Developer]
+    ├── references/                        # 详细参考手册（项目特定，消费者因文件而异）
+    │   └── <name>.md                      # 部署/配置/运维指南 [User]；字段定义/API 契约 [Developer]
+    ├── experiments/                       # 实验结果 / 优化 baseline（curated，供未来优化对比）[Developer]
+    │   └── <family>/<name>.json|md        # 结果快照（含测量协议 + 指标），按实验族分
+    └── operations/                        # 运维入口（系统在跑什么、怎么管理）[User]
+        └── <name>.md                      # services.md / monitoring.md / incidents.md 等
 ```
 
 动态文件名说明：`NNN-<slug>.md` 编号递增 + kebab-case 标题；`<topic>.md` 按项目实际 topic 命名（如 `deployment.md`、`api-integrations.md`）；`<YYYYMMDD>-<short-name>` 日期前缀 + kebab-case 标题。
@@ -80,6 +84,8 @@ User 是拿到源代码后需要部署、使用、运维的人——部署（环
 | experiences/ | Append-only（按 topic 分文件） | 这个坑之前怎么踩过？ | Agent |
 | issues/ | Mutable（lifecycle，按 domain 分文件） | 有哪些发现的问题要解决？ | Agent |
 | references/ | Mutable snapshot（按项目需要） | 操作层面的详细定义和步骤是什么？ | 因文件而异 |
+| experiments/ | Append-only（结果快照，按实验族；按项目需要） | 当前 baseline 是什么、优化是否提升/回退？ | Developer |
+| operations/ | Mutable snapshot（按项目需要） | 系统在跑什么、怎么管理？ | User |
 | docs/CLAUDE.md | Mutable snapshot | 文档索引在哪？协议规则怎么加载？ | Developer |
 
 ### 写入路径
@@ -318,14 +324,16 @@ Lens：你花了非平凡的时间解决一个问题，且解法不能从代码�
 
 **What**：agent 在开发过程中发现的值得跟踪的问题——bug、可改进项、feature 建议。agent 驱动的轻量 issue tracker，也可用于自动化流水线的输入。
 
-**Format**：目录结构，按 domain 分文件。每个文件内 mutable（条目有 lifecycle）。**按 domain 分文件的核心好处**：不同 domain 的 issues 有不同的优先级和 consumer，domain 文件让自动化流水线可以精确地只处理相关的 issues。
+**Format**：domain 文件只存 **open** issues；条目判定 `resolved`/`wontfix` 时整条移入 `archive/closed.md`（见下方 lifecycle）。每个 domain 文件内 mutable（open 条目有 lifecycle）。**按 domain 分文件的核心好处**：不同 domain 的 issues 有不同的优先级和 consumer，domain 文件让自动化流水线可以精确地只处理相关的 issues——这一好处只对 open issues 成立（archive 没有按 domain 处理的消费者），故 archive 用单一扁文件、不按 domain 分。
 
 ```
-docs/issues/
+docs/issues/                   # domain 文件 = 只存 open issues
 ├── README.md                  # 索引：各 domain 文件的列表与 scope
 ├── ux-issues.md               # 测试产品时发现的 UX 问题（contract 在实际产品中被 broken）
 ├── ux-contract-issues.md      # contract 本身的问题（定义缺失 / 不准确 / 过时）
-└── general.md                 # 不属于特定 domain 的通用 issues
+├── general.md                 # 不属于特定 domain 的通用 issues
+└── archive/
+    └── closed.md              # resolved + wontfix 条目（翻状态时从 domain 文件整条移入；只 grep 查史，不通读）
 ```
 
 **Domain 文件划分 lens**：当一类 issues 有独立的 consumer（自动化流水线、特定的 review 流程）或明显不同的优先级时，给它单独的文件。例：UX issues 直接影响用户体验，优先级天然高于 skill 优化建议——分开存放让优先级管理更容易。
@@ -353,11 +361,12 @@ Lens：你发现了一个值得在未来某个时间点解决的问题，但不�
 
 写入后自检——下一个处理者只看这条 entry 能否判断"要不要修、怎么复现、优先级多高"。
 
-**Issue status**：`open` / `resolved` / `wontfix`。格式模板见 `docs-format-templates.md` §4.8。
+**Issue lifecycle**：`open` 条目活在 domain 文件里。判定 `resolved` 或 `wontfix` 的**同一步**，把整条（含 Notes 里的修复方式 / 验证证据 / 不修理由）从 domain 文件移入 `archive/closed.md`，不留在原文件、不删除。如此定位 open issue 的读取面由结构保证恒定，不随历史累积膨胀；archive 保留全部历史、可 grep。triage 用的 `docs/issues/*.md` 是**非递归 glob**，天然不扫 `archive/` 子目录——故走该 glob（或直接打开某 domain 文件）的 consumer 零改动；递归 grep / 遍历 `docs/issues/` 前缀的 consumer 仍会读到 archive 条目（带 `[resolved]`/`[wontfix]` 标记、通常有用，需要时自行排除 `archive/`）。状态枚举与条目模板见 `docs-format-templates.md` §4.8。
 
 | 反模式 | 为什么不要 |
 |---|---|
-| issue 修复后直接删整条 entry | mutable 是 status 字段流转，不是条目消失；删整条丢历史 |
+| resolved/wontfix 后留在原 domain 文件、只翻 status 字段 | open 路径读取面无界增长——每次定位 open issue 要读越来越多无关闭项；应翻状态即移入 `archive/closed.md` |
+| 直接删整条 entry（不归档） | 删整条丢历史：wontfix 的决策理由、resolved 的 root-cause 取证 git 里都没有；归档而非删除 |
 
 ---
 
@@ -386,7 +395,87 @@ Lens：当主文档需要引用的详细信息超出其自身粒度时。内容�
 
 ---
 
-### 4.10 docs/CLAUDE.md [Developer]
+### 4.10 experiments/ — 优化 baseline（结果快照）[Developer]
+
+**What**：curated 的实验结果，作为未来优化的参考锚点——典型是「当前已达标的优化结果」存为 baseline，供将来的 prompt / pipeline / 算法优化轮次在**同一测量协议**下对比（是否提升 / 是否回退）。区别于实验过程中的**短暂 scratch**（原始批量跑、probe、中间产物）——后者不入 git、不进 docs/。本节的判据是「这条结果未来会被拿来对照吗」，不是「这是不是实验产出」。
+
+**Format**：目录结构（按项目需要），按实验族分子目录。每个结果快照写入后不再修改，目录层面 **append-only**（新 baseline 增量加入，不覆盖旧的）。快照必须自带**测量协议**（judge / rubric 版本 / 数据集 / 指标定义）——否则未来无法可比对照。
+
+```
+docs/experiments/
+└── <family>/                       # 按实验族分（如 batch-sets/）
+    └── <name>.json|md              # 结果快照（测量协议 + 指标 + 关联 commit/版本）
+```
+
+**何时读**
+
+Lens：你要开一轮优化（改 prompt / pipeline / 参数）、需要知道「当前 baseline 是什么、改完算不算提升」时——先看 docs/experiments/ 有没有相关实验族的 baseline。
+
+触发例（不限于此）：
+- 开始一轮针对已有产物质量的优化前，取 baseline 作对比锚点
+- 判断一次改动是提升还是回退
+
+**何时写**
+
+Lens：一次实验产出了你会拿来和未来优化对比的结果（尤其是被判定「达标」的当前最优）——把它连同测量协议固化为 baseline。
+
+触发例（不限于此）：
+- 用户判定当前优化结果达标 → 存为该实验族的新 baseline
+- 一次有结论的对比 / 消融结果值得作为未来参考
+
+写入后自检——未来开优化轮的人/agent 能否凭这条 baseline 在**相同测量协议**下判断提升还是回退。
+
+---
+
+### 4.11 operations/ — 运维入口 [User]
+
+**What**：系统的运维总览——回答"我有哪些长期运行的服务、各自怎么自启、怎么验证、出错看哪里"这类入口性问题。读者从 operations/ 进来，不依附于其他主文档。
+
+**Format**：目录结构，按项目需要增加文件。文件内容为 Mutable snapshot。典型文件：
+
+- `services.md` — 服务清单（服务 / Supervisor / 当前状态 / 运维入口 / Instructions 位置）
+- `monitoring.md` — 监控与告警链路（哪个指标在哪个 dashboard、谁负责）
+- `incidents.md` — 事故记录与演练（按时间顺序的 incident postmortem 摘要）
+- 项目按需扩展（如 `runbooks/<scenario>.md`）
+
+每个服务标注其运维入口（repo own→生命周期脚本；vendored→原生接口）——脚本集合、实现子集与契约见 `service-operations-protocol.md` §3。
+
+**与 references/ 的边界**
+
+| | operations/ | references/ |
+|---|---|---|
+| 角色 | 运维入口（主动起点） | 主文档的细节附件（被引用） |
+| 读者路径 | 直接进来回答"系统在跑什么" | 从 README/architecture 链接跟过来 |
+| 粒度 | 跨服务/跨组件的总览 | 单一组件/接口/数据结构的细节 |
+| 失去主文档引用是否仍有价值 | 是——本身是入口 | 否——孤立的细节意义有限 |
+
+举例：`operations/services.md` 列出所有服务 + 各自启动方式 + 链接到 `references/wechat-sources.md`；`references/wechat-sources.md` 只讲微信源添加步骤、被 README §信源 和 `operations/services.md` 同时引用。
+
+**何时读**
+
+Lens：当你需要从系统整体视角了解运维状态时——服务清单、监控配置、最近的 incidents——而不是去钻某个单一组件的细节。
+
+触发例（不限于此）：
+- 拿到一个新项目，想知道"它在跑什么、谁拉起的"
+- 服务异常排查，先看 services.md 找正确的诊断起点
+- 新机器部署，按 services.md 清单逐项 bring-up
+- 加新服务前，先看现有服务的守护 pattern
+
+**何时写**
+
+Lens：当一个长期运行的服务/监控链路/运维流程有了变化时——新增、移除、守护方式调整、监控指标增减——同步更新 operations/ 对应文件。
+
+触发例（不限于此）：
+- 新增/移除一个 launchd 守护的服务
+- 服务的自启机制改变（从手动改为 launchd / 从 cron 改为 launchd 等）
+- 新增监控告警通道
+- 完整执行一次 incident 后写入 incidents.md
+
+operations/ 不替代 experiences/deployment.md——前者是"现状快照"（mutable），后者是"踩坑记录"（append-only）。新加一个服务时：operations/services.md 加一行（现状），experiences/deployment.md 如果踩了坑也加一条经验（历史教训）。
+
+---
+
+### 4.12 docs/CLAUDE.md [Developer]
 
 文档索引 + 协议规则加载点（Mutable snapshot）。Claude Code 在 docs/ 下工作时自动加载。写入 lens：docs/ 下新增、重命名或删除文档时同步更新索引。
 
@@ -422,6 +511,7 @@ task 产物服务于一个具体任务的执行过程。任务完成后，其中
 | journal.md `[lesson]` / `[fact]` | experiences/ | 写入判断见 §4.7 写入 lens；写入与 topic 匹配的文件 |
 | state.md Open Issues（任务结束时仍 open） | issues/ | 写入判断见 §4.8 写入 lens；写入与 domain 匹配的文件 |
 | 任务完成 + 产出包含用户可感知变化 | contracts/ + CHANGELOG.md（根目录） | 用户的产品体验是否发生了变化？ux-contract.md 走 §4.6 执行路径（主路径：随实现 apply；否则 → issue 间接路径），ux-test-patterns.md 可直接写入 |
+| diff 增删服务 / 改守护方式 / 监控链路 | operations/（+ README 服务章节）[User] | 见 §4.11；按 `service-operations-protocol.md` 检查生命周期脚本是否齐备 |
 
 ### 提升不是复制粘贴
 

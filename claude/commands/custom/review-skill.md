@@ -1,11 +1,11 @@
 ---
-argument-hint: <skill-path> [optimize]
+argument-hint: <skill-path> [optimize] [max-principle-per-subagent=1]
 description: 审查指定 SKILL.md / command 文件并按原则修复，可选叠加 optimize 模式。
 ---
 
 # review-skill
 
-输入 (`$ARGUMENTS`)：待审 SKILL.md / command 文件路径。optimize 模式是否叠加见「模式」判定。
+输入 (`$ARGUMENTS`)：待审 SKILL.md / command 文件路径。optimize 模式是否叠加见「模式」判定；可附加 `max-principle-per-subagent=N` 覆盖默认值。
 
 ## 参数
 
@@ -13,6 +13,7 @@ description: 审查指定 SKILL.md / command 文件并按原则修复，可选�
 |---|---|---|---|---|
 | skill-path | ✓ | 字符串 | — | 待审 SKILL.md / command 文件路径 |
 | optimize | ✗ | boolean | false | 显式强制叠加 optimize 审查（默认判定见「模式」） |
+| max-principle-per-subagent | ✗ | 整数 | 1 | 每个 subagent 至多分配的 principle 数量；值越小，每条原则获得越多注意力 |
 
 ## 模式
 
@@ -28,12 +29,12 @@ optimize 适用判定：optimize 的增量价值主要来自 wrapper-vs-program 
 
 循环 3 阶段：**审查 → 决策 → 落地**。任一阶段产生改动后回到第 1 阶段重跑，直到无新发现。展示与提问风格遵循 `~/.claude/references/deep-discuss-style.md`——subagent 输出报告与主 session 提问都适用。
 
-### 1. 审查（per-principle 并行 subagent）
+### 1. 审查（分组并行 subagent）
 
-每条 principle 各 spawn 一个 general-purpose subagent **并行**跑独立审查，确保每条原则获得充分注意力，不因原则数量增长而稀释。
+将 principles 按 `max-principle-per-subagent` 均匀分组，每组 spawn 一个 general-purpose subagent **并行**审查，确保每条原则获得充分注意力，不因原则数量增长而稀释。
 
 每个 subagent 的输入：
-- `~/.claude/references/skill-review-principles.md`（传完整文件而非截取单条——相邻原则提供边界上下文，帮助 subagent 避免报告属于其他 principle 的发现；但明确告知只应用指定的那一条 principle）
+- `~/.claude/references/skill-review-principles.md`（传完整文件而非截取单条——相邻原则提供边界上下文，帮助 subagent 避免报告属于其他组的发现；但明确告知只应用分配给该 subagent 的那几条 principle。conditional 原则仅在适用范围内生效）
 - `~/.claude/references/deep-discuss-style.md`
 - 目标文件
 
@@ -48,7 +49,7 @@ optimize 适用判定：optimize 的增量价值主要来自 wrapper-vs-program 
 
 ### 2. 决策
 
-基于 subagent 报告 + 主 session 判断，整理为 `AskUserQuestion` 让用户决策。遵循 `~/.claude/references/deep-discuss-style.md` §How #2：
+基于 subagent 报告 + 主 session 判断，整理为 `AskUserQuestion` 让用户决策。遵循 `~/.claude/references/deep-discuss-style.md` §Principles #3：
 
 呈现 finding 时附主 session 的判断（同意 / 保留 / 反驳 + 理由），不只是 relay subagent 原文——用户需要看到这层加工才能 trust 决策依据。
 
@@ -61,7 +62,7 @@ optimize 适用判定：optimize 的增量价值主要来自 wrapper-vs-program 
 
 ### 3. 落地
 
-按用户选择 Edit。若有改动，回到第 1 阶段重跑——范围按改动触及的原则锚定，不靠直觉挑哪条（直觉会裁到自己盲点）；拿不准则全量。无改动则循环终止。
+按用户选择 Edit。若有改动，回到第 1 阶段重跑——范围按改动触及的原则锚定，不靠直觉挑哪条（直觉会裁到自己盲点）；拿不准则全量。**重跑审的是本 review 自己的 fix 编辑：除分组 subagent 外，额外 spawn 1 个 subagent 应用 `~/.claude/commands/custom/fix-skill-from-session.md` §2「验证」lens（跨段矛盾 / 删除内容是否被依赖 / 折叠是否丢了 guarantee）——这类编辑引入的 regression，分组 subagent 只审「留存文本是否良构」时看不见。** 无改动则循环终止。
 
 若审查发现现有原则未覆盖某类问题，用 AskUserQuestion 把「是否改进对应 principles 文件」作为一项决策交用户拍板——principles 缺口是高杠杆发现，只在 prose 里附带提及会被略过、用户遗忘后同类坑复发。改完后执行 `/custom:review-principles <principles-file>` 循环审查改动——principles 文件本身也要过 meta-原则。
 
@@ -69,5 +70,6 @@ optimize 适用判定：optimize 的增量价值主要来自 wrapper-vs-program 
 
 ## 反模式
 
-- **合并 subagent**：不要因 diff 小或原则相关而把多条原则塞进同一个 subagent——独立性保证的是跨原则交叉发现不被单 subagent 的上下文污染。
+- **减少 subagent 数量**：不要因 diff 小或原则相关而超出 max-principle-per-subagent 分组上限把多条原则塞进同一 subagent——分组越大，跨原则交叉发现越易被单 subagent 的上下文污染。
 - **跳过重跑**：不要因改动小或"显然安全"而跳过第 3 阶段的重跑循环——编辑者对自己改动有 confirmation bias，重跑的价值恰恰在于独立于编辑者的判断。
+- **重跑 prompt 不中立**：重跑时给 subagent 的 prompt 必须是中立重审，禁止把「上一轮 fix 想达成什么 / 去确认它生效」当成功判据喂给 subagent。确认式框架（"verify 这个 fix 解决了 X" / "确认没 reintroduce Y"）把 subagent 推向印证编辑者的修复而非独立挖洞，让编辑者自伤引入的 over-correction 撑过多轮。

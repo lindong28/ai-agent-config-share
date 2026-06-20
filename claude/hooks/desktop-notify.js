@@ -1,8 +1,15 @@
 #!/usr/bin/env node
 /**
- * Desktop Notification Hook (Stop)
+ * Desktop Notification Hook (Stop · Notification · PreToolUse:AskUserQuestion)
  *
- * Notifies when Claude finishes responding. Two backends, in priority order:
+ * Notifies when Claude needs the user's attention:
+ *   - Stop                            → a turn finished        ("[project] <summary>")
+ *   - Notification/permission_prompt  → waiting to approve     ("[project] 🔐 …")
+ *   - PreToolUse/AskUserQuestion      → waiting for a choice   ("[project] ❓ 等你选择 · …")
+ * Only permission_prompt Notifications fire; idle_prompt/auth_success/elicitation_*
+ * are ignored (idle_prompt would double up with the Stop notification).
+ *
+ * Two backends, in priority order:
  *
  *   1. Ghostty (primary): an OSC 9 escape written to the terminal's tty.
  *      Clicking the notification focuses the Ghostty surface that emitted it —
@@ -160,15 +167,57 @@ function notifyTerminalNotifier(project, body) {
   }
 }
 
+const ATTENTION_MAX = 80;
+
+/** Collapse whitespace and cap length for attention labels. */
+function clip(s, n = ATTENTION_MAX) {
+  if (!s || typeof s !== 'string') return '';
+  const t = s.replace(/\s+/g, ' ').trim();
+  return t.length > n ? `${t.slice(0, n)}…` : t;
+}
+
 /**
- * Fast-path entry point for run-with-flags.js.
+ * Build the notification body for whichever event fired, or null to stay silent.
+ *
+ *   PreToolUse/AskUserQuestion      → "[project] ❓ 等你选择 · <header>"
+ *   Notification/permission_prompt  → "[project] 🔐 <message>"
+ *   Stop (default)                  → "[project] <first-line summary>"
+ *
+ * Other Notification types (idle_prompt, auth_success, elicitation_*) return
+ * null: idle_prompt would double up with the Stop hook, the rest aren't
+ * attention-worthy.
+ */
+function buildBody(input, project) {
+  if (input.tool_name === 'AskUserQuestion') {
+    const qs = input.tool_input && input.tool_input.questions;
+    const first = Array.isArray(qs) && qs.length ? qs[0] : null;
+    const label = first ? clip(first.header || first.question) : '';
+    return `[${project}] ❓ 等你选择${label ? ` · ${label}` : ''}`;
+  }
+
+  if (input.hook_event_name === 'Notification') {
+    if (input.notification_type !== 'permission_prompt') return null;
+    return `[${project}] 🔐 ${clip(input.message) || '等你授权'}`;
+  }
+
+  return `[${project}] ${extractSummary(input.last_assistant_message)}`;
+}
+
+/**
+ * Fast-path entry point. Returns the stdout to echo: the original payload for
+ * Stop (preserving prior passthrough behavior), or '' for the Notification /
+ * PreToolUse events so nothing is mistaken for a hook decision.
  */
 function run(raw) {
+  let isStop = true;
   try {
     const input = raw.trim() ? JSON.parse(raw) : {};
+    isStop = input.tool_name !== 'AskUserQuestion' &&
+             input.hook_event_name !== 'Notification';
+
     const project = getProjectName(input.cwd || process.cwd());
-    const summary = extractSummary(input.last_assistant_message);
-    const body = `[${project}] ${summary}`;
+    const body = buildBody(input, project);
+    if (body == null) return isStop ? raw : '';
 
     // OSC 9 is the only backend that reaches the user's *local* terminal when
     // the session isn't purely local: over SSH (terminal-notifier would fire on
@@ -179,18 +228,15 @@ function run(raw) {
     if (isSSH() || isTmux()) {
       const tty = isTmux() ? findTTY() : (process.env.SSH_TTY || findTTY());
       if (tty) notifyGhostty(tty, body);
-      return raw;
-    }
-
-    const tty = isGhostty() ? findTTY() : null;
-    if (!tty || !notifyGhostty(tty, body)) {
-      notifyTerminalNotifier(project, summary);
+    } else {
+      const tty = isGhostty() ? findTTY() : null;
+      if (!tty || !notifyGhostty(tty, body)) notifyTerminalNotifier(project, body);
     }
   } catch (err) {
     log(`[DesktopNotify] Error: ${err.message}`);
   }
 
-  return raw;
+  return isStop ? raw : '';
 }
 
 module.exports = { run };

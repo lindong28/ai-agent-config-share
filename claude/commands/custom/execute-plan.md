@@ -22,7 +22,8 @@ origin: 2026-05-19
 
 1. 用户不用在 Claude 与 Codex 间手动切换上下文
 2. 自动识破 Codex 在 Stop Gate 未满足时的早停并 resume
-3. Codex 完成后自动跑 §4 UX gate（契约驱动验证 + test-ux 探索），把发现的 issue 交回同一 Codex session 修复，直到全部解决
+3. Codex 完成后自动跑 §4 UX gate（契约驱动验证 + test-ux 探索），把发现的 issue 交回 implementer session 修复，直到全部解决
+4. 执行质量不被单 session 膨胀拖累：工作单元边界默认轮换新 session（§1.5）
 
 ## 输入契约
 
@@ -36,7 +37,7 @@ origin: 2026-05-19
 
 ## 主流程（lens，不是步骤清单）
 
-### 1. 启动 Codex（后台 + 同 session 复用）
+### 1. 启动 Codex（后台 spawn + 捕获 session id）
 
 调用形如：
 
@@ -58,6 +59,15 @@ Bash({
   - Blocked 时：贴满足 5 项 Stop Gate 的 report
 - 从 wrapper banner（stdout 文本流）捕获 Codex 的 `session id`——后续 resume 完全依赖它。当前只能扫描 banner 文本，**捕不到时视为 wrapper / 适配层问题**——排查 stderr / 退出码 / 输出截断，不要直接交给用户。
 
+### 1.5 Session 拓扑：以工作单元为界复用/轮换
+
+**工作单元** = session 粒度的单位，默认一个 phase；以下情况**合并为一个单元、不轮换**（由 supervisor 判定）：强耦合的相邻 phase（共享大量在场上下文）；预期很短的 phase（轮换的重读成本 > context 减负收益）。
+
+| 规则 | 内容 |
+|---|---|
+| 单元内 | 早停 resume / 修复循环 / gate 答复，**必须 resume 同 session** |
+| 单元边界 | 上一单元验收通过（含 state.md / journal.md 已更新）后，下一单元**默认启新 session**——避免长 plan 单 session 膨胀触发频繁 compaction 丢决策。边界新 session 仍是一次 spawn，按 §1 那份完整 spawn-prompt 内容下达（**勿只给摘要**——协议绑定、本单元会完成代码时的 UX-contract apply 指令等不会自动 default），再附一段 terse handoff 摘要（上一单元结论 + 本单元接力点 + 任何非显然 carry-over）+ plan / state / journal 路径让其自读 |
+
 ### 2. 等待与轮询
 
 spawn 后从**后台 Bash 任务结果**捕获 `.output` 路径并记下（即下文的 `<output-file>`）：这是 harness 对后台 bash 任务 stdout+stderr 的完整捕获，**不是** wrapper banner 里 `Log:` 指向的 `codeagent-wrapper-<PID>.log`。每轮轮询调用形如：
@@ -76,6 +86,11 @@ poll-progress.sh 只读新增进度行（默认每轮最多回显 80 行），�
 
 每轮等待之间发一条简短中文状态（"Codex 仍在执行，已等待 X 分钟"），不要静默——把"在等待"当 stop 理由扔给用户是反模式。
 
+**周期性 FYI 汇报（默认要求）**：执行期内每 ≤30 分钟向用户发一次简短进度汇报。
+- **动机**：长执行期里 supervisor 的事件驱动汇报（gate / blocked / 完成时才说话）会造成数小时的静默，用户失去"现在在哪、有没有在动"的可见性，只能反复主动来问。
+- **性质**：FYI 单向信息流，**不是找用户**——不提问、不等待回复、不构成 stop；用户可看可不看。内容：当前阶段 / 自上次汇报以来的推进 / 异常与否 / 下一里程碑，3-8 行。一切照常时一句话即可。
+- **机制**：idle 等待期 supervisor 无法主动发消息，须靠调度唤醒——唤醒 / 间隔 / 完成即删的机制归 `~/.claude/references/background-agent-monitoring.md`。FYI 汇报**搭同一巡检唤醒的便车**（巡检醒来时顺带发一条），不另起第二个 cron。仅 Critical 异常（进程死亡 / 付费墙 / 外部服务故障证据）才额外 PushNotification——周期汇报本身不推送，避免通知疲劳。
+
 需要完整上下文时（§3 裁决 / context 压缩后恢复 / 排查异常），用 `Read(<output-file>)` 读整份 `.output`；poll-progress.sh 只读不改源文件，完整记录始终在盘上。**poll-progress.sh 回显含「跳过 N 行」时（单轮新增 > 80 行触发截断）必须先 `Read(<output-file>)` 全量再裁决**——被跳过的中段在增量模式下不再出现，blocked / Stop Gate report / verify 证据可能正落在中段。resume 会产生**新的后台任务 = 新 `.output` 文件**，对新文件重新记录路径并从 0 开始轮询。
 
 ### 3. 判定 Codex 输出并裁决
@@ -83,6 +98,7 @@ poll-progress.sh 只读新增进度行（默认每轮最多回显 80 行），�
 | 观察到的现象 | 下一步 |
 |---|---|
 | Codex 声称完成 + 给出 verify 证据 | 进 §4 UX gate。**不要只看"Done"字样**——核对的 lens 是 **Codex 的完成证据 ≥ plan 明文规定的 verify gate**（实施步骤覆盖、每个 independently executable verify 的可观察证据、long-task 模式下 state.md 更新——按 plan 实际声明的来，不限于此列举）。**且质疑判据强度**：verify 若是存在性判据（命中 ≥1 / 有输出）而改动涉及"用户能看到多少数据"，PASS 不等于完整——追问 expected-vs-actual（应见多少 vs 实际多少），存在性会掩盖数量缺失 |
+| Codex 完成一个**工作单元**（非整个 plan）+ 证据合格 | 按 §1.5 进入下一单元：默认启**新 session**（带 handoff 摘要）；与当前单元强耦合则 resume 同 session |
 | Codex 停止但 Stop Gate 任一项不满足 | 用同一 session resume Codex（见下方 resume 调用），指出哪几项 Stop Gate fail + 各自的 supervisor 证据；回到 §2 |
 | Codex 异常 / 无 session id / 输出截断 | 按 wrapper / 适配层问题处理（不转嫁外部失败）：排查 stderr / 退出码，看 `git status` 判断是否已部分完成，再决定 resume / 重启路径 |
 
@@ -114,7 +130,7 @@ resume-prompt 也走 trust-the-model——只列：本次 Stop Gate 哪几项 fa
 
 **4a 应用 ux-contract 更新**
 
-本步是 docs-organization-protocol §4.6 主路径的【自主执行阶段】。由 **implementer Codex**（在其实现 session 内，与代码 + §5 doc-sync 一并；该 apply 任务已随 §1 spawn-prompt 下达）把 plan「UX 契约影响」段记录的 **L2 条目 + section delta + 已对齐决策** apply 进 `docs/contracts/ux-contract.md` §X（apply 指令见 create-plan facet 产出 (d)）。这是执行 plan 已批准意图、**非静默改**。
+本步是 docs-organization-protocol §4.6 主路径的【自主执行阶段】。由 **implementer session**（与代码 + §5 doc-sync 一并；该 apply 任务随**完成代码的那个工作单元**的 spawn-prompt 下达——§1.5 轮换后未必是 §1 首 spawn 的 session）把 plan「UX 契约影响」段记录的 **L2 条目 + section delta + 已对齐决策** apply 进 `docs/contracts/ux-contract.md` §X（apply 指令见 create-plan facet 产出 (d)）。这是执行 plan 已批准意图、**非静默改**。
 
 - **no-silent-edit 不变量**：若 Codex 在应用时发现 ux-contract 需要 plan **未记录**的改动（出现了 plan 没覆盖的取舍）→ **停下，supervisor `AskUserQuestion` 让 owner 拍**，**不静默扩展 ux-contract**。
 
@@ -136,19 +152,31 @@ ux-contract 在 4a 更新并**冻结**后，把本 plan「UX 契约影响」段�
 
 | 严重度 | 处理 |
 |---|---|
-| 任一 Critical / High / Medium 未解决 | 视同 Codex 早停——resume 同一 implementer Codex session（4b/4c 的 issue 都路由回它修），传 issue 文件路径 + 关键证据摘要 + plan 路径，要求修复并触发 plan 的 verify；**回到本节按原触发重跑**：有 UX 契约影响 → 回 4a 重新 apply / 冻结 ux-contract + 4b 重验，再跑 4c；ux-contract 中性 → 重跑 4c |
+| 任一 Critical / High / Medium 未解决 | 视同 Codex 早停——resume **实现该改动所在工作单元的 implementer session**（§1.5 轮换后未必是最新 session，按 issue 定位到对应单元；4b/4c 的 issue 都路由回它修），传 issue 文件路径 + 关键证据摘要 + plan 路径，要求修复并触发 plan 的 verify；**回到本节按原触发重跑**：有 UX 契约影响 → 回 4a 重新 apply / 冻结 ux-contract + 4b 重验，再跑 4c；ux-contract 中性 → 重跑 4c |
 | 仅剩 Low | 写进 §6 最终 handoff 让用户决定是否当场修，不强制循环 |
 
 UX 修复循环按 §3 同一套 Stop Gate 收敛——**同一类 issue 连续修复指令未推进时**，Claude 必须先独立排查（wrapper 是否丢输出 / repo 当前状态 / Claude 直接跑 issue 复现命令 / 报告是否有歧义），再决定是否把 blocker 升级给用户。
 
+### 4.5 AIGC / 语义质量任务的监督升格
+
+**触发条件**：plan 交付物的质量取决于 prompt / 生成内容 / LLM judge（AIGC 产物、语义判官、分类器等非确定性工件）。纯工程型 plan 不触发。
+
+触发后，supervisor 的职责在 §2-§4 基线上升格三条：
+
+1. **亲自抽看产物**：supervisor 对生成产物做小样本多模态抽查（看图 / 读文 / 听音），形成独立质量判断——implementer 自报、自动 gate 通过、测试全绿都不能替代这一眼。抽样即可，不全量看（成本控制）。
+2. **品味工件设计权归 supervisor**：生成 prompt / judge rubric / 评分协议这类品味工件，由 supervisor 主导设计与修订（implementer 负责接线、测试、批量执行）；至少做到逐版审查。"不接管"不变量对品味工件不适用（见关键不变量的限定）。
+3. **质量不达标先诊断再派活**：靠"亲自看产物 + 读判官原始输出"定位根因（措辞问题 / 机制问题 / 上游设计问题），再下发针对性修复——禁止把"再改改 prompt"原样丢回 implementer 重试。
+
+依据：生成质量卡住时，靠 implementer 逐版改 prompt 文笔常推不动——根因可能在机制 / 上游设计（如 judge 拿生成所用的同一描述当批改答案的循环论证），措辞 / 机制 / 上游设计都可能、别预设，只有 supervisor 独立看产物的诊断回路能定位。
+
 ### 5. Commit（plan 完成时）
 
-**判据**：§3 走到「Codex 完成 + 给出 verify 证据」分支 + §4 UX gate clear（或 N/A）+ working tree 有 Codex 实施产物且 diff 非空。§3 走到「Stop Gate 不满足」或「Codex 异常」分支时不走本节——半成品不入 git history。
+**判据**：§3 走到「Codex 完成 + 给出 verify 证据」分支 + §4 UX gate clear（或 N/A）。§3 走到「Stop Gate 不满足」或「Codex 异常」分支时不走本节——半成品不入 git history。
 
 **Scope**：
 - 进 commit：Codex 在本次 plan 实施中新增 / 修改的代码 + docs（含根 README / install.sh 等 plan 显式声明的改动）
 - 不进 commit：plan.md / state.md / journal.md（audit trail 与代码分离，用户自行决定单独 commit 或 `.gitignore`）；repo 中与本 plan 无关的 in-flight 改动；runtime / build artifact
-**执行**：按 `claude/skills/create-commit/SKILL.md` 执行，将上述 Scope 约束作为文件 staging 的判断依据。判据成立直接 commit，不另外 AskUserQuestion——反转成本（`git reset --soft HEAD~1`）低于一次中断交互。
+**执行**：按 `claude/skills/create-commit/SKILL.md` 执行，将上述 Scope 约束作为文件 staging 的判断依据。判据成立直接 commit，不另外 AskUserQuestion——反转成本（`git reset --soft HEAD~1`）低于一次中断交互。若 Codex 已在执行期把 scoped 改动逐步提交完、working tree 无残留，本步无新 commit。
 
 ### 6. 最终 handoff（用户拿到的唯一交付物）
 
@@ -175,13 +203,13 @@ UX 修复循环按 §3 同一套 Stop Gate 收敛——**同一类 issue 连续�
 
 下面这些 SOTA Claude 默认不会做，失守会让本 command 退化：
 
-- **同 session 复用 Codex**：Codex 中途 stop 后必须 `resume <session_id>` 续，禁止启新 session——会丢上下文让 Codex 重新分析 plan，等于让用户付两份 token。
+- **Session 复用以工作单元为界**（§1.5）：SOTA Claude 默认会一刀切（死守一个 session、或逢停就开新）——两个方向都丢：单元内乱开新 session 丢上下文（= 付两份 token），单元边界死守旧 session 则 context 膨胀拖质量。机制与边界判定见 §1.5。
 - **wrapper 报错先归因 wrapper / 适配层**：只有观察到第三方原始响应（HTTP 体 / API error code / 状态页）才能写"外部不可用"。
 - **背景任务 + 增量轮询**：必须 `run_in_background: true`；主轮询姿势见 §2（增量读新增、必要时全量兜底）；不要因为等久就 kill；不要把"在等待"当 stop 理由扔给用户。**但"不被动 kill"≠"被动等"**：Codex 反复对抗可解的环境争用（资源锁 / cron·launchd 抢占 / 端口冲突 / stale 锁）时，supervisor 主动做可逆干预或（副作用不确定 / 触及线上时）`AskUserQuestion`，见 `supervise.md` §3「环境争用监测」——不是干等它磨过去。
 - **语言契约**：与 Codex / 工具交互 English；与用户交互中文。
 - **Stop Gate 是三方统一的收敛规则**：管 Codex 的 stop、管 UX 修复循环、**也管 Claude 自己作为 supervisor 决定停下时**——没有这层统一，任一循环都会被错误地按"N 次重试"逻辑收敛。
 - **Long-task 模式下 state.md / journal.md 是交付证据**：Codex 声称完成但两份文件没更新 → 视同 verify 缺项，resume 让 Codex 补。
-- **不接管 plan 范围内的代码改动**：Claude 修 wrapper / 适配层允许；替 Codex 写 plan 范围内的代码不允许——绕过 supervisor 定位。
+- **不接管 plan 范围内的代码改动**：Claude 修 wrapper / 适配层允许；替 Codex 写 plan 范围内的代码不允许——绕过 supervisor 定位。**限定**：prompt / rubric / 评分协议等品味工件不算"代码"，§4.5 触发时其设计权本就归 supervisor。
 
 ### 容易踩的独立失败模式
 

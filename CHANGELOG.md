@@ -2,6 +2,17 @@
 
 > Append-only（最新在前）。仅记录用户可感知的变更。
 
+## 2026-06-20
+
+- 新增：tt-web cost-history / rollup —— `rollup.py` 把每日 cost/usage 滚动汇总持久化到 `state/rollup.db`（SQLite WAL），支持最长约 2 年的成本历史；overview/pivot/filter API 接入 rollup，raw-log 保留期可短于 rollup 历史。新增**可选** `com.ttweb.rollup` macOS LaunchAgent（默认不装，`./tt-web/install.sh rollup-daemon` 显式开启，每小时刷新）
+- 变更：tt-web Explore 页的 agent / project / model 筛选从多选改为**单选下拉**，高基数分组**折叠为 top-12 + Other**
+- 新增：`claude/CLAUDE.md` BINDING「本地 Web Server 绑定 0.0.0.0」—— 给用户在浏览器查看的本地临时 web server 必须监听 `0.0.0.0` 而非仅 `127.0.0.1`（用户浏览器常在远程 / 同网另一设备上）
+- 变更：`execute-plan` / `supervise` 监督模型增强 —— 新增「以工作单元为界复用 / 轮换 session」（单元内 resume 同 session、单元边界默认启新 session 防 context 膨胀）、「周期性 FYI 进度汇报」（≤30min，单向不打断）、「AIGC / 语义质量任务的监督升格」（supervisor 亲自抽看产物 + 品味工件设计权归 supervisor + 先诊断再派活）
+- 变更：`references/docs-organization-protocol.md` + `docs-format-templates.md` 新增 `experiments/` 文档类型（优化 baseline / 结果快照，供后续优化轮在同一测量协议下对比）+ closed-issue 归档约定（issue 判定 resolved/wontfix 时整条移入 `docs/issues/archive/closed.md`，domain 文件只留 open）
+- 变更：`codex/config.toml` `plan_mode_reasoning_effort` high→xhigh；bundled 插件 `browser-use` → `browser` + 新增 `chrome`
+- 变更：`references/skill-review-principles.md` substitution-path 测试扩展到覆盖 deletions（删除也隐含"保证在别处存续"的断言，需核实）
+- 变更：`statusline.sh`、hooks（ask-recommend-gate / desktop-notify / llm-judge）、`create-commit` skill 及多个 review/create command、references 的对齐同步
+
 ## 2026-06-09
 
 - 新增：`deep-discuss` skill — 在动手前一起把 tradeoff 想清，但不产出 plan.md；遵循 `references/deep-discuss-style.md`，install.sh 自动 symlink

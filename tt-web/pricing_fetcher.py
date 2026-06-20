@@ -13,6 +13,7 @@ TTL_SECONDS = 7 * 24 * 3600
 ROOT = Path(__file__).resolve().parent
 CACHE_PATH = ROOT / "state" / "pricing_cache.json"
 FALLBACK_PATH = ROOT / "pricing.json"
+ESTIMATED_PRICING_MODELS = {"glm-5.1", "glm-5.2"}
 
 logger = logging.getLogger(__name__)
 _FUZZY_LOGGED = set()
@@ -24,13 +25,13 @@ def get_pricing(cache_path=CACHE_PATH, fetcher=None, now=None):
     cache_path = Path(cache_path)
     cached = _read_fresh_cache(cache_path, now_fn())
     if cached is not None:
-        return cached
+        return _with_bundled_supplements(cached)
 
     fetch = fetcher or _fetch_litellm_pricing
     try:
         data = fetch()
         _write_cache(cache_path, data, now_fn())
-        return data
+        return _with_bundled_supplements(data)
     except Exception as exc:
         logger.warning("Pricing fetch failed, using bundled fallback: %s", exc)
         return _fallback_pricing()
@@ -79,6 +80,10 @@ def resolve_model_key(model, pricing):
     return None
 
 
+def is_estimated_pricing_model(model):
+    return _base_model_name(model) in ESTIMATED_PRICING_MODELS
+
+
 def _read_fresh_cache(cache_path, now):
     if not cache_path.exists():
         return None
@@ -104,6 +109,21 @@ def _write_cache(cache_path, data, fetched_at):
         )
     except OSError:
         logger.warning("Could not write pricing cache to %s", cache_path)
+
+
+def _with_bundled_supplements(data):
+    if not isinstance(data, dict):
+        return data
+
+    # Bundled entries fill holes in fresh LiteLLM cache data without changing
+    # upstream prices. GLM-5.1/5.2 use zai/glm-5 as a GLM-family estimate.
+    bundled = _fallback_pricing()
+    if not bundled:
+        return data
+    merged = dict(data)
+    for key, value in bundled.items():
+        merged.setdefault(key, value)
+    return merged
 
 
 def _fetch_litellm_pricing():
@@ -140,3 +160,7 @@ def _log_unknown(model):
         return
     _UNKNOWN_LOGGED.add(model)
     logger.warning("Unknown pricing model: %s", model)
+
+
+def _base_model_name(model):
+    return (model or "").split("[", 1)[0]

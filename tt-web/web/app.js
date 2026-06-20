@@ -3,6 +3,7 @@
   window.ttWebCharts = charts;
 
   const palette = ["#0f766e", "#2563eb", "#b7791f", "#be4458", "#4d7c0f", "#7c3aed", "#0e7490", "#a16207"];
+  const rangeDays = { "7d": 7, "30d": 30, "90d": 90, "6m": 180, "1y": 365, "2y": 730 };
 
   // Absolute timestamps are rendered in the timezone the server (this machine)
   // currently resolves from its OS/TZ setting — never a hardcoded zone, and never
@@ -57,6 +58,20 @@
     return (select && select.value) || params().get("range") || "30d";
   }
 
+  function autoTimeDim(range) {
+    if (range === "all") {
+      return "month";
+    }
+    const days = rangeDays[range] || 30;
+    if (days <= 90) {
+      return "day";
+    }
+    if (days <= 365) {
+      return "week";
+    }
+    return "month";
+  }
+
   function setParam(key, value) {
     const next = params();
     if (value) {
@@ -77,6 +92,11 @@
       link.href = url.pathname + url.search;
       const current = url.pathname === window.location.pathname;
       link.setAttribute("aria-current", current ? "page" : "false");
+    });
+    qsa("[data-preserve-range]").forEach((link) => {
+      const url = new URL(link.getAttribute("href"), window.location.origin);
+      url.searchParams.set("range", range);
+      link.href = url.pathname + url.search;
     });
   }
 
@@ -108,12 +128,12 @@
     if (range) {
       range.addEventListener("change", () => {
         setParam("range", range.value);
-        load();
+        load(false);
       });
     }
     const refresh = qs("#refresh");
     if (refresh) {
-      refresh.addEventListener("click", () => withRefresh(refresh, load));
+      refresh.addEventListener("click", () => withRefresh(refresh, () => load(true)));
     }
     updateNavLinks();
   }
@@ -215,21 +235,55 @@
     qs("#today-cost").textContent = money(data.today.cost_usd);
     qs("#today-tokens").textContent = integer(data.today.tokens) + " tokens";
     qs("#week-cost").textContent = money(data.week.cost_usd);
-    qs("#week-tokens").textContent = integer(data.week.tokens) + " tokens";
+    if (data.week.window && data.week.window.start && data.week.window.end) {
+      const start = new Date(data.week.window.start);
+      const end = new Date(data.week.window.end);
+      qs("#week-tokens").textContent = `${integer(data.week.tokens)} tokens · 周一 ${fmtAbs(start)} → ${fmtAbs(end)}`;
+    } else {
+      qs("#week-tokens").textContent = integer(data.week.tokens) + " tokens";
+    }
     renderProviderQuota("claude", data.rate_limits.claude);
     renderProviderQuota("codex", data.rate_limits.codex);
 
+    const costHistory = data.cost_over_time || legacyCostHistory(data.daily_cost_30d || []);
+    const costGranularity = data.cost_over_time_granularity || "day";
     chart("dailyCost", "daily-cost-chart", {
       type: "line",
       data: {
-        labels: data.daily_cost_30d.map((row) => row.date),
-        datasets: [
-          dataset("Claude Code", data.daily_cost_30d.map((row) => row.claude_cost), 0, { fill: false }),
-          dataset("Codex", data.daily_cost_30d.map((row) => row.codex_cost), 1, { fill: false }),
-        ],
+        labels: costHistory.rows.map((row) => row.x),
+        datasets: costHistory.columns.map((column, index) =>
+          dataset(agentLabel(column), costHistory.rows.map((row) => row.values[column]), index, {
+            fill: false,
+            spanGaps: true,
+          })
+        ),
       },
       options: chartOptions(),
     });
+    const costMeta = qs("#cost-over-time-meta");
+    if (costMeta) {
+      costMeta.textContent = `${rangeLabel(getRange())} · ${costGranularity} buckets · historical rollup`;
+    }
+    const coverage = qs("#cost-over-time-coverage");
+    if (coverage) {
+      const earliest = data.rollup_coverage && data.rollup_coverage.earliest_date;
+      if (earliest && data.rollup_coverage.partial_before_range) {
+        coverage.hidden = false;
+        coverage.textContent = `历史自 ${earliest} 起累积；更早未采集。`;
+      } else {
+        coverage.hidden = true;
+        coverage.textContent = "";
+      }
+    }
+    const costLink = qs("#cost-over-time-link");
+    if (costLink) {
+      const url = new URL("/explore", window.location.origin);
+      url.searchParams.set("range", getRange());
+      url.searchParams.set("x", costGranularity);
+      url.searchParams.set("group", "agent");
+      url.searchParams.set("metric", "cost");
+      costLink.href = url.pathname + url.search;
+    }
 
     chart("topProjects", "top-projects-chart", {
       type: "bar",
@@ -250,6 +304,42 @@
       },
       options: chartOptions({ scales: { x: { stacked: true }, y: { stacked: true, beginAtZero: true } } }),
     });
+  }
+
+  function legacyCostHistory(rows) {
+    return {
+      columns: ["claude-code", "codex"],
+      rows: rows.map((row) => ({
+        x: row.date,
+        values: {
+          "claude-code": row.claude_cost,
+          codex: row.codex_cost,
+        },
+      })),
+    };
+  }
+
+  function agentLabel(column) {
+    if (column === "claude-code") {
+      return "Claude Code";
+    }
+    if (column === "codex") {
+      return "Codex";
+    }
+    return column || "value";
+  }
+
+  function rangeLabel(value) {
+    const labels = {
+      "7d": "7d",
+      "30d": "30d",
+      "90d": "90d",
+      "6m": "6m",
+      "1y": "1y",
+      "2y": "2y",
+      all: "All history",
+    };
+    return labels[value] || value || "30d";
   }
 
   function resetText(epoch) {
@@ -544,12 +634,12 @@
   }
 
   async function initOverview() {
-    async function load() {
-      const data = await api("/api/overview", { range: getRange() });
+    async function load(force) {
+      const data = await api("/api/overview", { range: getRange(), force: force ? "1" : undefined });
       renderOverview(data);
     }
     bindShell(load);
-    await load();
+    await load(false);
   }
 
   async function initSessions() {
@@ -566,7 +656,7 @@
     if (sort) {
       sort.addEventListener("change", load);
     }
-    await load();
+    await load(false);
   }
 
   function renderSessions(rows) {
@@ -630,6 +720,7 @@
 
   window.TTWeb = {
     api,
+    autoTimeDim,
     bindShell,
     chart,
     chartOptions,

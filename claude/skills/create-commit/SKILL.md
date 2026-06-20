@@ -50,3 +50,33 @@ description: >-
 - Per-bullet derivability test：每条候选 bullet 自问「reviewer 能从 subject + diff 推出来吗」，能 → drop
 - 不附 Co-Authored-By
 - 用 heredoc 传递 body（`git commit -m "$(cat <<'EOF' ... EOF)"`）
+
+## 格式锚定示例
+
+单改动，无 body：
+```bash
+git commit -m "refactor(commands): organize slash commands into namespaced subdirectories"
+```
+
+单改动，有 body：
+```bash
+git commit -m "$(cat <<'EOF'
+feat(llm): replace LiteLLM with native provider SDK adapters
+
+- Native OpenAI/Anthropic/Gemini adapters, no translation layer
+- Attempt-count retry with native SDK error classification
+EOF
+)"
+```
+
+多改动（subject 概括这组改动的共同意图，而非罗列各模块名；无统一意图时点明范围，如 `fix several typos across docs`）：
+```bash
+git commit -m "$(cat <<'EOF'
+Overhaul auth and harden the connection pool
+
+- feat(auth): add JWT refresh with a sliding window
+- fix(db): resolve connection-pool leak under high concurrency
+- refactor(middleware): extract request validation into a shared module
+EOF
+)"
+```

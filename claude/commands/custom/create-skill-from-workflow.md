@@ -124,7 +124,7 @@ origin: 2026-05-01
 
 ### 落点
 
-按 form factor + scope（facet 1 + facet 3 决定）落到对应位置：
+按 form factor + scope（由「任务范围与触发」facet 决定）落到对应位置：
 
 | form factor | scope | 路径 |
 |---|---|---|

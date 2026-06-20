@@ -14,8 +14,17 @@ STATUS_FILE="$HOME/.claude/tt-status.json"
 if [ -n "$input" ]; then
   tmp=$(mktemp "${STATUS_FILE}.XXXXXX" 2>/dev/null)
   if [ -n "$tmp" ]; then
+    previous_rate_limits="null"
+    if [ -f "$STATUS_FILE" ]; then
+      previous_rate_limits=$(jq -c 'if (.rate_limits | type) == "object" then .rate_limits else null end' "$STATUS_FILE" 2>/dev/null || printf 'null')
+    fi
     echo "$input" | jq --arg ts "$(date -u +%Y-%m-%dT%H:%M:%S+00:00)" \
-      '. + {_received_at: $ts}' > "$tmp" 2>/dev/null && mv "$tmp" "$STATUS_FILE" 2>/dev/null
+      --argjson previous_rate_limits "$previous_rate_limits" \
+      'if ((.rate_limits // null) == null) and (($previous_rate_limits | type) == "object")
+       then . + {rate_limits: $previous_rate_limits}
+       else .
+       end
+       | . + {_received_at: $ts}' > "$tmp" 2>/dev/null && mv "$tmp" "$STATUS_FILE" 2>/dev/null
   fi
 fi
 

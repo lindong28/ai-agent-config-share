@@ -45,7 +45,8 @@ function glmKey() {
 }
 
 // curl 一个 Anthropic 风格 /v1/messages 端点（GLM 与真 Anthropic 同 shape）；返回 assistant 文本或 null。
-function curlMessages(url, key, model, prompt, timeoutMs) {
+// temperature 可选：判官类用途传 0 求确定性（消除近阈值方差导致的偶发误判 + resend 抽奖）；不传则用端点默认。
+function curlMessages(url, key, model, prompt, timeoutMs, temperature) {
   const r = spawnSync(
     "curl",
     [
@@ -64,6 +65,7 @@ function curlMessages(url, key, model, prompt, timeoutMs) {
       JSON.stringify({
         model,
         max_tokens: 120,
+        ...(temperature !== undefined ? { temperature } : {}),
         messages: [{ role: "user", content: prompt }],
       }),
       url,
@@ -113,13 +115,15 @@ function claudeCli(prompt) {
 /**
  * 选第一个可用后端，返回判官的原始文本（已 trim）或 null。
  * 顺序：GLM（ZHIPU）→ Anthropic API（ANTHROPIC_API_KEY）→ claude -p 订阅。
+ * temperature 可选：HTTP 两层（GLM / Anthropic）透传；判官类调用传 0 求确定性。
+ * tier-3 的 `claude -p` 无温度旋钮，故有 HTTP key 时（恒走前两层）才保证 temp 生效。
  */
-function callJudge(prompt) {
+function callJudge(prompt, temperature) {
   const gk = glmKey();
-  if (gk) return curlMessages(GLM_URL, gk, GLM_MODEL, prompt, HTTP_TIMEOUT_MS);
+  if (gk) return curlMessages(GLM_URL, gk, GLM_MODEL, prompt, HTTP_TIMEOUT_MS, temperature);
 
   const ak = process.env.ANTHROPIC_API_KEY;
-  if (ak) return curlMessages(ANTHROPIC_URL, ak, ANTHROPIC_MODEL, prompt, HTTP_TIMEOUT_MS);
+  if (ak) return curlMessages(ANTHROPIC_URL, ak, ANTHROPIC_MODEL, prompt, HTTP_TIMEOUT_MS, temperature);
 
   return claudeCli(prompt);
 }

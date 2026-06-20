@@ -4,6 +4,7 @@ import logging
 import mimetypes
 import os
 import subprocess
+import threading
 import time
 from collections import defaultdict
 from datetime import datetime, timedelta
@@ -12,8 +13,10 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 from zoneinfo import ZoneInfo
 
-from aggregators import extract_metric, load_all_entries, pivot
+import rollup
+from aggregators import extract_metric, load_all_entries
 from parsers import claude_status, codex
+from pricing_fetcher import is_estimated_pricing_model
 
 
 ROOT = Path(__file__).resolve().parent
@@ -21,35 +24,47 @@ WEB_ROOT = ROOT / "web"
 logger = logging.getLogger("tt-web")
 _NETWORK_CACHE = {"ts": 0.0, "data": None}
 _NETWORK_TTL = 60.0
+_ROLLUP_LOCK = threading.Lock()
+_ROLLUP_THROTTLE_SECONDS = 600
+RANGE_DAYS = {"7d": 7, "30d": 30, "90d": 90, "6m": 180, "1y": 365, "2y": 730}
 
 
 def overview(query):
+    _maybe_run_rollup(query)
     entries = load_all_entries()
     now = datetime.now().astimezone()
-    range_window = _range_window(_first(query, "range", "30d"), now)
+    range_value = _first(query, "range", "30d")
+    range_window = _range_window(range_value, now)
+    cost_granularity = _auto_time_dim(range_value)
+    cost_over_time = rollup.query_pivot(cost_granularity, "agent", "cost", time_range=range_window)
     visible = _filter_time(entries, range_window)
     today_window = (_start_of_day(now), now)
     week_window = (_start_of_week(now), now)
     month_window = (_start_of_month(now), now)
     last_30_window = (now - timedelta(days=30), now)
+    week_summary = _summary(_filter_time(entries, week_window))
+    week_summary["window"] = {"start": week_window[0].isoformat(), "end": week_window[1].isoformat()}
 
     return {
         "rate_limits": _rate_limits(),
         "today": _summary(_filter_time(entries, today_window)),
-        "week": _summary(_filter_time(entries, week_window)),
+        "week": week_summary,
         "range": _summary(visible),
         "daily_cost_30d": _daily_cost(_filter_time(entries, last_30_window), now),
+        "cost_over_time": cost_over_time,
+        "cost_over_time_granularity": cost_granularity,
+        "rollup_coverage": _rollup_coverage(range_window),
         "top_projects_week": _top_projects(_filter_time(entries, week_window), limit=5),
         "model_mix_month": _model_mix(_filter_time(entries, month_window)),
+        "history_gap": rollup.history_gap(entries, now=lambda: now),
         "codex_cost_estimated": True,
     }
 
 
 def pivot_endpoint(query):
-    entries = load_all_entries()
+    _maybe_run_rollup(query)
     now = datetime.now().astimezone()
-    return pivot(
-        entries,
+    return rollup.query_pivot(
         _first(query, "x", "day"),
         _first(query, "group", "none"),
         _first(query, "metric", "cost"),
@@ -58,6 +73,12 @@ def pivot_endpoint(query):
         models=set(query.get("model", [])) or None,
         time_range=_range_window(_first(query, "range", "30d"), now),
     )
+
+
+def pivot_filters_endpoint(query):
+    _maybe_run_rollup(query)
+    now = datetime.now().astimezone()
+    return rollup.filter_options(time_range=_range_window(_first(query, "range", "30d"), now))
 
 
 def sessions_endpoint(query):
@@ -157,6 +178,7 @@ ROUTES = {
     "/api/timezone": timezone_endpoint,
     "/api/overview": overview,
     "/api/pivot": pivot_endpoint,
+    "/api/pivot-filters": pivot_filters_endpoint,
     "/api/sessions": sessions_endpoint,
     "/api/network": network,
 }
@@ -244,8 +266,64 @@ class Handler(BaseHTTPRequestHandler):
 def _range_window(value, now):
     if value == "all":
         return None
-    days = {"7d": 7, "30d": 30, "90d": 90}.get(value, 30)
+    days = RANGE_DAYS.get(value, 30)
     return (now - timedelta(days=days), now)
+
+
+def _auto_time_dim(range_value):
+    if range_value == "all":
+        return "month"
+    days = RANGE_DAYS.get(range_value, 30)
+    if days <= 90:
+        return "day"
+    if days <= 365:
+        return "week"
+    return "month"
+
+
+def _rollup_coverage(range_window):
+    earliest = rollup.earliest_rollup_date()
+    range_start = None
+    partial = False
+    if earliest:
+        if range_window is None:
+            partial = True
+        else:
+            range_start = range_window[0].astimezone().date().isoformat()
+            partial = range_start < earliest
+    return {
+        "earliest_date": earliest,
+        "range_start": range_start,
+        "partial_before_range": partial,
+    }
+
+
+def _maybe_run_rollup(query):
+    force = _first(query, "force", "0") == "1"
+    if not force and not rollup.needs_run(max_age_seconds=_ROLLUP_THROTTLE_SECONDS):
+        return None
+    return _run_rollup_safely()
+
+
+def _run_rollup_safely():
+    if not _ROLLUP_LOCK.acquire(blocking=False):
+        logger.info("rollup already running; skipping trigger")
+        return None
+    try:
+        result = rollup.run()
+        logger.info("rollup updated: %s", result)
+        return result
+    except Exception as exc:
+        logger.exception("rollup failed: %s", exc)
+        return None
+    finally:
+        _ROLLUP_LOCK.release()
+
+
+def _start_background_rollup():
+    thread = threading.Thread(target=_run_rollup_safely, name="tt-web-rollup", daemon=True)
+    thread.start()
+    return thread
 
 
 def _filter_time(entries, time_range):
@@ -349,7 +427,7 @@ def _session_stats(entries):
         "cost_usd": cost,
         "tokens": sum(extract_metric(entry, "total") for entry in entries),
         "messages": sum(entry.message_count for entry in entries),
-        "estimated": entries[0].agent_id == "codex",
+        "estimated": entries[0].agent_id == "codex" or is_estimated_pricing_model(entries[0].model),
     }
 
 
@@ -439,6 +517,7 @@ def main():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     server = ThreadingHTTPServer((args.host, args.port), Handler)
     logger.info("tt-web listening on http://%s:%s", args.host, args.port)
+    _start_background_rollup()
     server.serve_forever()
 
 

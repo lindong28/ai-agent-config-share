@@ -27,6 +27,9 @@
             <option value="7d">7d</option>
             <option value="30d" selected>30d</option>
             <option value="90d">90d</option>
+            <option value="6m">6m</option>
+            <option value="1y">1y</option>
+            <option value="2y">2y</option>
             <option value="all">All</option>
           </select>
           <button id="refresh" class="icon-btn" type="button" title="Refresh" aria-busy="false">⟳ Refresh</button>
@@ -70,6 +73,24 @@
             </select>
           </div>
           <div class="field">
+            <label for="agent-filter">Agent filter</label>
+            <select id="agent-filter" data-filter-control="agent" aria-label="Agent filter">
+              <option value="">All agents</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="project-filter">Project filter</label>
+            <select id="project-filter" data-filter-control="project" aria-label="Project filter">
+              <option value="">All projects</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="model-filter">Model filter</label>
+            <select id="model-filter" data-filter-control="model" aria-label="Model filter">
+              <option value="">All models</option>
+            </select>
+          </div>
+          <div class="field">
             <label>Status</label>
             <div id="pivot-status" class="status-line">Ready</div>
           </div>
@@ -86,6 +107,7 @@
             <h2>Pivot chart</h2>
             <span class="estimate-note">Cost cells can be — when model pricing is unknown.</span>
           </div>
+          <p class="estimate-note">Codex cost is 推算 from GPT-5 pricing when exact billing is not present. GLM-5.1/5.2 cost is 推算 from bundled GLM-5 pricing.</p>
           <div class="chart-box"><canvas id="pivot-chart"></canvas></div>
         </section>
         <section class="panel">

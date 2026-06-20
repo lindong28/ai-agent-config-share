@@ -26,6 +26,9 @@
             <option value="7d">7d</option>
             <option value="30d" selected>30d</option>
             <option value="90d">90d</option>
+            <option value="6m">6m</option>
+            <option value="1y">1y</option>
+            <option value="2y">2y</option>
             <option value="all">All</option>
           </select>
           <button id="refresh" class="icon-btn" type="button" title="Refresh" aria-busy="false">⟳ Refresh</button>
@@ -68,26 +71,29 @@
             <div id="codex-seven-updated" class="kpi-meta">—</div>
           </article>
         </section>
-        <p class="estimate-note">Codex cost is 推算 from GPT-5 pricing when exact billing is not present.</p>
+        <p class="estimate-note">Codex cost is 推算 from GPT-5 pricing when exact billing is not present. GLM-5.1/5.2 cost is 推算 from bundled GLM-5 pricing.</p>
         <section class="panel-grid" aria-label="Overview charts">
           <article class="panel panel-wide">
             <div class="panel-head">
-              <h2>30 day cost</h2>
-              <a class="panel-link" href="/explore?x=day&group=agent&metric=cost">→ Explore</a>
+              <h2>Cost over time</h2>
+              <span id="cost-over-time-meta" class="status-line">—</span>
+              <a id="cost-over-time-link" class="panel-link" href="/explore?x=day&group=agent&metric=cost">→ Explore</a>
             </div>
             <div class="chart-box"><canvas id="daily-cost-chart"></canvas></div>
+            <p id="cost-over-time-coverage" class="estimate-note" hidden></p>
+            <p class="estimate-note">Historical costs are frozen at collection-time pricing; Codex uses GPT-5 pricing and GLM-5.1/5.2 uses bundled GLM-5 pricing when exact billing is absent.</p>
           </article>
           <article class="panel">
             <div class="panel-head">
               <h2>Top projects this week</h2>
-              <a class="panel-link" href="/explore?x=project&group=none&metric=cost">→ Explore</a>
+              <a class="panel-link" data-preserve-range href="/explore?x=project&group=none&metric=cost">→ Explore</a>
             </div>
             <div class="chart-box short"><canvas id="top-projects-chart"></canvas></div>
           </article>
           <article class="panel">
             <div class="panel-head">
               <h2>Model mix this month</h2>
-              <a class="panel-link" href="/explore?x=model&group=agent&metric=total">→ Explore</a>
+              <a class="panel-link" data-preserve-range href="/explore?x=model&group=agent&metric=total">→ Explore</a>
             </div>
             <div class="chart-box short"><canvas id="model-mix-chart"></canvas></div>
           </article>

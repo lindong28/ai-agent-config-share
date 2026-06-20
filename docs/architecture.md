@@ -44,15 +44,17 @@ ai-agent-config-share 是一个 AI coding agent 的共享配置仓库，为 Clau
 
 | 子模块 | 职责 |
 |---|---|
-| `server.py` | ThreadingHTTPServer，提供 REST API（`/api/overview`、`/api/pivot`、`/api/sessions`、`/api/network`） |
+| `server.py` | ThreadingHTTPServer，提供 REST API（`/api/overview`、`/api/pivot`、`/api/filter`、`/api/sessions`、`/api/network`），overview / pivot / filter 接入 rollup |
 | `parsers/` | 日志解析器（claude.py / codex.py / claude_status.py），从 `~/.claude/projects/` 和 `~/.codex/sessions/` 读取 JSONL |
 | `aggregators.py` | 数据聚合层（pivot、指标提取、按时间 / 项目 / 模型分组） |
+| `rollup.py` + `state/rollup.db` | 成本历史持久层：把每日 cost/usage 滚动汇总写入 SQLite（WAL），支持最长约 2 年的成本历史；raw-log 保留期可短于 rollup 历史。可选 `com.ttweb.rollup` LaunchAgent 每小时刷新（默认不装，`install.sh rollup-daemon` 显式开启） |
 | `cache.py` | 文件级缓存（mtime + size 变更检测，避免重复解析大量 JSONL） |
 | `pricing_fetcher.py` + `pricing.json` | 模型定价数据 |
 | `web/` | 前端静态文件（HTML + JS + CSS），Chart.js 驱动的图表 |
 | `ip_check/` | 网络诊断子模块（DNS / IPv6 / 公网 IP / 代理检测），独立 CLI `ip-check` |
 | `tests/` | pytest 测试套件 |
 | `start.sh` / `stop.sh` / `status.sh` / `uninstall.sh` | tt-web 生命周期脚本，遵循 `service-operations-protocol.md` 统一动词约定，包装 tt-web dispatcher |
+| `docs/contracts/ux-contract.md` + `docs/operations/services.md` | tt-web 子项目自有文档：UX 验收契约 + 运维说明（含 rollup daemon 纳管） |
 
 ### 安装与验证
 
@@ -170,5 +172,6 @@ statusline.sh
     tt-web server.py
         ├→ parsers/（解析 ~/.claude/projects/ 和 ~/.codex/sessions/ 的 JSONL）
         ├→ aggregators.py（pivot / 指标提取）
+        ├→ rollup.py ⇄ state/rollup.db（每日汇总持久化，成本历史超出 raw-log 保留期）
         └→ web/（前端渲染 Chart.js 图表）
 ```

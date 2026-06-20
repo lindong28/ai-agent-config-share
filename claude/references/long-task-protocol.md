@@ -6,7 +6,9 @@
 
 ## 1. 何时启用 / 何时不启用
 
-启用条件：plan.md 顶部有 `Long-task mode` banner（见 §8）。banner 的存在本身就是激活信号，不需要其他判断。
+启用需要两个条件**同时**成立：
+1. **任务绑定到某个 plan**：当前任务就是在做该 plan 本身的工作——由 spawn-prompt / 用户指令指名其路径、无歧义指代要做它的工作，或你在接续该 plan 已开的工作（不要求报字面路径）。仓库里碰巧有 plan.md / state.md 不算绑定；说不准时默认不属于。
+2. **该 plan 处于长任务模式**：plan.md 顶部有 `Long-task mode` banner（见 §8）。
 
 不要在以下情况启用：
 - 单文件 / 单步骤的任务
@@ -268,7 +270,7 @@ AskUserQuestion 时附带：
 
 ## 8. plan.md banner
 
-激活长任务模式时，plan.md 顶部应有形如下面的 banner（由 `/create-plan --long-task` 自动插入）：
+激活长任务模式时，plan.md 顶部应有形如下面的 banner（由 `/create-plan` 默认 bootstrap 插入；用户 `--no-long-task` opt-out 时不插）：
 
 ```markdown
 > ⚠️ **Long-task mode** — 本 plan 处于长任务模式
@@ -280,7 +282,7 @@ AskUserQuestion 时附带：
 > 声称任务完成前必须实际跑本 plan 的 verify 步骤并贴出输出。
 ```
 
-Agent 读 plan.md 时看到这段就进入长任务模式。compact 之后重读 plan 的第一段也能恢复模式认知。
+Agent 读自己正在执行的 plan.md 时看到这段就进入长任务模式。compact 之后重读 plan 的第一段也能恢复模式认知。
 
 ---
 
@@ -293,7 +295,7 @@ Agent 读 plan.md 时看到这段就进入长任务模式。compact 之后重读
 | 把决策追溯写进 state.md | state 是 snapshot，会被覆盖，决策历史丢失 |
 | 跳过 verify 因为"改动很小" | 高反转成本判断没有"很小"档；不验证就别说完成 |
 | 只跑 internal verify（types/lint/unit test 全绿）就声称完成 | internal 是过程兜底不是交付证据；user-facing verify（Layer 2）才是交付 gate，必须实跑 + 贴可观察证据 |
-| 以为 banner 不在 plan 顶部就是没启用 | 如果 plans/<slug>/state.md 已经存在，且 plan.md 是同目录里的，那就是启用了——补 banner 而不是绕过协议 |
+| 把临时任务记进仓库里碰巧存在的无关 plan 的 state/journal | 文件存在、或话题沾边，都 ≠ 你在做这个 plan 本身的工作；不是在做它就别动它的 state/journal（见 §1） |
 | 静默 re-scope 让 plan 看起来还在轨道上 | 目标质变必须 AskUserQuestion；"我先做完再报告" 是这条协议针对的核心反模式 |
 | 实施中发现取舍偏好失效但当作"局部偏差"处理 | 取舍偏好横切 L1/L2/L3，失效会让多层同时失准；按 §6 目标质变处理，不是 §3 状态变化 |
 
