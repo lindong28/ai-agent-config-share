@@ -2,6 +2,15 @@
 
 > Append-only（最新在前）。仅记录用户可感知的变更。
 
+## 2026-07-12
+
+- 新增：`ask-user-mcp/` —— 给 Codex 提供 Claude 兼容 `AskUserQuestion` 的 MCP server（MCP elicitation 在 Codex TUI 弹原生表单）。install.sh 把它 symlink 到 `~/.codex/ask-user-mcp` 并装 node deps；`codex/config.toml` 新增 `[mcp_servers.ask-user]` + `[approval_policy.granular] mcp_elicitations = true`（替代旧 `approval_policy = "never"`，保持自动批准同时让表单浮现）
+- 新增：`review-gate` skill —— 生成 / 修改代码 / 脚本 / 常驻配置后、宣告完成或 commit 前的强制质量门（trivial 可声明式免审）。由 `claude/CLAUDE.md`「生成后 Review Gate」BINDING 绑定，`execute-plan` §3.5 逐工作单元调用（commit 粒度 = review 粒度 = 工作单元）
+- 变更：`/custom:update-docs` → `/custom:sync-docs` —— 合并旧 update-docs + review-docs：给改动描述则补该改动的文档、空参数则审查修全部；新增文档 / README 审查腿（`docs-review-principles.md` / `readme-review-principles.md`）
+- 新增：命令 `/custom:create-refactor-plan`（系统化重构 plan）、`/custom:absorb-skill`（把外部 skill 内容合并进本地）、`/custom:anatomize-llm-workflow`（拆解 LLM 工作流为质量诊断地图）、`/custom:borrow-design`（产出 borrow checklist）、`/custom:create-eval-harness`（给判定 prompt 建回归 eval）
+- 变更：`references/docs-organization-protocol.md` + `docs-format-templates.md` + `doc-updater` 新增**可选** `data/` 文档类型（`sources.md` 外部数据源能力 / 可信度分级；`inventory.md` 物化数据盘点 / 权威清单，大 store 靠 regen 命令生成）
+- 变更：`plan-execution-principles.md` Stop Gate 新增第 6 项「文档同步已处理」（任务 / plan 完成类 stop 前须执行 docs 同步或声明无可同步项）
+
 ## 2026-06-20
 
 - 新增：tt-web cost-history / rollup —— `rollup.py` 把每日 cost/usage 滚动汇总持久化到 `state/rollup.db`（SQLite WAL），支持最长约 2 年的成本历史；overview/pivot/filter API 接入 rollup，raw-log 保留期可短于 rollup 历史。新增**可选** `com.ttweb.rollup` macOS LaunchAgent（默认不装，`./tt-web/install.sh rollup-daemon` 显式开启，每小时刷新）

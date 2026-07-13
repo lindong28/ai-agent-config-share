@@ -208,3 +208,54 @@ operations/ 是目录而非单一格式——文件类型多样（services / mon
 ### 其它 operations/ 文件
 
 `monitoring.md` / `incidents.md` / `runbooks/<scenario>.md` 等没有强制模板——按内容写成 Mutable snapshot 或时间序列条目。incidents.md 内部可参考 experiences/ 的条目格式（按日期 append-only）。
+
+---
+
+## 4.13 data/
+
+### sources.md
+
+每个外部源让读者一眼回答：能取什么 / 可不可信 / 怎么调 / 何时该换。能力随权限与源改版变化，结论带实测日期。
+
+```markdown
+# 数据源
+
+> Mutable snapshot. 外部数据源的能力 / 可信度分级 / 用法。能力会变，结论带日期。
+
+## <源名>
+
+- **角色 / 覆盖**：提供哪些数据（实体 / 字段 / 粒度 / 覆盖范围）
+- **实测能力（YYYY-MM-DD）**：逐能力 / 逐接口探测结果——能取什么、**不能取什么**
+- **可信度分级**：A 可信（官方 + 守护 → 可作结论底座）/ B 脆弱（抓取 / 短史 / 无守护 → 标"存疑"、优先交叉校验）/ C 不可信（已知缺陷 / 过时 → 勿用；列出仅为警示，防 agent 重新发现误用）+ 理由
+- **用法 / 限制 / 认证**：入口、限频、token / 权限、已知坑
+- **扩展触发点**：什么时候需要升级权限 / 换源
+```
+
+### inventory.md
+
+回答"现在到底有什么数据、多新、哪份权威"。
+
+```markdown
+# 物化数据盘点
+
+> Mutable snapshot + 权威清单。项目实际物化 / 缓存了哪些数据、覆盖、新鲜度、source-of-truth、治理。
+> store 大 / 活时：权威清单由 `<regen 命令>` 生成，本文件是 curated 概览；store 小 / 静态 bundled 时：下表自身即权威，可省 regen。快照日期 <YYYY-MM-DD>。
+
+## Source-of-truth
+
+- source-of-truth：`<路径 / store>`（如 SQLite cache / parquet 目录）——数据真源
+- 权威清单生成命令：`<command>`（store 大 / 活时跑它再生成下表概览；静态 bundled 时下表自身即权威，无此命令）
+
+## 概览（<YYYY-MM-DD> 快照）
+
+可信度分级 A/B/C 定义见 sources.md；无外部源（inventory-only）时本列只标来源、省 A/B/C。
+
+| 数据集 / 表 | 数据源（可信度分级） | 覆盖（实体 / 范围 / 字段） | 新鲜度 | 规模 | 备注 |
+|---|---|---|---|---|---|
+| <name> | <数据源（A/B/C）> | <...> | <最近刷新 / as-of> | <rows / size> | <...> |
+
+## 治理
+
+- **弃用 / 不可信数据**：明确标出哪些勿用（避免 agent 误读为可用）
+- **清理 / 迁移注意**：<...>
+```

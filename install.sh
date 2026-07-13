@@ -15,8 +15,12 @@
 #     <repo>/claude/skills/agent-browser → ~/.claude/skills/agent-browser
 #                                      → ~/.codex/skills/agent-browser
 #     <repo>/claude/skills/create-commit → ~/.claude/skills/create-commit
+#     <repo>/claude/skills/deep-discuss  → ~/.claude/skills/deep-discuss
+#     <repo>/claude/skills/review-gate   → ~/.claude/skills/review-gate
+#     <repo>/ask-user-mcp                → ~/.codex/ask-user-mcp
 #   Sub-installers:
 #     <repo>/tt-web/install.sh           # localhost token-usage dashboard
+#     <repo>/ask-user-mcp/install.sh     # AskUserQuestion MCP server for Codex (node deps)
 #   npm global packages:
 #     MCP server CLI tools referenced by codex/config.toml
 #     agent-browser
@@ -345,6 +349,16 @@ if [ -d "$DEEP_DISCUSS_SKILL" ]; then
     link_one "$DEEP_DISCUSS_SKILL" "$HOME/.claude/skills/deep-discuss"
 fi
 
+# --- review-gate skill (post-generation review gate before completion/commit) ---
+
+REVIEW_GATE_SKILL="$SCRIPT_DIR/claude/skills/review-gate"
+
+if [ -d "$REVIEW_GATE_SKILL" ]; then
+    echo
+    echo "Installing review-gate skill:"
+    link_one "$REVIEW_GATE_SKILL" "$HOME/.claude/skills/review-gate"
+fi
+
 # --- Claude hooks (symlinked per-file so we never clobber an existing ~/.claude/hooks) ---
 # Only the hook scripts are linked here. Activation requires wiring two entries into
 # ~/.claude/settings.json (PreToolUse:ask-recommend-gate + Stop:desktop-notify) plus
@@ -516,6 +530,21 @@ if [ -x "$TT_WEB_INSTALL" ]; then
     echo
     echo "Running tt-web sub-installer:"
     "$TT_WEB_INSTALL"
+fi
+
+# --- ask-user-mcp sub-installer (Claude-compatible AskUserQuestion for Codex) ---
+# Symlink the server into ~/.codex so config.toml's static path resolves regardless
+# of where this repo is cloned, then install its runtime node deps.
+
+ASK_USER_INSTALL="$SCRIPT_DIR/ask-user-mcp/install.sh"
+
+if [ -x "$ASK_USER_INSTALL" ]; then
+    echo
+    echo "Running ask-user-mcp sub-installer:"
+    mkdir -p "$HOME/.codex"
+    link_one "$SCRIPT_DIR/ask-user-mcp" "$HOME/.codex/ask-user-mcp"
+    "$ASK_USER_INSTALL" \
+      || echo "WARN: ask-user-mcp deps install failed — AskUserQuestion MCP server will not start" >&2
 fi
 
 # --- Dependency validation + settings.json wiring (macOS-assumed) ---

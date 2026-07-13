@@ -145,6 +145,8 @@ check_symlink_tree "codex-agents"   "$SCRIPT_DIR/codex/agents"       "$HOME/.cod
 check_symlink      "agent-browser/claude" "$SRC_ROOT/skills/agent-browser" "$HOME/.claude/skills/agent-browser"
 check_symlink      "agent-browser/codex"  "$SRC_ROOT/skills/agent-browser" "$HOME/.codex/skills/agent-browser"
 check_symlink      "create-commit"        "$SRC_ROOT/skills/create-commit" "$HOME/.claude/skills/create-commit"
+check_symlink      "review-gate"          "$SRC_ROOT/skills/review-gate"   "$HOME/.claude/skills/review-gate"
+check_symlink      "ask-user-mcp"         "$SCRIPT_DIR/ask-user-mcp"       "$HOME/.codex/ask-user-mcp"
 check_symlink      "codeagent-wrapper"    "$SRC_ROOT/bin/codeagent-wrapper" "$HOME/.claude/bin/codeagent-wrapper"
 check_symlink      "statusline.sh"        "$SRC_ROOT/statusline.sh"         "$HOME/.claude/statusline.sh"
 check_symlink      "statusline-transcript.py" "$SRC_ROOT/statusline-transcript.py" "$HOME/.claude/statusline-transcript.py"
@@ -261,7 +263,7 @@ TOML="$HOME/.codex/config.toml"
 if [ ! -f "$TOML" ]; then
     emit FAIL "config.toml" "$TOML missing (manual merge step not done — see README)"
 else
-    for srv in openaiDeveloperDocs exa context7 github memory sequential-thinking; do
+    for srv in openaiDeveloperDocs exa context7 github memory sequential-thinking ask-user; do
         if grep -qF "[mcp_servers.$srv]" "$TOML"; then
             emit PASS "config.toml/mcp" "$srv entry present"
         else

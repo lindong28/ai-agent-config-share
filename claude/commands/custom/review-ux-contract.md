@@ -1,6 +1,6 @@
 ---
 argument-hint: <contract-path> [max-principle-per-subagent=3]
-description: 审查 ux-contract.md 并按原则修复，结合实际产品部署验证。
+description: 审查一份 ux-contract.md（通常在 docs/contracts/ 下）是否完整、可验收，并修复发现的问题。用于你写好一份验收契约、想在据此执行 UX 测试前审查它时。
 ---
 
 # review-ux-contract
@@ -15,13 +15,13 @@ description: 审查 ux-contract.md 并按原则修复，结合实际产品部署
 
 ## 工作流
 
-循环 3 阶段：**审查 → 决策 → 落地**。任一阶段产生改动后回到第 1 步重跑，直到无新发现。展示与提问风格遵循 `~/.claude/references/deep-discuss-style.md`——subagent 输出报告与主 session 提问都适用。
+循环 3 阶段：**审查 → 决策 → 落地**。任一阶段产生改动后回到第 1 阶段重跑，直到无新发现。展示与提问风格遵循 `~/.claude/references/deep-discuss-style.md`——subagent 输出报告与主 session 提问都适用。
 
 ### 1. 审查（分组并行 subagent）
 
-将 principles 按 `max-principle-per-subagent` 均匀分组，每组 spawn 一个 general-purpose subagent **并行**审查。值越小，每条原则获得越多注意力。
+将 principles 按 `max-principle-per-subagent` 均匀分组，每组 spawn 一个 general-purpose subagent **并行**审查。
 
-按目标 contract 在 L1 声明的产品类型，查 `~/.claude/references/domain-registry.md` 加载适用的 domain 原则文件，一并纳入上述分组；承接该 domain 原则的 subagent 额外收到对应文件，按其 review flag lens 审 registry 指明的契约段是否到位。
+按目标 contract 在 L1 声明的产品类型，查 `~/.claude/references/domain-registry.md` 加载适用的 domain 原则文件，一并纳入上述分组；承接该 domain 原则的 subagent 额外收到对应文件、以及主 session 从 registry 查得的该类型对应契约段名，按其 review flag lens 审该契约段是否到位（subagent 不读 registry，契约段名由主 session 解析后写入其 prompt）。
 
 每个 subagent 的输入：
 - `~/.claude/references/ux-contract-review-principles.md`（传完整文件——相邻原则提供边界上下文，帮助 subagent 避免报告属于其他组的发现；明确告知只应用分配给该 subagent 的那几条 principle）
@@ -38,7 +38,7 @@ description: 审查 ux-contract.md 并按原则修复，结合实际产品部署
 
 ### 3. 落地
 
-按用户选择 Edit。若有改动，回到第 1 步——按 Phase 1 完整流程重跑；无改动则循环终止。
+按用户选择 Edit。若有改动，回到第 1 阶段，按完整流程重跑；无改动则循环终止。
 
 若审查发现现有原则未覆盖某类问题，用 AskUserQuestion 把「是否改进 `~/.claude/references/ux-contract-review-principles.md`」作为一项决策交用户拍板——principles 缺口是高杠杆发现，只在 prose 里附带提及会被略过、用户遗忘后同类坑复发。改完后执行 `/custom:review-principles ux-contract-review-principles.md` 循环审查改动——principles 文件本身也要过 meta-原则。
 
@@ -47,5 +47,5 @@ description: 审查 ux-contract.md 并按原则修复，结合实际产品部署
 ## 反模式
 
 - **减少 subagent 数量**：不要因 diff 小而超出 max-principle-per-subagent 分组上限——分组参数保证每条原则获得充分注意力，不因工作量看似少就放宽。
-- **跳过重跑**：不要因改动小或"显然安全"而跳过 Phase 3 的重跑循环——编辑者对自己改动有 confirmation bias，重跑的价值恰恰在于独立于编辑者的判断。
+- **跳过重跑**：不要因改动小或"显然安全"而跳过第 3 阶段的重跑循环——编辑者对自己改动有 confirmation bias，重跑的价值恰恰在于独立于编辑者的判断。
 - **重跑 prompt 不中立**：重跑时给 subagent 的 prompt 必须是中立重审，禁止把「上一轮 fix 想达成什么 / 去确认它生效」当成功判据喂给 subagent。确认式框架（"verify 这个 fix 解决了 X" / "确认没 reintroduce Y"）把 subagent 推向印证编辑者的修复而非独立挖洞，让编辑者自伤引入的 over-correction 撑过多轮。

@@ -36,7 +36,7 @@ origin: 2026-05-28
 
 | 形态 | 处理 |
 |---|---|
-| ux-contract 路径（含 L1 + L2 verify 段） | 进入主流程 |
+| ux-contract 路径（含 L1〔产品全貌 + 访问入口 + 认证〕+ L2 verify 段 + domain 验收段〔适用时〕） | 进入主流程 |
 | 路径不存在 / 文件缺少 L2 verify 段 | 拒绝执行；提示先跑 `/custom:create-ux-contract` |
 
 ## 引用文件
@@ -46,33 +46,51 @@ origin: 2026-05-28
 | `~/.claude/references/long-task-protocol.md` | 生成 plan.md 时 | §8 banner 格式（plan 有此 banner 时整个协议自动 BINDING） |
 | `~/.claude/references/plan-execution-principles.md` | 任何 Codex session stop 时、supervisor 考虑停止时、构造 fix/test prompt 时、裁决 step pass 时 | Stop Gate 段；§3 sample-pass + §4 判据与产物诚实性；§5 交接信息 |
 | `~/.claude/references/ux-test-patterns.md`（+ `./docs/contracts/ux-test-patterns.md` 若存在） | 构造 test prompt 时 | 测试方法论 + 执行 patterns |
-| `~/.claude/references/domain-registry.md` 指明的 domain 测试模式文件（仅 contract 声明对应产品类型时） | 构造 test prompt 时 | 对应 domain 的失败形状 |
+| `~/.claude/references/domain-registry.md` 指明的 domain 测试模式文件（仅 ux-contract 声明对应产品类型时） | 构造 test prompt 时 | 对应 domain 的失败形状 |
 
 ---
 
 ## 主流程（lens，不是步骤清单）
 
+**控制骨架**（gate 链 + 修复循环；节点详情见对应小节）：
+
+```
+Plan 生成〔§1〕
+  └[Plan 确认门]→ ⟳{ Test 阶段〔§2.1〕
+                    →[裁决：真实性核对 · 并发归因 · 收敛判定〔§2.2〕]
+                    → 有可即时修复项 ─是→ Fix〔§2.3〕→[裁决：re-test 范围〔§2.4〕]→ 回 Test 阶段
+                                     └否→ 出循环 }
+  → Commit〔§3〕→ Handoff〔§4〕
+```
+
+| 骨架构件 | 成员 |
+|---|---|
+| gate | Plan 确认门 · pass 真实性核对 · 收敛判定 · Commit 判据 · Handoff 前置 |
+| method | Test 阶段 · Fix session |
+| output | plan/state/journal · issues/* · commit · handoff |
+| 贯穿出口 | 任何 session / supervisor 停止前过 Stop Gate（`plan-execution-principles.md` §0）· 欠明确 / 高代价分支走 AskUserQuestion · 合法非完成停止按 `plan-execution-principles.md` §5 交接信息 交接 |
+
 ### 1. Plan 生成（ux-contract → test plan）
 
 读 ux-contract，生成 test plan：
 
-**L2 翻译**：ux-contract 的每条 L2 verify → agent-executable 测试步骤。翻译要求：
+**L2 翻译**：ux-contract 的每条 L2 verify → agent-executable test step。翻译要求：
 - 保留维度完整性——每条 L2 verify 必须有对应的 test step，不丢维度
-- 翻译成 agent 可执行的形式：操作序列 + 观测点 + pass/fail 判据
+- 翻译成 agent 可执行的形式：操作序列 + 观测点 + 判据；判据形态随 verify 而定——客观可判的用二元 pass/fail，主观 / 视觉 / 人工对照类 verify 用 judgment + evidence（意图 bar + 证据），不强凑二元阈值
 - 产品访问入口、认证信息从 ux-contract 摘出，写进 test plan 顶部
 
 **L3 补充**：对每条 L2 test step，考虑追加 agent-level 内部验证来增强 L2 判定的可信度。思考 lens：用户看不到但 agent 可以获取的信息中，哪些能增强或质疑 L2 判定？常见的 L3 信息来源包括但不限于：
 
-| 信息来源 | 获取方式示例 | 增强什么判定 |
-|---|---|---|
-| 网络请求/响应 | browser network 日志、DevTools | 功能是否真实触发后端 |
-| 应用日志 | 读 log 文件或 stdout | 错误/异常检测 |
-| 数据库/API 状态 | 执行查询或 curl | 数据一致性 |
-| 性能指标 | performance API、加载时间测量 | 响应延迟 |
+| 信息来源 | 增强什么判定 |
+|---|---|
+| 网络请求/响应 | 功能是否真实触发后端 |
+| 应用日志 | 错误/异常检测 |
+| 数据库/API 状态 | 数据一致性 |
+| 性能指标 | 响应延迟 |
 
 L3 是可选增强，不替代 L2 判定——L2 pass 但 L3 发现异常 → 记为 issue 但不阻断 L2 判定。
 
-**domain 验收段翻译（仅 contract 含 domain 验收段时）**：该段每项不是二元 pass/fail，而是 **judgment + evidence**——翻译成的 test step 要：(a) 在机制验收已要求的**同一次端到端 playthrough** 上顺带采该项写明的**证据类型**；(b) 额外跑一个该 domain **最易失败的切片**（如游戏开局 churn 期）；(c) 对照该项写的**意图 bar** 判断（judge 模型 / 人工），附证据。失败形状参考 `~/.claude/references/domain-registry.md` 指明的 domain 测试模式文件。
+**domain 验收段翻译（仅 ux-contract 含 domain 验收段时）**：该段每项不是二元 pass/fail，而是 judgment + evidence——翻译成的 test step 要：(a) 在机制验收已要求的同一次端到端 playthrough 上顺带采该项写明的证据类型；(b) 额外跑一个该 domain 最易失败的切片（如游戏开局 churn 期）；(c) 对照该项写的意图 bar 判断（judge 模型 / 人工），附证据。失败形状参考 `~/.claude/references/domain-registry.md` 指明的 domain 测试模式文件。
 
 **落点**：`plans/<YYYYMMDD>-<HHmm>-<contract-slug>-ux-test/`（contract-slug 由 ux-contract 文件名去后缀推导，HHmm 为执行开始时的 24 小时制时分）
 
@@ -177,6 +195,7 @@ Bash({
 - 修复范围：只修 issue 描述的问题，不做额外重构
 - 内部 verify：修复后跑项目已有的测试/lint/类型检查
 - **不修改 ux-contract / plan.md / state.md**——这些由 supervisor 维护
+- 若某 issue 的修复需要产品 / 设计 / 叙事形态决策（多种合理形态、非纯机制 bug）→ 不要自行选定实现，stop 并在产出中标注该 issue 需回 supervisor 走产品决策（Stop Gate 的「最大化独立完成」不覆盖形态决策，避免误吞）
 
 #### 2.4 Supervisor 裁决（fix → re-test 之间）
 
@@ -219,7 +238,7 @@ Bash({
 - 发现的 ux-contract 矛盾（supervisor 在 §2.2 标记的）
 - journal.md 中值得用户关注的 lesson / decision
 
-若最终是合法 stop 而非完成，按 plan-execution-principles §5 格式交接。
+若最终是合法 stop 而非完成，按 `plan-execution-principles.md` §5「交接信息」交接。
 
 ---
 
@@ -230,8 +249,8 @@ Bash({
 | 问题 | 对应信息 |
 |---|---|
 | 什么坏了？ | 实际观察到的现象 |
-| 应该是什么？ | 引用 ux-contract L2 的具体条目（条目编号或原文） |
-| 在哪里？ | 产品位置（URL / 屏幕 / 元素） |
+| 应该是什么？ | 期望依据（据 issue 来源）：L2 verify 条目 / domain 验收项的意图 bar / L3 判定依据——引用具体条目编号或原文 |
+| 在哪里？ | 产品位置或后端定位（URL / 屏幕 / 元素 / 接口 / 数据位置） |
 | 怎么观察到？ | 触发条件或观察方法（操作路径 / 环境条件 / 检测命令） |
 | 有什么证据？ | 端到端证据（截图、DOM 状态、网络响应、日志等） |
 | 严重度 | Critical / High / Medium / Low |

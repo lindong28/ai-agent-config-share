@@ -542,6 +542,49 @@ th.numeric {
   color: var(--muted);
 }
 
+.stale-banner {
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  background: #fef3c7;
+  color: #92400e;
+  border-bottom: 1px solid #f59e0b;
+  font-size: 14px;
+}
+
+.stale-banner button {
+  cursor: pointer;
+  border: 1px solid #b45309;
+  border-radius: 6px;
+  padding: 4px 10px;
+  background: #f59e0b;
+  color: #1f2937;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.stale-banner button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.stale-banner code {
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.08);
+  font-size: 12px;
+}
+
+.stale-hint {
+  opacity: 0.85;
+  font-size: 13px;
+}
+
 .network-updated {
   color: inherit;
   font-size: 13px;

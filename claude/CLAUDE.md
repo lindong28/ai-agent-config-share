@@ -13,7 +13,7 @@
 遵循 `~/.claude/references/docs-organization-protocol.md` 维护项目文档。
 
 - **plan 完成后**：按协议 §5 同步机制将项目级信息同步到 docs/。其中**用户可感知变更的 ux-contract 同步走协议 §4.6 主路径**——由 create-plan 条件化对齐、execute-plan 应用 + 测试（§4 的 4a/4b）。
-- **自由 session**（不走 execute-plan / execute-ux-contract，它们已在 commit 步自动同步）：改动产生**用户可感知变化**时，落 commit 前先同步 [User] 档（README / CHANGELOG），ux-contract 演化走协议 §4.6 fallback（issue 路径）；开发者档（architecture / adr / experiences）留给手动 `/custom:update-docs`。
+- **自由 session**（不走 execute-plan / execute-ux-contract，它们已在 commit 步自动同步）：改动产生**用户可感知变化**时，落 commit 前先同步 [User] 档（README / CHANGELOG），ux-contract 演化走协议 §4.6 fallback（issue 路径）；开发者档（architecture / adr / experiences）留给手动 `/custom:sync-docs`。
 
 ## Surface Choices (Real Ones), Recommend One (BINDING)
 - For every set of options you give the user, surface them via `AskUserQuestion` (never inline prose), marking which one you recommend and why. Applies to every genuine choice the user owns (artifact shape, tradeoff, aesthetic), not work you could do yourself — regardless of stakes. 你自己能做、却包装成"你来做 X"/等用户执行的，是转嫁不是 choice → Plan Execution Principles §0 Stop Gate。
@@ -22,4 +22,8 @@
 ## Present Multimodal Content for User Review (BINDING)
 
 需要用户审核多模态内容（图片 / 视频 / GIF / 音频 等）、且 inline 展示无法让其完整查看 / 收听时，生成 HTML 页面并通过本地 web server 给出 http 链接，让用户在浏览器里直接查看 / 播放。禁止让用户逐个打开文件、只贴静态首帧、或仅给文件路径。
+
+## 生成后 Review Gate (BINDING)
+
+完成一轮代码/脚本/常驻配置（hooks、zshrc、skill 等 artifact）的生成或修改后、宣告完成或 commit 前，按 `~/.claude/skills/review-gate/SKILL.md` 执行 review gate——gate 未过不得宣告完成或 commit；trivial 可声明式免审（细则见 skill）。
 

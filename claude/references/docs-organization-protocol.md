@@ -8,7 +8,7 @@
 
 BINDING rule via CLAUDE.md。`docs/CLAUDE.md` 存在时协议生效——agent 在 docs/ 下工作时 Claude Code 自动加载该文件。
 
-通过 `/custom:update-docs` 初始化 docs/ 结构（见 §6）。
+通过 `/custom:sync-docs` 初始化 docs/ 结构（见 §6）。
 
 ---
 
@@ -38,7 +38,7 @@ User 是拿到源代码后需要部署、使用、运维的人——部署（环
 
 ```
 <project>/
-├── README.md                              # 产品说明、安装、使用 [User]
+├── README.md                              # 项目说明、安装、使用 [User]
 ├── CHANGELOG.md                           # 用户可感知的变更记录 [User]
 └── docs/
     ├── CLAUDE.md                          # 文档索引 + 协议规则（Claude Code 自动加载）[Developer]
@@ -63,6 +63,9 @@ User 是拿到源代码后需要部署、使用、运维的人——部署（环
     │   └── general.md                     # 通用问题
     ├── references/                        # 详细参考手册（项目特定，消费者因文件而异）
     │   └── <name>.md                      # 部署/配置/运维指南 [User]；字段定义/API 契约 [Developer]
+    ├── data/                              # 数据关注点（按项目需要：有外部源 和/或 物化数据时）[Developer]
+    │   ├── sources.md                     # 外部数据源：能力 / 可信度分级 / 用法
+    │   └── inventory.md                   # 物化数据盘点：有哪些 / 覆盖 / 新鲜度 / source-of-truth
     ├── experiments/                       # 实验结果 / 优化 baseline（curated，供未来优化对比）[Developer]
     │   └── <family>/<name>.json|md        # 结果快照（含测量协议 + 指标），按实验族分
     └── operations/                        # 运维入口（系统在跑什么、怎么管理）[User]
@@ -75,15 +78,16 @@ User 是拿到源代码后需要部署、使用、运维的人——部署（环
 
 | 文档 | 性质 | 核心问题 | 消费者 |
 |---|---|---|---|
-| README.md（根目录） | Mutable snapshot | 产品是什么、怎么用？ | User |
+| README.md（根目录） | Mutable snapshot | 项目是什么、怎么用？ | User |
 | CHANGELOG.md（根目录） | Append-only（newest first） | 用户能感知到什么变化？ | User |
 | architecture.md | Mutable snapshot | 系统是怎么组织的？ | Developer |
 | adr/ | Append-only（每条一文件） | 当初为什么这么设计？ | Developer |
-| plans/ | Append-only（归档 plan.md + spec.md） | 当初打算做什么、怎么做？ | Developer |
-| contracts/ | Mutable snapshot + heuristics | 用户能用什么功能？测试该覆盖什么？ | Developer |
+| plans/ | Append-only（归档 plan.md + spec.md；按项目需要） | 当初打算做什么、怎么做？ | Developer |
+| contracts/ | Mutable snapshot + heuristics（按项目需要） | 用户能用什么功能？测试该覆盖什么？ | Developer |
 | experiences/ | Append-only（按 topic 分文件） | 这个坑之前怎么踩过？ | Agent |
 | issues/ | Mutable（lifecycle，按 domain 分文件） | 有哪些发现的问题要解决？ | Agent |
 | references/ | Mutable snapshot（按项目需要） | 操作层面的详细定义和步骤是什么？ | 因文件而异 |
+| data/ | Mutable snapshot + 权威清单（按项目需要） | 外部源是什么/可信吗？物化数据有哪些/多新？ | Developer |
 | experiments/ | Append-only（结果快照，按实验族；按项目需要） | 当前 baseline 是什么、优化是否提升/回退？ | Developer |
 | operations/ | Mutable snapshot（按项目需要） | 系统在跑什么、怎么管理？ | User |
 | docs/CLAUDE.md | Mutable snapshot | 文档索引在哪？协议规则怎么加载？ | Developer |
@@ -99,7 +103,7 @@ User 是拿到源代码后需要部署、使用、运维的人——部署（环
 
 ### 执行模型
 
-文档更新由 **subagent 执行**（`doc-updater`），主 Agent 只负责判断触发条件和组装上下文。多个文档类型需要更新时，并行 spawn 多个实例。
+文档的读写判断（何时触发、写什么）是协议语义；具体由谁执行写入是实现细节——本配置下由 subagent（`doc-updater`）执行，主 Agent 只负责判断触发条件和组装上下文，多个文档类型需要更新时并行 spawn 多个实例。
 
 详见 `~/.claude/agents/doc-updater.md`。
 
@@ -143,11 +147,11 @@ Lens：当产品的功能、安装方式、使用方式发生变化时。与 CHA
 
 **何时读**
 
-Lens：当需要了解产品近期变化时——无论是用户查阅还是 agent 理解近期演进。
+Lens：当需要了解项目近期变化时——无论是用户查阅还是 agent 理解近期演进。
 
 **何时写**
 
-Lens：当产品发生了用户可感知的变化时——新功能、行为变更、bug 修复。纯实现重构 / 内部调整不记录。
+Lens：当项目发生了用户可感知的变化时——新功能、行为变更、bug 修复。纯内部实现重构不记录。
 
 触发例（不限于此）：
 - 完成了包含用户可感知变化的 plan
@@ -182,8 +186,7 @@ Lens：当你的变更让"系统怎么组织的"这个答案变了时——新�
 
 写入后自检——新 agent 读完应能回答：
 - 我要改 X 功能应该先看哪些文件？
-- 数据从用户输入到持久化怎么流？
-- 项目用了什么数据库/存储，schema 是什么？
+- 核心数据 / 状态从哪进入、经哪些阶段变换、最终落到哪？（若有持久化层：用什么存储、schema 是什么）
 - 加一个新功能，标准触及点有哪些？
 
 按需追加部署拓扑、外部依赖版本等。
@@ -397,9 +400,9 @@ Lens：当主文档需要引用的详细信息超出其自身粒度时。内容�
 
 ### 4.10 experiments/ — 优化 baseline（结果快照）[Developer]
 
-**What**：curated 的实验结果，作为未来优化的参考锚点——典型是「当前已达标的优化结果」存为 baseline，供将来的 prompt / pipeline / 算法优化轮次在**同一测量协议**下对比（是否提升 / 是否回退）。区别于实验过程中的**短暂 scratch**（原始批量跑、probe、中间产物）——后者不入 git、不进 docs/。本节的判据是「这条结果未来会被拿来对照吗」，不是「这是不是实验产出」。
+**What**：curated 的实验结果，作为未来优化的参考锚点——典型是「当前已达标的优化结果」存为 baseline，供将来的优化轮次（改 prompt / pipeline / 算法 / 参数 / 策略 等）在**同一测量协议**下对比（是否提升 / 是否回退）。区别于实验过程中的**短暂 scratch**（原始批量跑、probe、中间产物）——后者不入 git、不进 docs/。本节的判据是「这条结果未来会被拿来对照吗」，不是「这是不是实验产出」。
 
-**Format**：目录结构（按项目需要），按实验族分子目录。每个结果快照写入后不再修改，目录层面 **append-only**（新 baseline 增量加入，不覆盖旧的）。快照必须自带**测量协议**（judge / rubric 版本 / 数据集 / 指标定义）——否则未来无法可比对照。
+**Format**：目录结构（按项目需要），按实验族分子目录。每个结果快照写入后不再修改，目录层面 **append-only**（新 baseline 增量加入，不覆盖旧的）。快照必须自带**测量协议**（输入集 / 数据集、指标定义、以及评分方式——视实验类型而定：人工 rubric / LLM judge / benchmark 环境 / 回测设定 等）——否则未来无法可比对照。
 
 ```
 docs/experiments/
@@ -512,6 +515,7 @@ task 产物服务于一个具体任务的执行过程。任务完成后，其中
 | state.md Open Issues（任务结束时仍 open） | issues/ | 写入判断见 §4.8 写入 lens；写入与 domain 匹配的文件 |
 | 任务完成 + 产出包含用户可感知变化 | contracts/ + CHANGELOG.md（根目录） | 用户的产品体验是否发生了变化？ux-contract.md 走 §4.6 执行路径（主路径：随实现 apply；否则 → issue 间接路径），ux-test-patterns.md 可直接写入 |
 | diff 增删服务 / 改守护方式 / 监控链路 | operations/（+ README 服务章节）[User] | 见 §4.11；按 `service-operations-protocol.md` 检查生命周期脚本是否齐备 |
+| diff 改变外部源能力 或 物化数据当前态 | data/（sources.md / inventory.md）[Developer] | 见 §4.13；inventory 别手维护逐数据集清单，刷新走 **regen 命令** |
 
 ### 提升不是复制粘贴
 
@@ -521,9 +525,9 @@ task 产物的条目是执行过程中的即时记录，面向"接手同一任�
 
 ## 6. 初始化与更新 docs/
 
-通过 `/custom:update-docs [type...]` 命令手动触发。不指定类型则更新所有类型。文档不存在则创建，已存在则增量更新。创建时按 §2 目录结构初始化、生成 docs/CLAUDE.md 索引、按 `docs-format-templates.md` 初始化各文档。
+通过 `/custom:sync-docs [改了什么]` 命令手动触发。给出改动描述则补该改动的文档，空参数则审查并修全部现有文档。文档不存在则创建，已存在则增量更新。创建时按 §2 目录结构初始化、生成 docs/CLAUDE.md 索引、按 `docs-format-templates.md` 初始化各文档。
 
-详见 `~/.claude/commands/custom/update-docs.md`。
+详见 `~/.claude/commands/custom/sync-docs.md`。
 
 ---
 
@@ -531,8 +535,10 @@ task 产物的条目是执行过程中的即时记录，面向"接手同一任�
 
 | 反模式 | 为什么不要 |
 |---|---|
-| 没跑 update-docs 就手动创建零散文档 | 用 `/custom:update-docs` 初始化完整结构，确保 docs/CLAUDE.md 存在 |
+| 没跑 sync-docs 就手动创建零散文档 | 用 `/custom:sync-docs` 初始化完整结构，确保 docs/CLAUDE.md 存在 |
 | 把所有 journal 条目都提升 | 提升是过滤，不是转储——大量低价值条目稀释信号 |
 | Architecture 当 codemap / 文件列表用 | architecture.md 是概念层面的理解，不是 `find . -type f` 的输出 |
 | ADR 中只写结论不写 context 和 options | 没有理由和方案对比的决策不可审计、不可合理推翻 |
 | UX Contract 只列功能不写如何 verify | 测试 agent 需要知道怎么验证，不只是知道功能存在 |
+| inventory.md 给大 / 活 store 手维护逐数据集清单 | 随取数漂移、必然脱节甚至讲反主源；应"概览 + regen 命令"、权威清单由该命令生成（store 小 / 静态除外） |
+| sources.md 记成静态承诺、不带实测与日期 | 数据源能力 / 权限会变；能力与可信度分级须带实测探查与日期，否则误导后续 agent |

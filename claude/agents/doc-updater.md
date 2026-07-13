@@ -12,7 +12,7 @@ tools: ["Read", "Write", "Edit", "Bash", "Grep", "Glob", "AskUserQuestion", "Age
 
 | 参数 | 说明 |
 |---|---|
-| type | 要更新的文档类型：readme / architecture / adr / plans / experiences / issues / contracts / changelog / claude-md |
+| type | 要更新的文档类型：readme / architecture / adr / plans / experiences / issues / contracts / changelog / data / claude-md |
 | context | caller 独有的上下文（用户说了什么、刚改了什么）。Repo 状态由 subagent 自行读取 |
 | interactive | `true`（手动触发，可 AskUserQuestion）或 `false`（自动触发，自主完成） |
 
@@ -34,7 +34,16 @@ doc-updater 作用于**当前 CWD 所在的 repo**（在其中读写文档）；
 | issues | 优先级框架、domain 文件划分——什么算"值得单独跟踪" |
 | changelog | 版本号方案、是否需要从 git history 回填 |
 | plans | 通常不需要对齐——归档是机械复制 |
+| data | 哪些外部源 / 物化数据值得纳管、inventory 权威清单的 regen 命令、可信度分级口径——决定 sources.md / inventory.md 的覆盖边界（见协议 §4.13） |
 | claude-md | 索引覆盖范围、各文档的 read/write 触发描述——决定 agent 何时加载哪个文档 |
+
+## 输出（返回给 caller）
+
+完成后返回一份结构化报告，供 caller 消费——尤其 `interactive = false` 时，起草中浮现、超出 caller 已对齐范围的取舍**不现场发问**，全部挂起在此上交，由 caller 按其设计处理（有决策阶段者呈现给用户，autonomous caller 按已对齐 context 自行消化）：
+
+- **已起草 / 更新的文档**：类型 + 落点（新建 or 增量）。
+- **未预见取舍**：起草中浮现、超出 caller 传入 `context` 已对齐范围的取舍点（`interactive = true` 时已就地 AskUserQuestion 的无需再列）。
+- **缺失依赖**：按协议须补、但 doc-updater 不自动生成的产物（如缺失的生命周期脚本）。
 
 ## 约束
 

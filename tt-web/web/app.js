@@ -718,6 +718,91 @@
       .replace(/"/g, "&quot;");
   }
 
+  // Stale-code watch. Static assets are always served fresh, but the Python
+  // process freezes its code at boot — a long-lived daemon can serve outdated
+  // logic without any visible signal (the worst case: reading wrong data
+  // unknowingly). The server self-reports staleness via /api/health.stale; this
+  // banner makes it visible on every access path, including a long-open tab or a
+  // phone on the Tailnet that never went through `tt-web open`.
+  async function pollFreshness() {
+    try {
+      const res = await fetch(new URL("/api/health", window.location.origin), { cache: "no-store" });
+      if (!res.ok) {
+        return;
+      }
+      const json = await res.json();
+      if (json && json.stale) {
+        showStaleBanner();
+      }
+    } catch (e) {
+      /* transient; try again next tick */
+    }
+  }
+
+  function showStaleBanner() {
+    if (qs("#stale-banner")) {
+      return;
+    }
+    const banner = document.createElement("div");
+    banner.id = "stale-banner";
+    banner.className = "stale-banner";
+    banner.innerHTML =
+      '<span>服务代码已更新，当前页面数据可能来自旧版本。</span>' +
+      '<button type="button" id="stale-restart">重启并刷新</button>' +
+      '<span class="stale-hint">或在终端运行 <code>tt-web restart</code></span>';
+    document.body.insertAdjacentElement("afterbegin", banner);
+    const button = qs("#stale-restart", banner);
+    if (button) {
+      button.addEventListener("click", () => restartAndReload(button));
+    }
+  }
+
+  async function restartAndReload(button) {
+    button.disabled = true;
+    button.textContent = "重启中…";
+    try {
+      const res = await fetch(new URL("/api/restart", window.location.origin), { method: "POST" });
+      const json = await res.json().catch(() => ({}));
+      if (json && json.restarting === false) {
+        button.disabled = false;
+        button.textContent = "重启失败：新代码有语法错误";
+        return;
+      }
+    } catch (e) {
+      /* connection reset is expected: the server is re-exec'ing */
+    }
+    await waitForHealthy();
+    window.location.reload();
+  }
+
+  async function waitForHealthy() {
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      try {
+        const res = await fetch(new URL("/api/health", window.location.origin), { cache: "no-store" });
+        if (res.ok) {
+          const json = await res.json();
+          if (json && !json.stale) {
+            return;
+          }
+        }
+      } catch (e) {
+        /* still restarting */
+      }
+    }
+  }
+
+  function startFreshnessWatch() {
+    pollFreshness();
+    setInterval(pollFreshness, 30000);
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", startFreshnessWatch);
+  } else {
+    startFreshnessWatch();
+  }
+
   window.TTWeb = {
     api,
     autoTimeDim,

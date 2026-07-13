@@ -24,7 +24,7 @@ git clone git@github.com:Picnic-PGC/dongs-agent-config.git
 ```
 帮我把这个仓库的 AI agent 配置安装到我的用户目录。仓库路径是当前目录。
 
-1. 跑 ./install.sh。脚本会自动处理 symlink、tt-web 子安装、依赖检查、settings.json statusLine 写入；遇到交互式 [y/N] 提示按我意愿回答即可。
+1. 跑 ./install.sh。脚本会自动处理 symlink、tt-web 子安装、ask-user-mcp 子安装（给 Codex 装 Claude 兼容的 AskUserQuestion MCP server，需 node/npm）、依赖检查、settings.json statusLine 写入；遇到交互式 [y/N] 提示按我意愿回答即可。
 
 2. 合并配置文件——保留我已有的内容，只补入仓库里有但我没有的部分；同名但内容不同的 key/section 先给我看 diff 再问我决定：
    - claude/CLAUDE.md  → ~/.claude/CLAUDE.md
@@ -83,4 +83,4 @@ Dashboard 上 "Claude 5h / 7d quota" 两张卡片的数据来自 `~/.claude/tt-s
 
 ---
 
-*Last synced from upstream: 2026-06-20 13:12 GMT+8*
+*Last synced from upstream: 2026-07-13 09:36 GMT+8*

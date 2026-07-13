@@ -305,7 +305,8 @@ Agent 读自己正在执行的 plan.md 时看到这段就进入长任务模式�
 
 任务真正完成后（所有 Tasks done、所有 Open Issues resolved、verify 全部通过），处理方式：
 
-- 默认：保留 state.md 和 journal.md 在原目录，作为该任务的执行记录归档
+- 归档前先按 `docs-organization-protocol` §5「同步机制」执行文档同步（提升 task 产物中有项目级价值的条目 + 把本次 diff 改动同步进项目文档当前态）；协议未在该项目生效则跳过。这是完成的一部分——见 `plan-execution-principles` §0 Stop Gate「文档同步已处理」。
+- 默认：保留 state.md 和 journal.md 在原目录，作为该任务的执行记录归档——它们是执行期产物，不随 plan.md 进 docs/plans/。
 - 不主动删除——journal 里的认知未来同类任务还能复用
 
 如果 plan 被取消或废弃：在 plan.md banner 下加一行 `> Status: ABANDONED <date> — <reason>`，state/journal 保留但不再更新。

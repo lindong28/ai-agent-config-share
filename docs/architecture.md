@@ -21,9 +21,10 @@ ai-agent-config-share 是一个 AI coding agent 的共享配置仓库，为 Clau
 | `commands/custom/` | Slash command 定义（`/custom:create-plan`、`/custom:execute-plan`、`/custom:test-ux`、`/custom:create-ux-contract`、`/custom:execute-ux-contract` 等），是用户触发工作流的入口 |
 | `commands/routine/` | 日常运维命令（`/routine:session-export` / `/routine:session-import`） |
 | `references/` | 被 CLAUDE.md 和 commands 引用的协议文档（plan 执行原则、skill 创建原则、UX 测试 patterns、ux-contract 审查原则等），是行为规则的 source of truth。`domain-registry.md` 注册产品类型（功能型 / 游戏）并路由到 `references/game/` 下的 domain 专属验收原则；`service-operations-protocol.md` 定义仓库服务统一动词脚本约定 |
-| `agents/` | Claude sub-agent 定义（`doc-updater`：按 `docs-organization-protocol.md` 维护项目文档），被 `/custom:update-docs` 及 execute 类命令的文档同步步骤 spawn |
+| `agents/` | Claude sub-agent 定义（`doc-updater`：按 `docs-organization-protocol.md` 维护项目文档），被 `/custom:sync-docs` 及 execute 类命令的文档同步步骤 spawn |
 | `skills/agent-browser/` | 浏览器自动化 skill（agent-browser CLI 的用法、认证模式、模板脚本），被 `test-ux` / `execute-ux-contract` 等命令消费 |
 | `skills/create-commit/` | commit 工作流 skill（审查 working tree、生成 message、确认后 commit），被 `execute-plan` / `execute-ux-contract` 的 commit 步骤委托 |
+| `skills/deep-discuss/` + `skills/review-gate/` | deep-discuss：动手前一起想清 tradeoff（不产 plan.md）；review-gate：生成 / 修改 artifact 后、宣告完成或 commit 前的强制质量门，由 `claude/CLAUDE.md`「生成后 Review Gate」绑定、`execute-plan` §3.5 逐单元调用 |
 | `bin/codeagent-wrapper` | arm64 macOS 二进制，包装 Codex / Gemini CLI 为统一接口，被 `execute-plan` 和 `supervise` 命令调用 |
 | `bin/poll-progress.sh` | 增量读后台任务 `.output` 文件的轮询脚本，被 supervisor 三命令（`execute-plan` / `supervise` / `execute-ux-contract`）调用，替代原 TaskOutput 阻塞轮询 |
 | `statusline.sh` + `statusline-transcript.py` | Claude Code statusline 脚本：解析运行时 JSON 输入，渲染多行终端状态栏 + 持久化 `~/.claude/tt-status.json` 供 tt-web 消费 |
@@ -37,6 +38,7 @@ ai-agent-config-share 是一个 AI coding agent 的共享配置仓库，为 Clau
 | `AGENTS.md` | 用户级行为指引（手动 merge 到 `~/.codex/AGENTS.md`） |
 | `config.toml` | Codex CLI 配置（模型、MCP server、agent 定义、安全策略、profile），手动 merge |
 | `agents/` | Codex sub-agent 定义（explorer / reviewer / docs-researcher），每个 `.toml` 文件定义模型、sandbox 模式和 developer instructions |
+| `ask-user-mcp/`（仓库根） | MCP server（node），通过 MCP elicitation 给 Codex 提供 Claude 兼容的 `AskUserQuestion` 表单工具。由 `codex/config.toml` 的 `[mcp_servers.ask-user]` 注册 + `[approval_policy.granular] mcp_elicitations = true` 使表单浮现；install.sh 把它 symlink 到 `~/.codex/ask-user-mcp` 并装 node deps |
 
 ### tt-web/ — 可观测性 Dashboard
 

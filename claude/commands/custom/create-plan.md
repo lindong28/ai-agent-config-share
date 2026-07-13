@@ -7,7 +7,7 @@ origin: 2026-04-30
 
 # create-plan
 
-入口 command：从模糊任务描述出发，访谈用户对齐关键决策，写出**可被另一个 session 落地实现**的 plan.md。
+入口 command：从模糊任务描述出发，访谈用户对齐关键决策，写出可被另一个 session 落地实现的 plan.md。
 
 ## 何时使用
 - 显式 `/create-plan <task description>`
@@ -18,17 +18,27 @@ origin: 2026-04-30
 | 参数 | 必需 | 说明 |
 |---|---|---|
 | task description | ✓ | 模糊任务描述（自由文本）。任务范围 / 使用形态 等 alignment 信息也可一并写入；也可以是 spec.md 路径 |
-| spec | ✗ | spec.md 路径（来自 `/create-spec` 或手写）。提供则 §2 中 L1 / 取舍偏好 / L2 三个 facet 跳过对齐——plan 直接以 spec 为契约，本 command 聚焦 L3 |
+| spec | ✗ | spec.md 路径（来自 `/create-spec` 或手写）。spec 覆盖时（L1/L2/L3 = §1 三层产物意识）：L1 / 取舍偏好 跳过对齐、plan 引用 spec，本 command 聚焦 L3；L2 不跳过——不再访谈用户，但仍把 spec 的 verify 维度翻译成 implementer-executable 步骤 inline 进 plan。spec 未覆盖某 facet（如手写 spec 略过）则回退对齐它 |
 | Best-of-N | ✗ | 默认 single plan。在 task 中说"给我 N 份方案" / "Best-of-N" / 类似措辞 → 触发并行 fan-out（N=2-5）|
-| no-long-task | ✗ | **默认启用 long-task 模式**；opt-out 详见 §2「长任务模式」 |
+| no-long-task | ✗ | 默认启用 long-task 模式；opt-out 详见 §2「长任务模式」 |
 
 ---
 
-## Consumer 与产物意识
+## 工作流总览
+
+单趟 pipeline，分支点用【】标（L1/L2/L3 = §1 三层产物意识）：
+
+align（§2 各 facet：L1 → 取舍偏好 → L2 → L3 + 横切）→【spec 覆盖的 facet 跳过 align，plan 引用 spec】→【Best-of-N：align 收敛后 fan-out N 个 writer、用户挑选】→ 写 plan.md（§3）→ 审查（`/custom:review-plan`，loop-until-clean gate）→【long-task 默认启用：定稿后 bootstrap state.md / journal.md + banner】→ handoff。
+
+align 是深度活、不并行；审查是 gate——未收敛不进 bootstrap / handoff；三个【】分支各在 §2 决策、§3 执行。
+
+---
+
+## Consumer 意识 + plan 的输入声明与内容取舍
 
 plan.md 由 implementer（新 claude code session）+ reviewer（`/custom:review-plan`）阅读——除让 reader 不重读本会话就能推进 / 审外，还须凭 verify 步骤自证完成、让 reviewer 能审取舍（详见 §1 三层 framing + §3 必答项）。
 
-**plan.md 是 review / 实施的唯一入口**。引用上游工件（spec.md / PRD / design doc）时，plan 自身要在文档显眼处（典型：顶部"输入"段）说明：上游路径 + 上游覆盖什么 lens（如"L1 / 横切取舍由 spec 承载，详见 spec.md §X"）+ plan 自身聚焦什么（如"本 plan 含 L3 设计 + L2 verify 的实施版"）。
+**唯一入口**：plan.md 是 review / 实施的唯一入口。引用上游工件（spec.md / PRD / design doc）时，plan 自身要在文档显眼处（典型：顶部"输入"段）说明：上游路径 + 上游覆盖什么 lens（如"L1 / 横切取舍由 spec 承载，详见 spec.md §X"）+ plan 自身聚焦什么（如"本 plan 含 L3 设计 + L2 verify 的实施版"）。
 
 判据：facts inline 进 plan 会节省 N 次 implementer 跳转 → 含（典型如 API 调用模板、外部规范摘录、可复用代码具体定位）；planner 研究过程 / alignment 草稿 / 推翻方案中间路径 → 不含。
 
@@ -42,41 +52,41 @@ plan.md 由 implementer（新 claude code session）+ reviewer（`/custom:review
 
 - **Layer 1 (L1) — 最终产物 + 使用方式**：implementer 完成实施后交给『真实使用者』的东西 + 使用者拿来做什么决策 / 后续动作。同样物理形式的产物用途不同会彻底改变需要的设计深度（例：AIGC 对比报告"选一个上线"vs"取长补短做一个新的"）。L1 是反推起点——错了 L2/L3 全错。
 - **Layer 2 (L2) — 用户视角 verify**：从 L1 使用者视角看『算交付完成』的可观测条件，独立于内部实现。TDD-style：先写"成功的样子"，再设计实现。
-- **Layer 3 (L3) — 设计决策 + 内部 verify**：在 L1+L2 框定下做的实现取舍（管线分层、接口契约、可观测性、错误处理）+ 每个取舍的内部自检（types / lint / 单元测试 / 关键不变式）。**本 command 的主战场。** 内部 verify 跟设计交替进行——不是把所有 verify 推到末尾。
+- **Layer 3 (L3) — 设计决策 + 内部 verify**：在 L1+L2 框定下做的实现取舍（管线分层、接口契约、可观测性、错误处理）+ 每个取舍的内部 verify（types / lint / 单元测试 / 关键不变式）。本 command 的主战场。内部 verify 跟设计交替进行——不是把所有 verify 推到末尾。
 
 ### plan 中按层落地
 
 plan 必须把三层在文档中串起来——每层在 plan 里应该写什么：
 
-- **L1**：最终产物形态、使用者、调用模式、范围 / 约束 / 假设——**有 spec 时引用 spec，不重述**
-- **L2**：用户视角 verify——**有 spec 时仍要 inline 写在 plan 里**，但形式从 spec 的"用户审用措辞"翻译成 implementer-executable 步骤（命令+预期输出 / subagent 模拟用户流程 / 截图比对脚本 / 评测分数检查等）。spec 是契约源头，plan 是 implementer 执行版；维度一致，形式不同。详见 §3「必答项表格」+ `~/.claude/references/plan-review-principles.md` Principle 11
+- **L1**：最终产物形态、使用者、调用模式、范围 / 约束 / 假设——有 spec 时引用 spec，不重述
+- **L2**：用户视角 verify——有 spec 时仍要 inline 写在 plan 里，形式从 spec 的"用户审用措辞"翻译成 implementer-executable 步骤；维度一致，形式不同（具体形态与"不丢维度"约束见 §2 L2 facet + §3「必答项表格」+ `~/.claude/references/plan-review-principles.md` Principle 4「Spec Verify Coverage」）
 - **L3**：用户决策与取舍、planner research 得到的 actionable facts（API 调用模板、外部规范、可复用代码具体定位）、内部 verify
 - **横切 — UX 契约影响**：plan 改变用户可感知行为且产品有 `docs/contracts/ux-contract.md` 时，把用户可感知那片 L1/L2 投影到 ux-contract 对应 section 是 plan 的 deliverable；详见 §2「UX 契约影响」facet（无影响则一句话 skip）
 
 ### 横切：取舍偏好（贯穿 L1 + L2 + L3）
 
-取舍偏好不属于任何一层——用户在多个维度之间的相对优先级会在每一层触发 multi-option 决策（L1 产物形态、L2 verify 维度阈值、L3 实现取舍）。用户初始描述**通常不会包含这些权衡**，需要显式对齐。AIGC / UX-heavy 产品尤其常见；纯 binary feature 任务可省略。
+取舍偏好不属于任何一层——用户在多个维度之间的相对优先级会在每一层触发 multi-option 决策（L1 产物形态、L2 verify 维度阈值、L3 实现取舍）。用户初始描述通常不会包含这些权衡，需要显式对齐。AIGC / UX-heavy 产品尤其常见；纯 binary feature 任务可省略。
 
 ### 关于顺序
 
-建议访谈顺序：**L1 → 取舍偏好 → L2 → L3**（有 spec 时前 3 步 spec 已对齐，本 command 直接进 L3）。但**允许迭代回退**——L3 设计踩到没对齐的实现取舍，回头补。严格顺序不重要，反推方向 + 横切意识重要。
+建议访谈顺序：L1 → 取舍偏好 → L2 → L3（有 spec 时前 3 步 spec 已对齐，本 command 直接进 L3）。但允许迭代回退——L3 设计踩到没对齐的实现取舍，回头补。严格顺序不重要，反推方向 + 横切意识重要。
 
-§2 除了三层 + 横切，还会对齐**元决策** facet：单 plan vs Best-of-N（输出策略）。长任务模式**默认启用**——仅在用户显式 opt-out 时跳过 bootstrap，详见 §2「长任务模式」。
+§2 除了三层 + 横切，还会对齐元决策 facet：单 plan vs Best-of-N（输出策略）。长任务模式默认启用——仅在用户显式 opt-out 时跳过 bootstrap，详见 §2「长任务模式」。
 
 ### 风格与取舍
 
 遵循 `~/.claude/references/deep-discuss-style.md` 的风格。本 skill 的关键 framing：
 
 - **质量 ≫ 速度**：plan 质量直接决定实现质量。plan 阶段可以接受更长的访谈、更高频率的用户介入；绝大部分人机交互应该集中在这个阶段，不是实现阶段。
-- **没有绝对对错的点必须让用户拍**。多个合理方案并存时，把它们摆出来；不要替用户决策。
+- **让用户拍板**：没有绝对对错的点必须让用户拍。多个合理方案并存时，把它们摆出来；不要替用户决策。
 
 ---
 
 ## 2. 需要对齐的点（不限于此）
 
-planner 和 user 对齐的过程中，至少要让以下几类信息变清晰。**这不是顺序步骤**——可以并行、迭代、回头补；**也不是穷举清单**——任务特性需要的其他对齐点（compliance / 隐私 / 国际化 等）随时加入。
+planner 和 user 对齐的过程中，至少要让以下几类信息变清晰。这不是顺序步骤——可以并行、迭代、回头补；也不是穷举清单——任务特性需要的其他对齐 facet（compliance / 隐私 / 国际化 等）随时加入。
 
-通用 lens：**"为了不让 implementer 走偏，我现在缺哪些只能用户回答的信息？"** 剩余决策都能被 agent 合理 default 时，对齐充分。
+通用 lens："为了不让 implementer 走偏，我现在缺哪些只能用户回答的信息？" 剩余决策都能被 agent 合理 default 时，对齐充分。
 
 **反推方向**：每个对齐 facet 带 Layer 标——L1 是 L2/L3 的契约、L2 是 L3 的契约。建议从 L1 开始扫到 L3，但访谈中暴露上层缺失时允许回退补。任何时候问『这是为最终产物服务的吗？』，否就是设计走偏。
 
@@ -89,28 +99,28 @@ planner 和 user 对齐的过程中，至少要让以下几类信息变清晰。
 
 ### 最终产物 + 使用形态 + 使用方式（L1）
 
-> **若同任务 spec.md 已存在**：本 facet 跳过——L1 由 spec 承载，plan 直接引用 spec.md 中相应段落，不重述。
+> **若同任务 spec.md 已存在且覆盖 L1**：本 facet 跳过——L1 由 spec 承载，plan 直接引用 spec.md 中相应段落，不重述。spec 未覆盖 L1（典型：手写 spec）则回退，正常对齐本 facet——不能因 spec 在场就默认它已承载 L1。
 
-**对齐**：plan 落地后给『真实使用者』的产物形态、使用形态（怎么调用 / 在哪运行）、**使用方式（拿到产物用来做什么决策 / 后续动作）**。这是一切设计的反推起点。
+**对齐**：plan 落地后给『真实使用者』的产物形态、使用形态（怎么调用 / 在哪运行）、使用方式（拿到产物用来做什么决策 / 后续动作）。这是一切设计的反推起点。
 
-**lens**：使用者是谁、怎么调用、**拿到产物用来做什么**？同样物理形式的产物在不同用途下需要的设计深度可以差好几个数量级——一份对比两个 AIGC 系统的报告，用来"选一个上线"和用来"取长补短做一个新的"，前者只需黑盒分数，后者必须拆解到算法/模块层让用户能迁移局部优势。什么明确算成功？这个定义往往主观，取决于使用者心中的使用场景，需要主动挖出来。哪些约束 / 假设是硬限制？planner 在做哪些隐式假设、需要用户确认？
+**lens**：使用者是谁、怎么调用、拿到产物用来做什么？同样物理形式的产物在不同用途下需要的设计深度可以差好几个数量级——一份对比两个 AIGC 系统的报告，用来"选一个上线"和用来"取长补短做一个新的"，前者只需黑盒分数，后者必须拆解到算法/模块层让用户能迁移局部优势。什么明确算成功？这个定义往往主观，取决于使用者心中的使用场景，需要主动挖出来。哪些约束 / 假设是硬限制？planner 在做哪些隐式假设、需要用户确认？
 
 **常见询问方向**（不限于此）：
 
 - **使用者形态**：终端用户（GUI / CLI / web）/ 程序代码（lib import / API / SDK）/ 系统组件（webhook / event consumer）/ 部署环境（k8s operator / sidecar）— 哪一种或哪几种？
 - **调用模式**：一次性同步 / 长任务异步 / 流式 / 事件触发？
 - **运行 / 部署边界**：本地脚本 / 进程内 lib / 独立 CLI / 长驻服务 / 分布式集群？
-- **使用方式 / 下游用途**：使用者拿到产物**用来做什么决策 / 后续动作**？同形式不同用途会彻底改变评价指标和分析深度（如对比报告"选一个 vs 取长补短"决定要不要拆到算法层；技术 spec"立刻实施 vs 长期演进参考"决定要不要写 trade-off 和迁移路径）
+- **使用方式 / 下游用途**：使用者拿到产物用来做什么决策 / 后续动作？同形式不同用途会彻底改变评价指标和分析深度（如对比报告"选一个 vs 取长补短"决定要不要拆到算法层；技术 spec"立刻实施 vs 长期演进参考"决定要不要写 trade-off 和迁移路径）
 - **成功定义**：什么算明确成功？这个定义往往主观——"质量达标"指什么、"用户可用"指什么、"完成"是 demo-able 还是 prod-ready？使用者心中的成功画面可能跟 planner 默认的不一样，必须挖出来
-- **范围与边界**：用户最初描述里的模糊点在哪？某个被当作"目标"的措辞是否存在多种合理解读？什么明确**不**做？失败时该怎么应对？
+- **范围与边界**：用户最初描述里的模糊点在哪？某个被当作"目标"的措辞是否存在多种合理解读？什么明确不做？失败时该怎么应对？
 - **硬限制**：合规 / 性能 / 成本 / 兼容性 / 安全等非功能性限制？
 - **隐式假设**：planner 识别出但需要用户确认的假设（外部系统行为、接口契约、数据格式等）
 
-**为什么这点是反推起点**：跳过它直接谈取舍最常见的失败是**过度设计**（设计了根本不需要的层）或**遗漏设计**（漏掉真正需要详细设计的层）。L1 错了，L2 用户视角 verify 全错、L3 设计取舍维度也全错——所以这里必须先收敛。
+**为什么这点是反推起点**：跳过它直接谈取舍最常见的失败是过度设计（设计了根本不需要的层）或遗漏设计（漏掉真正需要详细设计的层）。L1 错了，L2 用户视角 verify 全错、L3 设计取舍维度也全错——所以这里必须先收敛。
 
 ### 取舍偏好
 
-> **若同任务 spec.md 已存在**：本 facet 跳过——取舍偏好的横切对齐由 spec 承载。plan 的 L3 设计需**与 spec 中已对齐的取舍方向一致**，发现 plan 阶段必须推翻 spec 中的取舍才能继续时，按 long-task-protocol §6 处理（spec 是契约）。
+> **若同任务 spec.md 已存在且覆盖取舍偏好**：本 facet 跳过——取舍偏好的横切对齐由 spec 承载（spec 未覆盖此项时，如手写 spec 略过取舍，则回退对齐本 facet，不因 spec 在场就默认承载）。plan 的 L3 设计需与 spec 中已对齐的取舍方向一致，发现 plan 阶段必须推翻 spec 中的取舍才能继续时，按 long-task-protocol「处理 plan 偏离」段（§6）处理（spec 是契约）。
 
 **对齐**：用户在多个维度之间的相对优先级。
 
@@ -125,7 +135,7 @@ planner 和 user 对齐的过程中，至少要让以下几类信息变清晰。
 
 ### 用户视角 verify（L2）
 
-> **若同任务 spec.md 已存在**：本 facet **不跳过，但语义变成翻译**——输入是 spec 的 user-facing verify dimensions（措辞偏用户审用），输出是 implementer-executable 翻译版（命令+预期输出 / subagent 模拟用户流程 / 截图比对脚本 / 评测分数断言等）写进 plan。每条 spec dimension 都要有 plan 对应步骤；翻译不能丢维度、不能把多维 acceptance 降级成单一 binary check。详见 plan-review-principles Principle 11。
+> **若同任务 spec.md 已存在且覆盖 L2**：本 facet 不跳过（区别于 L1 / 取舍），但语义变成翻译——输入是 spec 的 user-facing verify dimensions（措辞偏用户审用），输出是 implementer-executable 翻译版（命令+预期输出 / subagent 模拟用户流程 / 截图比对脚本 / 评测分数断言等）写进 plan。每条 spec dimension 都要有 plan 对应步骤；翻译不能丢维度、不能把多维 acceptance 降级成单一 binary check。spec 未覆盖 L2（如手写 spec 无 verify 维度）则回退，从 L1 originate L2、正常对齐本 facet——不因 spec 在场就默认它承载 L2。详见 plan-review-principles Principle 4「Spec Verify Coverage」。
 
 **对齐**：从 L1 使用者视角看『算交付完成』的可观测条件。这层独立于内部实现，应在设计取舍之前先收敛——类比 TDD 的 RED：先写"成功的样子"，再去想怎么实现。
 
@@ -147,13 +157,13 @@ planner 和 user 对齐的过程中，至少要让以下几类信息变清晰。
 
 ### UX 契约影响（条件化）
 
-> ux-contract 的 L1/L2 与 plan 的 L1/L2 **同构**（ux-contract L1 产品全貌 ↔ plan L1 最终产物、ux-contract L2 用户视角 verify ↔ plan L2）。所以本 facet 不另起一套机制：plan 改变用户可感知行为时，**把用户可感知那片 L1/L2 投影到 ux-contract 对应 section** 就是 plan 的 deliverable（详见 docs-organization-protocol §4.6 主路径）。投影出的契约 delta 进 plan 的 **user-facing surface**（plan 中供用户审阅签字的那部分，见 plan-review-principles §5）。
+> ux-contract 的 L1/L2 与 plan 的 L1/L2 同构（ux-contract L1 产品全貌 ↔ plan L1 最终产物、ux-contract L2 用户视角 verify ↔ plan L2）。所以本 facet 不另起一套机制：plan 改变用户可感知行为时，把用户可感知那片 L1/L2 投影到 ux-contract 对应 section 就是 plan 的 deliverable（详见 docs-organization-protocol 的 contracts/ 段主路径）。投影出的契约 delta 进 plan 的 user-facing surface（plan 中供用户审阅签字的那部分，见 plan-review-principles「User-Facing Surface Verify Coverage」）。
 
-**触发条件**：plan 改变**用户可感知行为**（新功能 / 行为变化 / 功能移除）**且**产品有 `docs/contracts/ux-contract.md`。纯内部 / 重构 / 无用户可感知变化、或产品无该文件 → 在 plan 的「UX 契约影响」段显式标「无影响 + 一句理由」后 skip，不强行对齐。
+**触发条件**：plan 改变用户可感知行为（新功能 / 行为变化 / 功能移除）且产品有 `docs/contracts/ux-contract.md`。纯内部 / 重构 / 无用户可感知变化、或产品无该文件 → 在 plan 的「UX 契约影响」段显式标「无影响 + 一句理由」后 skip，不强行对齐。
 
-**契约 delta 的 L2 verify**：投影出的 section 变更，其 verify 进 plan 的 L2，与 plan L2 同形态（implementer-executable），只是维度锚定在 ux-contract 该 section、并按 ux-contract 的验收 lens 校（**该 lens 见 create-ux-contract §1，维度非穷举**）。
+**契约 delta 的 L2 verify**：投影出的 section 变更，其 verify 进 plan 的 L2，与 plan L2 同形态（implementer-executable），只是维度锚定在 ux-contract 该 section、并按 ux-contract 的验收 lens 校（该 lens 见 create-ux-contract 的 Framing 段，维度非穷举）。
 
-**取舍是否需用户拍**：走 §2 开头 borderline 决策两条 path——直观、无新增取舍的翻译 planner 自己拍；浮现超出现有 L1/L2 的取舍则 `AskUserQuestion` 对齐、记**决策**。
+**取舍是否需用户拍**：走 §2 开头 borderline 决策两条 path——直观、无新增取舍的翻译 planner 自己拍；浮现超出现有 L1/L2 的取舍则 `AskUserQuestion` 对齐、记决策。
 
 **plan 中的产出**：「UX 契约影响」段写明——(a) 有无影响（无则一句理由即 skip）；(b) 动哪个 / 哪些 ux-contract section + 该 section 投影出的 L2 条目（进 user-facing surface）；(c) 对齐过的取舍决策（若有）；(d) 给 execute-plan 的指令：apply 投影出的契约 delta 进 ux-contract §X、按列出的 L2 条目验证——已批准意图，apply 之，不要自行新增本段未记录的改动。
 
@@ -163,18 +173,18 @@ planner 和 user 对齐的过程中，至少要让以下几类信息变清晰。
 
 **lens**：
 - 产物需要哪些具体的设计决策？哪些用户已有明确想法、哪些需要 planner 摆出候选方案让用户选？
-- 每个非平凡设计决策都该有对应的内部 verify——让 implementer 实现这个决策时能自检对错（types / lint / 单元测试 / contract test / 关键不变式断言）。内部 verify **跟设计交替进行**，不是把所有 verify 推到末尾。
+- 每个非平凡设计决策都该有对应的内部 verify——让 implementer 实现这个决策时能自查对错（types / lint / 单元测试 / contract test / 关键不变式断言）。内部 verify 跟设计交替进行，不是把所有 verify 推到末尾。
 
 **常见询问方向**（不限于此）：
 
 - **可观测性**：开发者如何观察产物执行过程？产物行为 / 生成质量出问题时，怎么通过观测物定位问题？
 - **管线设计**：产物是否需要分阶段管线？如果是，分几个阶段、阶段间契约（数据格式 / 错误传递）是什么？
 - **内部 verify 形式**：每个关键设计决策对应的检查（unit test / 类型签名 / contract test / 关键不变式断言）
-- **品味工件 ownership 与放量前校准**（交付物质量取决于 prompt / 生成内容 / LLM judge 时必答）：plan 写明品味工件（生成 prompt / judge rubric / 评分协议）的设计权归属——须显式指定、不默认归实现侧（具体分工与依据见 execute-plan §4.5）；并在放量前安排人工 ground-truth gate 校准自动 gate
+- **品味工件 ownership 与放量前校准**（交付物质量取决于 prompt / 生成内容 / LLM judge 时必答）：plan 写明品味工件（生成 prompt / judge rubric / 评分协议）的设计权归属——须显式指定、不默认归实现侧（具体分工与依据见 execute-plan 的「AIGC / 语义质量任务的监督升格」段）；并在放量前安排人工 ground-truth gate 校准自动 gate
 
 **关键**：选择权在用户——你的职责是梳理候选方案和 pros / cons 给 user，不是自己拍板。
 
-**L2 vs L3 verify 边界**：L2 是"使用者眼里算成功"的契约；L3 内部 verify 是"实现侧避免低级错误的兜底"。两者都要——内部对了不等于使用者满意（review 那边的 Principle 1 警示），但缺内部 verify 会把所有错误推到 L2 去 catch，迭代成本爆炸。
+**L2 vs L3 verify 边界**：L2 是"使用者眼里算成功"的契约；L3 内部 verify 是"实现侧避免低级错误的兜底"。两者都要——内部对了不等于使用者满意（review 那边的「Understand the Goal」警示），但缺内部 verify 会把所有错误推到 L2 去 catch，迭代成本爆炸。
 
 ### 输出策略
 
@@ -196,13 +206,13 @@ planner 和 user 对齐的过程中，至少要让以下几类信息变清晰。
 
 ---
 
-## 3. 输出：plan.md
+## 3. 产出到交付：写 plan → 审查 → bootstrap → handoff
 
 落点逻辑——长任务模式默认启用，子目录形态是默认。平铺仅在显式 opt-out 长任务 + 无 spec + 单 plan 时使用：
 
 | 条件 | 落点 |
 |---|---|
-| 默认（长任务启用，可选叠加 spec） | `./plans/<YYYYMMDD>-<short-name>/plan.md`（与 state.md / journal.md / spec.md 共存） |
+| 长任务启用 或 有 spec（默认路径） | `./plans/<YYYYMMDD>-<short-name>/plan.md`（与 state.md / journal.md / spec.md 共存） |
 | Best-of-N | `./plans/<YYYYMMDD>-<short-name>/plan-<i>.md`，子目录承载 N 份 |
 | Opt-out 长任务 + 无 spec + 单 plan | `./plans/<YYYYMMDD>-<short-name>.md`（平铺） |
 
@@ -212,9 +222,9 @@ planner 和 user 对齐的过程中，至少要让以下几类信息变清晰。
 
 格式自由，结构跟着任务走。**有 spec.md 时**：
 
-- "使用方式" / "取舍偏好 + 三层影响" 两项**可由 plan 引用 spec.md 对应段落满足，无须重述**（事实信息 / 决策方向，implementer 直接读 spec 即可）
-- "用户视角 verify"项**仍要 inline 写在 plan 里**——但形式从 spec 的"用户审用措辞"翻译成 implementer-executable 步骤（命令+预期输出 / subagent 模拟用户流程 / 截图比对脚本 / 评测分数断言）。每条 spec dimension 必须有 plan 对应步骤；翻译不能丢维度。详见 plan-review-principles Principle 11。
-- 顶部"输入"段按 §Consumer 与产物意识 落（spec.md 路径 + 覆盖 lens + plan 聚焦）
+- "使用方式" / "取舍偏好 + 三层影响" 两项可由 plan 引用 spec.md 对应段落满足，无须重述（事实信息 / 决策方向，implementer 直接读 spec 即可）
+- "用户视角 verify"项仍要 inline 写在 plan 里——但形式从 spec 的"用户审用措辞"翻译成 implementer-executable 步骤（命令+预期输出 / subagent 模拟用户流程 / 截图比对脚本 / 评测分数断言）。每条 spec dimension 必须有 plan 对应步骤；翻译不能丢维度。详见 plan-review-principles Principle 4「Spec Verify Coverage」。
+- 顶部"输入"段按「Consumer 意识 + plan 的输入声明与内容取舍」节落（spec.md 路径 + 覆盖 lens + plan 聚焦）
 
 内容必须让 implementer 能答出以下问题（不能答即失败；更多必要项见 `~/.claude/references/plan-review-principles.md`）：
 
@@ -222,19 +232,19 @@ planner 和 user 对齐的过程中，至少要让以下几类信息变清晰。
 |---|---|
 | 当前状态是什么（可观察事实，非主观判断） | "代码不好维护" / "现在很乱" |
 | 要做什么（明确指向新建/修改的具体文件、API、模块） | "整理一下" / "优化性能" |
-| **使用方式 / 下游用途**：使用者拿到产物用来做什么决策 / 后续动作（决定设计深度——如对比报告"选一个 vs 取长补短"） | 没说 → implementer 无从判断要做多深 |
-| **取舍偏好 + 三层影响**：用户在产品/UX/工程维度上的相对优先级，以及它在 L1 产物形态、L2 verify 维度阈值、L3 实现取舍各自塑造了什么；不适用任务（binary feature 等）需说明原因 | "随便选" / 没列 / 只列一句"用户说要好用" |
-| **用户视角 verify**（L2：覆盖 happy + error path 的可观测条件，独立于内部实现；**必须 implementer-executable form**——命令+预期输出 / subagent 模拟用户流程 / 截图比对脚本 / 评测分数断言 / 结构化 rubric。有 spec 时是 spec dimension 的翻译版，每条 spec dimension 必须有 plan 对应步骤） | "跑一下应该 OK" / "实现完了再看" / "类型对了就行" / "使用者满意"（spec 措辞照搬不翻译） |
-| **内部 verify**（L3：每个非平凡设计决策对应的实现侧自检——unit test / 类型签名 / contract test / 关键不变式断言；agent 可独立跑） | "走个 lint" / "看下编译过没过" |
-| **UX 契约影响**（用户可感知行为变化且产品有 ux-contract.md 时）：动哪个 / 哪些 ux-contract section + 该 section 投影出的 L2 条目（用 ux-contract 验收 lens 写、进 user-facing surface）+ 对齐过的取舍决策（若有）+ 给 execute-plan 的 apply 指令；无影响 / 产品无 ux-contract 需一句理由 skip | 用户可感知行为变化但 plan 对 ux-contract 只字未提（默认 drift）/ 记了契约 delta 却无对应 L2 verify |
-| **verify 步骤的人机边界**：每条 verify 标识 agent 可独立完成 vs 需人工介入；人工项必须说明自动化先兜底了哪些 | 没标 → implementer 不知道哪步会被 block |
-| 用户需要在 phase 边界做什么决策、为什么做、看什么材料做、怎么最短路径打开材料、如何回复 | "用户选一个方案" / "用户看一下 mock" |
+| 使用方式 / 下游用途：使用者拿到产物用来做什么决策 / 后续动作（决定设计深度——如对比报告"选一个 vs 取长补短"） | 没说 → implementer 无从判断要做多深 |
+| 取舍偏好 + 三层影响：用户在产品/UX/工程维度上的相对优先级，以及它在 L1 产物形态、L2 verify 维度阈值、L3 实现取舍各自塑造了什么；不适用任务（binary feature 等）需说明原因 | "随便选" / 没列 / 只列一句"用户说要好用" |
+| 用户视角 verify（L2：覆盖 happy + error path 的可观测条件，独立于内部实现；必须 implementer-executable form——命令+预期输出 / subagent 模拟用户流程 / 截图比对脚本 / 评测分数断言 / 结构化 rubric。有 spec 时是 spec dimension 的翻译版，每条 spec dimension 必须有 plan 对应步骤） | "跑一下应该 OK" / "实现完了再看" / "类型对了就行" / "使用者满意"（spec 措辞照搬不翻译） |
+| 内部 verify（L3：每个非平凡设计决策对应的 verify——unit test / 类型签名 / contract test / 关键不变式断言；agent 可独立跑） | "走个 lint" / "看下编译过没过" |
+| UX 契约影响（用户可感知行为变化且产品有 ux-contract.md 时）：动哪个 / 哪些 ux-contract section + 该 section 投影出的 L2 条目（用 ux-contract 验收 lens 写、进 user-facing surface）+ 对齐过的取舍决策（若有）+ 给 execute-plan 的 apply 指令；无影响 / 产品无 ux-contract 需一句理由 skip | 用户可感知行为变化但 plan 对 ux-contract 只字未提（默认 drift）/ 记了契约 delta 却无对应 L2 verify |
+| verify 步骤的人机边界：每条 verify 标识 agent 可独立完成 vs 需人工介入；人工项必须说明自动化先兜底了哪些 | 没标 → implementer 不知道哪步会被 block |
+| 用户需要在 phase 边界做什么决策、为什么做、看什么材料做、怎么最短路径打开材料、如何回复；无用户决策 gate 则说明"全自动执行、无需用户介入" | "用户选一个方案" / "用户看一下 mock" |
 | 用户首见面 / 顶层入口文档是否需要同步 | 没提 |
 | 哪些决策是访谈中没问、planner 自己拍的（"我默认 X，因为 Y"） | 没列 → reviewer 无从审 |
 
-人工验证的迭代速度远低于 agent 独立执行——所以且每个人工 gate 前优先用 agent 可独立完成的验证压低人工 gate 的失败概率。
+人工验证的迭代速度远低于 agent 独立执行——所以每个人工 gate 前优先用 agent 可独立完成的验证压低人工 gate 的失败概率。
 
-写作时可参考 `~/.claude/references/plan-creation-patterns.md`——非强制的 style / structure 模式，按任务情境 case-by-case 采纳，**不是 review gate**（gate 在 `plan-review-principles.md`）。
+写作时可参考 `~/.claude/references/plan-creation-patterns.md`——非强制的 style / structure 模式，按任务情境 case-by-case 采纳，不是 review gate（gate 在 `plan-review-principles.md`）。
 
 ### Best-of-N 输出（可选）
 
@@ -242,31 +252,21 @@ planner 和 user 对齐的过程中，至少要让以下几类信息变清晰。
 
 **fan-out 时机**：alignment（§2 全部 facets）只跑一次，结果对 N 个 writer 共享；fan-out 发生在 alignment 完全收敛之后、写 plan 之前。alignment 不并行——alignment 的价值在于深度，不是吞吐。
 
-**writer 独立性**（anti-default 警告）：每份 plan 由独立 sub-agent 产生（Agent tool 并发调用，单条响应里发 N 次）。每个 sub-agent 必须**独立做技术调研**——读 CLAUDE.md / README / 相关代码自己形成判断，不复用主 session 的研究 cache。否则 N 份 plan 会高度雷同，Best-of-N 失去意义。
+**writer 独立性**（anti-default 警告）：每份 plan 由独立 sub-agent 产生（Agent tool 并发调用，单条响应里发 N 次）。每个 sub-agent 必须独立做技术调研——读 CLAUDE.md / README / 相关代码自己形成判断，不复用主 session 的研究 cache。否则 N 份 plan 会高度雷同，Best-of-N 失去意义。
+
+**alignment 结论进 writer prompt**：writer 在隔离上下文里看不到主 session——§2 对齐出的 L1 / 取舍偏好 / L2 + 范围约束是它落地的契约，必须写进每个 writer 的 prompt（此时 plan 未写、spec 可能缺，prompt 是唯一通道）。同时把 plan 质量契约以路径形式指给 writer——§3 必答项 + `~/.claude/references/plan-review-principles.md`（能读文件的自己读，不复述），并给定输出路径 `plan-<i>.md`，使 N 份 plan 都过同一 review bar、可比可审。框定"必须含什么"，不封顶 writer 按运行时上下文补充。
 
 **风格变量注入**（可选）：fan-out 前，planner 基于对任务的理解可以提议 N 个互斥的风格角度（贴合任务领域，如"REST-first / 事件驱动 / 命令模式"或"最小可行 / 工程稳健 / 激进重构"），用 AskUserQuestion 让用户在"注入提议角度"和"全部用同一 prompt（采样多样性）"之间选。注入是放大差异的工具，不强制；任务领域不清晰时直接采样即可。
 
 **回传**：每个 writer 写完 plan-`<i>`.md 后向主 planner 返回 ≤120 字结构化摘要（方案核心 / 范围 / 关键路径 / 主要风险）。主 planner 不重读 plan 文件——基于摘要构造对比表给用户看。
 
-**审查与 handoff**：Best-of-N 阶段**不跑审查**。用户挑选某份后，对所选 plan 跑 §「审查」workflow，再走 §「Handoff」单 plan 形态。落选 plan 不归档、不删除——交给用户。
+**审查与 handoff**：Best-of-N 阶段不跑审查。用户挑选某份后，把所选 `plan-<i>.md` 重命名为 `plan.md`（成为子目录里的 canonical plan，与 state / journal / spec 并列），对它跑 §「审查」workflow，再走 §「Handoff」子目录形态（Best-of-N 产物落子目录，即便 opt-out 长任务也不用平铺形态）。落选 plan 不归档、不删除——交给用户。
 
 **N 上限**：≤5（避免并发过载与对比表噪音）。
 
-### 长任务模式 bootstrap
-
-默认执行——仅在 §2「长任务模式」对齐为 opt-out 时跳过本节。
-
-写完 plan.md 后做三件事——shape 由 `~/.claude/references/long-task-protocol.md` 绑定，照其里 "plan.md banner" / "state.md 写什么" / "journal.md 写什么" 三段的格式落：
-
-1. **plan.md 顶部插 banner**（紧跟 frontmatter / 标题之后，按 long-task-protocol 的 banner 段模板照抄）
-2. **同目录创建 `state.md`**：把 plan 里的步骤逐条转成 `[pending]` 任务条目（标题 / Goal / Verify 字段从 plan 步骤摘出来），Open Issues 段留空
-3. **同目录创建 `journal.md`**：只写 header（标题 + 用法引导块），不预填示例条目——让 implementer 第一次写时按协议格式自己落
-
-Best-of-N 模式下，长任务 bootstrap 等用户挑选 plan 后再做（在 §「Handoff」单 plan 形态前）；不为 N 份候选 plan 各 bootstrap 一份。
-
 ### 不留 Open Question：升级路径
 
-plan **不留 open question**。任何 OQ 必须先走升级：
+plan 不留 open question。任何 OQ 必须先走升级：
 
 1. **能 research 的** → planner 自查（读代码、查规范、跑命令 verify）
 2. **research 也答不出的** → 当场用 AskUserQuestion 问用户
@@ -276,7 +276,7 @@ plan **不留 open question**。任何 OQ 必须先走升级：
 允许在 plan 里留：
 
 - **TODO**：implementer 实施时要做但 plan 不指定 how 的工作
-- **risk**：planner 判断有风险（实现可能跑偏、外部依赖可能失效）的点 + 缓解策略
+- **risk**：planner 判断有风险（实现可能跑偏、外部依赖可能失效）的点 + 缓解策略。但可客观验证的 load-bearing 假设（plan-review-principles「Risk Surfacing and Response」的 objectively-verifiable 类，典型只读即可证实，如 grep / 跑只读命令）应在定稿前 probe 成事实写进 plan、不留作 risk；只有真正不确定、或 probe 需真实副作用 / 高成本的，才留作 risk
 
 不要为了"看起来完整"而幻觉细节，但也不要用 OQ 替代调研。
 
@@ -285,6 +285,16 @@ plan **不留 open question**。任何 OQ 必须先走升级：
 自检通过后、handoff 之前，执行 `/custom:review-plan <plan path>` 进行循环审查。循环未终止不进入 handoff——review-plan 的 gate 比 §3 表格更全，跳过会让 implementer 撞上未发现的 plan 缺陷。
 
 - **收敛性**：判断 finding 是否需修。需修 → 改 → 重审。循环到一轮无需修。
+
+### 长任务模式 bootstrap
+
+默认执行——仅在 §2「长任务模式」对齐为 opt-out 时跳过本节。在 §「审查」循环终止、plan 定稿之后做（state.md 要反映定稿后的步骤，不是审前草稿），handoff 之前。三件事——shape 由 `~/.claude/references/long-task-protocol.md` 绑定，照其里 "plan.md banner" / "state.md 写什么" / "journal.md 写什么" 三段的格式落：
+
+1. **plan.md 顶部插 banner**（紧跟 frontmatter / 标题之后，按 long-task-protocol 的 banner 段模板照抄）
+2. **同目录创建 `state.md`**：把 plan 里的步骤逐条转成 `[pending]` 任务条目（标题 / Goal / Verify 字段从 plan 步骤摘出来），Open Issues 段留空
+3. **同目录创建 `journal.md`**：只写 header（标题 + 用法引导块），不预填示例条目——让 implementer 第一次写时按协议格式自己落
+
+Best-of-N 模式下，长任务 bootstrap 等用户挑选 plan 后再做（在 §「Handoff」子目录形态前）；不为 N 份候选 plan 各 bootstrap 一份。
 
 ### Handoff
 
@@ -314,7 +324,7 @@ plan written: /abs/path/to/plans/<date>-<name>.md
 |---|------|---------|------|---------|------|
 | 1 | ... | ... | ... | ... | `plans/<date>-<name>/plan-1.md` |
 
-附一句"挑选完后告诉我哪份，我对它跑 §审查 再交付"。用户确认后对所选 plan 跑审查 → 走单 plan handoff 形态。
+附一句"挑选完后告诉我哪份，我对它跑 §审查 再交付"。用户确认后对所选 plan 跑审查 → 走 §「Handoff」子目录形态。
 
 ---
 
@@ -323,7 +333,7 @@ plan written: /abs/path/to/plans/<date>-<name>.md
 - **维度驱动访谈**：按固定维度清单扫一遍——会问用户已能从描述推出来的东西
 - **没对齐 L1（产物 + 使用形态 + 使用方式）就谈取舍**：维度全是错的——同样形式的产物用途不同，需要的设计深度可以差好几个数量级（如 AIGC 对比报告"选系统"vs"取长补短"）
 - **没对齐取舍偏好就写 L2 verify**：AIGC / UX-heavy 任务里，用户体验维度多且互相牵制，但 verify 维度优先级没跟用户拍——阈值全是 planner 默认，交付时争议
-- **verify 单层化**：只写 internal verify（types / lint / unit test）就声称设计完整 → plan 不知道交付的样子；只写 user-facing 不写每个非平凡设计决策的内部检查 → 错误全推到交付 gate，迭代成本爆炸
+- **verify 单层化**：只写 内部 verify（types / lint / unit test）就声称设计完整 → plan 不知道交付的样子；只写 user-facing 不写每个非平凡设计决策的内部 verify → 错误全推到交付 gate，迭代成本爆炸
 - **替用户决策**：把"分布式一致性用强一致还是最终一致"或"傻瓜式 vs 高级可调"这类高反转成本取舍自己拍——plan 阶段最需要用户拍板的事
 - **把 mandatory workflow gate 降级为用户选项**：§3 的 procedural steps（审查 / 长任务 bootstrap / Handoff 等）是 planner autonomous 执行的环节，不是设计取舍——停下来征求"要不要跑 review-plan / 是否 bootstrap" 是把本属 planner 的工作流决策推给 user。设计取舍 → AskUserQuestion；workflow gate → 直接执行。
 - **verify 没区分人机边界**：可自动化的 API / CLI / browser / DevTools 验证被写成"人工测试"；或需要用户真机判断的 manual gate 前没有用脚本 / mock / 截图 / DB / API 先排除主要风险——implementer 会过早 blocked

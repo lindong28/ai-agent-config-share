@@ -21,7 +21,12 @@
 | `/custom:review-ux-contract <path>` | 按 `ux-contract-review-principles.md` 审查 ux-contract | 三阶段循环（审查→决策→落地），改动后回到第 1 步重审 |
 | `/custom:execute-ux-contract <contract-path>` | Claude 作为 supervisor 把已审契约翻译为 test plan，驱动 Codex 跑端到端 UX 测试 + 修复闭环，直到 Critical/High 清零 | 是（test session + fix session 测-修循环） |
 | `/custom:create-handoff` | 把 session 关键 context 落到 markdown 给新 session 接力 | 否（单次执行） |
-| `/custom:update-docs [type...]` | 按 `docs-organization-protocol.md` 更新项目文档（docs/ + 根目录 README/CHANGELOG）；不指定类型则全部，为每类并行 spawn `doc-updater` agent | 否（并行 subagent 单次执行） |
+| `/custom:sync-docs [改了什么]` | 按 `docs-organization-protocol.md` 同步项目文档（docs/ + 根目录 README/CHANGELOG）：给出改动描述则补该改动的文档，空参数则审查并修全部现有文档；为每类并行 spawn `doc-updater` agent，并对 docs / README 审查腿加载 `docs-review-principles.md` / `readme-review-principles.md` | 否（并行 subagent 单次执行） |
+| `/custom:create-refactor-plan <scope> [--rescan]` | 为周期性还技术债写系统化重构 plan.md（提升可维护性 / 可扩展性 / 易读性），`--rescan` 续下一轮 | 内部自动调 `/custom:review-plan` 循环 |
+| `/custom:absorb-skill <外部 skill>` | 把外部 skill / command 中有用的内容合并进已有本地 skill / command | 内部按落点分派 `/custom:review-skill` 等收敛 |
+| `/custom:borrow-design <target> <reference>` | 对比两份 anatomy / design 文档，产出 consumer-aware、ROI 排序的 borrow checklist（不落地合并） | 否（单次执行，user-only） |
+| `/custom:anatomize-llm-workflow <系统>` | 把 LLM 调用型系统的 workflow 提取成质量诊断地图、逐节点审查 prompt | 否（单次执行） |
+| `/custom:create-eval-harness <判定 prompt>` | 给单个语义判定 prompt（judge / 分类 / 路由 / 抽取）建带标签 eval 与回归测试 | 否（单次执行，user-only） |
 
 注：所有 `create-*` / `fix-*` 命令**已经在内部 invoke 对应的 review 循环**. 但有时候内置的循环还是不够，需要额外手动多次触发review。
 

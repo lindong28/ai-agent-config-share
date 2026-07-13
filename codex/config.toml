@@ -1,6 +1,7 @@
 # ── Core behavior ──
 
-approval_policy = "never"            # "never" = auto-approve; "on-request" = ask each time
+# Approval is configured granularly below (see [approval_policy.granular]) so that
+# ask-user MCP elicitation forms surface while everything else stays auto-approved.
 sandbox_mode = "danger-full-access"  # full FS access; safer: "workspace-write", "read-only"
 project_doc_fallback_filenames = ["CLAUDE.md"]
 show_raw_agent_reasoning = true
@@ -16,6 +17,18 @@ model = "gpt-5.5"
 model_reasoning_effort = "xhigh"
 model_supports_reasoning_summaries = true
 plan_mode_reasoning_effort = "xhigh"
+
+# ── Approval (granular) ──
+# Granular translation of the old `approval_policy = "never"`: keep every approval
+# category non-interactive (false = auto-resolve, never prompt), but surface MCP
+# elicitation forms so ask-user-mcp's AskUserQuestion can render.
+
+[approval_policy.granular]
+mcp_elicitations = true
+sandbox_approval = false
+rules = false
+request_permissions = false
+skill_approval = false
 
 # ── Feature flags ──
 
@@ -95,6 +108,15 @@ startup_timeout_sec = 30
 type = "stdio"
 command = "mcp-server-sequential-thinking"
 description = "Chain-of-thought reasoning"
+
+# Claude-compatible AskUserQuestion via MCP elicitation (see ask-user-mcp/README.md).
+# install.sh symlinks the repo's ask-user-mcp into ~/.codex/ask-user-mcp so this
+# path resolves on any machine regardless of where the repo is cloned.
+[mcp_servers.ask-user]
+type = "stdio"
+command = "sh"
+args = [ "-c", "PATH=\"/opt/homebrew/bin:/usr/local/bin:$PATH\"; exec node \"$HOME/.codex/ask-user-mcp/server.mjs\"" ]
+startup_timeout_sec = 20
 
 # ── Profiles (switch with: codex --profile <name>) ──
 

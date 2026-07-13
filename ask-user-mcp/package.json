@@ -1,0 +1,12 @@
+{
+  "name": "ask-user-mcp",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "MCP server exposing Claude-compatible AskUserQuestion via MCP elicitation",
+  "main": "server.mjs",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.13.0",
+    "zod": "^3.23.0"
+  }
+}

@@ -1,9 +1,11 @@
 import argparse
+import hashlib
 import json
 import logging
 import mimetypes
 import os
 import subprocess
+import sys
 import threading
 import time
 from collections import defaultdict
@@ -27,6 +29,36 @@ _NETWORK_TTL = 60.0
 _ROLLUP_LOCK = threading.Lock()
 _ROLLUP_THROTTLE_SECONDS = 600
 RANGE_DAYS = {"7d": 7, "30d": 30, "90d": 90, "6m": 180, "1y": 365, "2y": 730}
+
+# Host/port this process is serving on, stashed by main() so /api/restart can
+# re-exec with identical arguments.
+_BIND_HOST = "127.0.0.1"
+_BIND_PORT = 39001
+
+
+def _source_files():
+    """Python modules whose code is frozen into this running process. Static
+    assets (web/*) are re-read from disk per request and never go stale, so only
+    the imported .py files matter for detecting code drift."""
+    files = sorted(ROOT.glob("*.py"))
+    files += sorted((ROOT / "parsers").glob("**/*.py"))
+    return files
+
+
+def _source_signature():
+    digest = hashlib.sha256()
+    for path in _source_files():
+        try:
+            digest.update(path.read_bytes())
+        except OSError:
+            continue
+    return digest.hexdigest()[:16]
+
+
+# Signature of the code this process actually loaded. health() compares it to a
+# fresh signature each call, so the server self-reports when its on-disk source
+# has changed since boot (the symptom: a long-lived daemon serving old code).
+BOOT_SIGNATURE = _source_signature()
 
 
 def overview(query):
@@ -102,7 +134,36 @@ def session_detail(session_id):
 
 
 def health(_query):
-    return {"ok": True}
+    return {
+        "ok": True,
+        "signature": BOOT_SIGNATURE,
+        "stale": _source_signature() != BOOT_SIGNATURE,
+    }
+
+
+def _compile_check():
+    """py_compile every source file; return a list of error strings (empty when
+    all compile). Guards /api/restart from re-exec'ing into broken code — without
+    an external supervisor, a crash on boot would take the dashboard down."""
+    import py_compile
+
+    errors = []
+    for path in _source_files():
+        try:
+            py_compile.compile(str(path), doraise=True)
+        except py_compile.PyCompileError as exc:
+            errors.append(str(exc))
+    return errors
+
+
+def _schedule_reexec():
+    def _reexec():
+        os.execv(
+            sys.executable,
+            [sys.executable, str(ROOT / "server.py"), "--host", _BIND_HOST, "--port", str(_BIND_PORT)],
+        )
+
+    threading.Timer(0.4, _reexec).start()
 
 
 def _valid_zone(name):
@@ -190,6 +251,26 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         self._handle_request(send_body=True)
+
+    def do_POST(self):
+        parsed = urlparse(self.path)
+        if parsed.path == "/api/restart":
+            self._handle_restart()
+            return
+        self.send_error(404)
+
+    def _handle_restart(self):
+        errors = _compile_check()
+        if errors:
+            self._send_json({"restarting": False, "error": errors[0]})
+            return
+        self._send_json({"restarting": True})
+        try:
+            self.wfile.flush()
+        except OSError:
+            pass
+        logger.info("restart requested via /api/restart; re-executing")
+        _schedule_reexec()
 
     def _handle_request(self, send_body=True):
         parsed = urlparse(self.path)
@@ -509,10 +590,12 @@ def _json_default(value):
 
 
 def main():
+    global _BIND_HOST, _BIND_PORT
     parser = argparse.ArgumentParser()
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=39001)
     args = parser.parse_args()
+    _BIND_HOST, _BIND_PORT = args.host, args.port
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     server = ThreadingHTTPServer((args.host, args.port), Handler)

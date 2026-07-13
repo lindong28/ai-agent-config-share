@@ -83,7 +83,7 @@ Ask yourself: "Would a senior engineer say this skill is overcomplicated?" If ye
 
 ## 5. Progressive Disclosure
 
-**SKILL.md stays lean. Depth goes into references/ and scripts/, with clear pointers to when they load.**
+**SKILL.md stays lean.** Depth goes into references/ and scripts/, with clear pointers to when they load.
 
 Three layers load in order: description (always), SKILL.md body (on trigger, ideally <500 lines), bundled files (on demand). Content at the wrong layer either bloats every triggered session or never gets read at all.
 
@@ -108,7 +108,7 @@ When reviewing:
 - Flag auto-invocable skills whose misfire is expensive or confusing — ones that would kick off background work, modify files, or derail the conversation if triggered wrongly.
 - Flag manual skills whose triggers are cleanly recognizable from context and whose users would benefit from not having to remember a command.
 - Flag skills that declare themselves auto-invocable but whose description is too vague to reliably win against adjacent alternatives.
-- Flag manual-only skills/commands whose frontmatter lacks `disable-model-invocation: true`.
+- Flag manual-only skills/commands whose frontmatter lacks `disable-model-invocation: true`. A command another skill/command auto-invokes per a documented condition is not manual-only — setting the flag there suppresses the programmatic invocation the caller relies on, so leave it model-invocable.
 
 The test: for auto — "what's the worst thing that happens if this fires unprompted?" For manual — "would a typical user know to invoke this at the right moment?"
 

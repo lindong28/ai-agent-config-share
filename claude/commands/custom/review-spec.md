@@ -1,6 +1,6 @@
 ---
 argument-hint: <spec-path> [max-principle-per-subagent=3]
-description: 审查指定 spec 文件（create-spec 产出的 spec.md）并按原则修复。
+description: 审查一份 spec.md，逐条对照 spec 评审原则评审并修复。用于你已产出一份 spec、想在把它交给下游 session 当 plan 输入前审核其对齐质量时。
 ---
 
 # review-spec
@@ -15,7 +15,7 @@ description: 审查指定 spec 文件（create-spec 产出的 spec.md）并按�
 
 ## 工作流
 
-循环 3 阶段：**审查 → 决策 → 落地**。任一阶段产生改动后回到第 1 步重跑，直到无新发现。展示与提问风格遵循 `~/.claude/references/deep-discuss-style.md`——subagent 输出报告与主 session 提问都适用。
+循环 3 阶段：**审查 → 决策 → 落地**。任一阶段产生改动后回到第 1 阶段重跑，直到无新发现。展示与提问风格遵循 `~/.claude/references/deep-discuss-style.md`——subagent 输出报告与主 session 提问都适用。
 
 ### 1. 审查（分组并行 subagent）
 
@@ -36,7 +36,7 @@ description: 审查指定 spec 文件（create-spec 产出的 spec.md）并按�
 
 ### 3. 落地
 
-按用户选择 Edit。若有改动，回到第 1 步——按 Phase 1 完整流程重跑；无改动则循环终止。
+按用户选择 Edit。若有改动，回到第 1 阶段、按完整流程重跑；无改动则循环终止。
 
 若审查发现现有原则未覆盖某类问题，用 AskUserQuestion 把「是否改进 `~/.claude/references/spec-review-principles.md`」作为一项决策交用户拍板——principles 缺口是高杠杆发现，只在 prose 里附带提及会被略过、用户遗忘后同类坑复发。改完后执行 `/custom:review-principles spec-review-principles.md` 循环审查改动——principles 文件本身也要过 meta-原则。
 
@@ -45,5 +45,5 @@ description: 审查指定 spec 文件（create-spec 产出的 spec.md）并按�
 ## 反模式
 
 - **减少 subagent 数量**：不要因 diff 小而超出 max-principle-per-subagent 分组上限——分组参数保证每条原则获得充分注意力，不因工作量看似少就放宽。
-- **跳过重跑**：不要因改动小或"显然安全"而跳过 Phase 3 的重跑循环——编辑者对自己改动有 confirmation bias，重跑的价值恰恰在于独立于编辑者的判断。
+- **跳过重跑**：不要因改动小或"显然安全"而跳过第 3 阶段的重跑循环——编辑者对自己改动有 confirmation bias，重跑的价值恰恰在于独立于编辑者的判断。
 - **重跑 prompt 不中立**：重跑时给 subagent 的 prompt 必须是中立重审，禁止把「上一轮 fix 想达成什么 / 去确认它生效」当成功判据喂给 subagent。确认式框架（"verify 这个 fix 解决了 X" / "确认没 reintroduce Y"）把 subagent 推向印证编辑者的修复而非独立挖洞，让编辑者自伤引入的 over-correction 撑过多轮。

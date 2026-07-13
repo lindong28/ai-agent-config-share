@@ -140,7 +140,7 @@
 
 服务的**新增 / 移除 / 部署方式变化**（及裸命令运维、代码改动如何生效）触发文档与脚本同步。
 
-| 触发 | update-docs（写） |
+| 触发 | sync-docs（写） |
 |---|---|
 | 新增服务 | README 服务章节 + operations/services.md 加条目；提示补齐运维入口（repo own→生命周期脚本；vendored→确认原生接口已文档化）；若是 §3.6 可选服务，另标注其 opt-in 入口（默认不装 + 开启命令） |
 | make-live 路径（代码改动如何生效） | README 服务章节 / operations 必述该服务的 make-live：再跑 `./install.sh`（无 install 的手动 server→stop && start）后新代码经传播 / 构建 / 生命周期哪条路到达运行态（见 §3.5）；repo own 与 vendored 都要说明；若服务持代码之外的持久状态（DB schema / 磁盘配置），另述其迁移路径（见 §3.5） |
@@ -148,6 +148,6 @@
 | 部署方式变化 | 更新 supervisor / 脚本标注 |
 | 裸命令运维 | 提示该换成规范脚本（仅 repo own 的服务） |
 
-review-docs 侧的 flag 条件见 `docs-review-principles.md` §5（服务覆盖、裸命令该换脚本；vendored 原生接口不算缺陷）。
+sync-docs 审查侧的 flag 条件见 `docs-review-principles.md` §5（服务覆盖、裸命令该换脚本；vendored 原生接口不算缺陷）。
 
 doc-updater 报告缺失的脚本，**不自动写脚本**（生成代码超出文档范畴）。

@@ -19,6 +19,7 @@ Stop 前必须逐项满足：
 3. **替代路径已尝试**：已尝试可用的 API / DB / CLI / DevTools / browser / local script / mock / direct probe 等横向替代路径，以及对当前路径的纵向缓解；"有外部失败的直接证据" 只证明当前路径失败，不证明所有 executor 可控缓解已穷尽。若某条路径被 wrapper / adapter 报错挡住，必须向更接近原始能力的层（local endpoint / direct probe / GUI automation）再探一层，再升级为"不可达"。
 4. **verify 已拆分**：已把 executor 能独立验证的子部分做完（**`人工 / UX / 审美` 标签 ≠ 100% 用户裁量**——日期格式可读、文字截断、布局明显错乱、链接 404 等 common-sense 通用判断也属 executor 可独立验证）；剩余部分确实必须用户介入或依赖不可用能力。
 5. **交接可执行**：final response 明确为什么停、阻塞哪一步、已覆盖什么、用户需要做什么；用户不需要追问或自行研究即可执行。若需要用户交互，executor 必须先生成或打开可执行交互物，并说明完成后 executor 将如何继续。
+6. **文档同步已处理**：若本次 stop 属"任务/plan 完成"类且项目启用 docs-organization-protocol，其「同步机制」章节已执行，无可同步项时在 final response 显式声明。同步是完成定义的一部分——只交付代码不交付文档同步的"完成"不算 done。
 
 ---
 

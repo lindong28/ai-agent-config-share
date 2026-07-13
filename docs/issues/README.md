@@ -1,6 +1,6 @@
 # Issues
 
-> [Agent] agent 驱动的轻量 issue tracker，按 domain 分文件（见 `~/.claude/references/docs-organization-protocol.md` §4.8）。每个文件内 mutable（条目有 lifecycle：`open` / `resolved` / `wontfix`）。
+> [Agent] agent 驱动的轻量 issue tracker，按 domain 分文件（见 `~/.claude/references/docs-organization-protocol.md` §4.8）。domain 文件只存 **open** 条目；判定 `resolved` / `wontfix` 的同一步把整条移入 [`archive/closed.md`](archive/closed.md)（单一扁文件、只 grep 查史，不通读）。
 
 ## Domain 文件
 
