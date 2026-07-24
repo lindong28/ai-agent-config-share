@@ -4,6 +4,8 @@
 
 ## 2026-07-24
 
+<<<<<<< HEAD
+- 新增：`tdd-workflow` skill —— TDD 的 RED→GREEN 纪律（先写会失败的测试再实现至通过），被 `execute-ux-contract` 的 fix session 引用作回归测试约束。install.sh 自动 symlink 到 `~/.claude/skills/tdd-workflow`
 - 新增：命令 `/custom:review-alerting`（审服务告警设计质量并修复）、`/custom:review-claude-md`（审单个 CLAUDE.md / AGENTS.md 指令文件）、`/custom:review-session-skills`（审当前 session 触发的 skill）、`/custom:review-agent-rules`（审 agent 规则栈：加载关系 / 冲突 / 能力最小权限）、`/custom:review-memory`（审跨 session 记忆）
 - 新增：references `rigor-tiers.md`（plan 严谨度按 (A,V) 正交分层）、`concurrent-plan-isolation.md`（并发 plan 隔离协议）、`background-agent-monitoring.md`（后台 agent 巡检 + teammate 回收）、`alerting-review-principles.md`（告警设计质量原则）、`claude-md-review-principles.md`（CLAUDE.md 写作原则）——补齐 create-plan / execute-plan / review-gate / service-operations-protocol 的引用依赖
 - 变更：`codex/config.toml` 默认模型 `gpt-5.5`→`gpt-5.6-sol`（reasoning effort `xhigh`→`high`）；`[mcp_servers.ask-user.tools.AskUserQuestion] approval_mode = "approve"`；移除已弃用的 `[mcp_servers.memory]` 与 `[mcp_servers.sequential-thinking]`。install.sh / verify.sh 同步移除这两个 npm 包的安装与检查

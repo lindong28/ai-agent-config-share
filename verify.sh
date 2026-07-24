@@ -146,6 +146,7 @@ check_symlink      "agent-browser/claude" "$SRC_ROOT/skills/agent-browser" "$HOM
 check_symlink      "agent-browser/codex"  "$SRC_ROOT/skills/agent-browser" "$HOME/.codex/skills/agent-browser"
 check_symlink      "create-commit"        "$SRC_ROOT/skills/create-commit" "$HOME/.claude/skills/create-commit"
 check_symlink      "review-gate"          "$SRC_ROOT/skills/review-gate"   "$HOME/.claude/skills/review-gate"
+check_symlink      "tdd-workflow"         "$SRC_ROOT/skills/tdd-workflow"  "$HOME/.claude/skills/tdd-workflow"
 check_symlink      "ask-user-mcp"         "$SCRIPT_DIR/ask-user-mcp"       "$HOME/.codex/ask-user-mcp"
 check_symlink      "codeagent-wrapper"    "$SRC_ROOT/bin/codeagent-wrapper" "$HOME/.claude/bin/codeagent-wrapper"
 check_symlink      "statusline.sh"        "$SRC_ROOT/statusline.sh"         "$HOME/.claude/statusline.sh"

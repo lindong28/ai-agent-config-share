@@ -17,6 +17,7 @@
 #     <repo>/claude/skills/create-commit → ~/.claude/skills/create-commit
 #     <repo>/claude/skills/deep-discuss  → ~/.claude/skills/deep-discuss
 #     <repo>/claude/skills/review-gate   → ~/.claude/skills/review-gate
+#     <repo>/claude/skills/tdd-workflow  → ~/.claude/skills/tdd-workflow
 #     <repo>/ask-user-mcp                → ~/.codex/ask-user-mcp
 #   Sub-installers:
 #     <repo>/tt-web/install.sh           # localhost token-usage dashboard
@@ -357,6 +358,16 @@ if [ -d "$REVIEW_GATE_SKILL" ]; then
     echo
     echo "Installing review-gate skill:"
     link_one "$REVIEW_GATE_SKILL" "$HOME/.claude/skills/review-gate"
+fi
+
+# --- tdd-workflow skill (Claude-only; TDD RED→GREEN discipline, referenced by execute-ux-contract) ---
+
+TDD_WORKFLOW_SKILL="$SCRIPT_DIR/claude/skills/tdd-workflow"
+
+if [ -d "$TDD_WORKFLOW_SKILL" ]; then
+    echo
+    echo "Installing tdd-workflow skill:"
+    link_one "$TDD_WORKFLOW_SKILL" "$HOME/.claude/skills/tdd-workflow"
 fi
 
 # --- Claude hooks (symlinked per-file so we never clobber an existing ~/.claude/hooks) ---
