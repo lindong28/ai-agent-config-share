@@ -15,6 +15,7 @@ STATE_DB = os.path.join(CODEX_DIR, "state_5.sqlite")
 DEFAULT_CODEX_MODEL = "gpt-5"
 
 logger = logging.getLogger(__name__)
+_RATE_LIMITS_CACHE = {"signature": None, "value": None}
 
 
 def load_entries(hours_back=0, sessions_dir=None, state_db=None):
@@ -132,13 +133,34 @@ def load_rate_limits(sessions_dir=None, state_db=None):
     if not sessions_path.is_dir():
         return None
 
-    models = _load_thread_models(state_db or STATE_DB)
-    jsonl_files = sorted(sessions_path.rglob("*.jsonl"), key=lambda path: path.stat().st_mtime, reverse=True)
-    for path in jsonl_files[:5]:
-        rate_limits = _extract_rate_limits(path, models)
-        if rate_limits:
-            return rate_limits
-    return None
+    state_path = state_db or STATE_DB
+    jsonl_files = sorted(sessions_path.rglob("*.jsonl"))
+    signature = _files_signature(jsonl_files, state_path)
+    if signature == _RATE_LIMITS_CACHE["signature"]:
+        return _RATE_LIMITS_CACHE["value"]
+
+    models = _load_thread_models(state_path)
+    candidates = filter(None, (_extract_latest_rate_limits(path, models) for path in jsonl_files))
+    latest = max(candidates, key=lambda limits: _timestamp_key(limits.updated_at), default=None)
+    _RATE_LIMITS_CACHE.update(signature=signature, value=latest)
+    return latest
+
+
+def _files_signature(paths, state_db):
+    signature = []
+    for path in paths:
+        try:
+            stat = path.stat()
+        except OSError:
+            continue
+        signature.append((str(path), stat.st_mtime_ns, stat.st_size))
+    if state_db:
+        try:
+            stat = Path(state_db).stat()
+            signature.append((str(state_db), stat.st_mtime_ns, stat.st_size))
+        except OSError:
+            pass
+    return tuple(signature)
 
 
 def _load_thread_models(state_db):
@@ -182,12 +204,88 @@ def _extract_rate_limits(path, models):
         return None
 
     rate_limits, timestamp, session_id = last_rate_limits
+    return _build_rate_limits(rate_limits, timestamp, session_id, models)
+
+
+def _extract_latest_rate_limits(path, models):
+    session_id = _read_session_id(path)
+    try:
+        for line in _reverse_lines(path):
+            if '"rate_limits"' not in line:
+                continue
+            try:
+                data = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(data, dict) or data.get("type") != "event_msg":
+                continue
+            payload = data.get("payload", {})
+            if not isinstance(payload, dict) or payload.get("type") != "token_count":
+                continue
+            rate_limits = payload.get("rate_limits")
+            if rate_limits:
+                return _build_rate_limits(rate_limits, data.get("timestamp", ""), session_id, models)
+    except (OSError, PermissionError, UnicodeDecodeError):
+        return None
+    return None
+
+
+def _read_session_id(path):
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            for line in handle:
+                try:
+                    data = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(data, dict) and data.get("type") == "session_meta":
+                    payload = data.get("payload", {})
+                    return payload.get("id", "") if isinstance(payload, dict) else ""
+    except (OSError, PermissionError, UnicodeDecodeError):
+        pass
+    return ""
+
+
+def _reverse_lines(path, chunk_size=65536):
+    with open(path, "rb") as handle:
+        handle.seek(0, os.SEEK_END)
+        position = handle.tell()
+        buffer = b""
+        while position > 0:
+            size = min(chunk_size, position)
+            position -= size
+            handle.seek(position)
+            buffer = handle.read(size) + buffer
+            lines = buffer.split(b"\n")
+            if position > 0:
+                buffer = lines.pop(0)
+            else:
+                buffer = b""
+            for raw in reversed(lines):
+                if raw.strip():
+                    yield raw.decode("utf-8")
+
+
+def _build_rate_limits(rate_limits, timestamp, session_id, models):
     primary = rate_limits.get("primary") or {}
     secondary = rate_limits.get("secondary") or {}
-    five_pct = primary.get("used_percent")
-    five_reset = primary.get("resets_at")
-    seven_pct = secondary.get("used_percent")
-    seven_reset = secondary.get("resets_at")
+    windows = [window for window in (primary, secondary) if isinstance(window, dict)]
+    if any(window.get("window_minutes") is not None for window in windows):
+        five_hour = next(
+            (window for window in windows if _int(window.get("window_minutes")) == 300),
+            primary if primary.get("window_minutes") is None else {},
+        )
+        seven_day = next(
+            (window for window in windows if _int(window.get("window_minutes")) == 10080),
+            secondary if secondary.get("window_minutes") is None else {},
+        )
+    else:
+        five_hour, seven_day = primary, secondary
+
+    five_pct = five_hour.get("used_percent")
+    five_reset = five_hour.get("resets_at")
+    seven_pct = seven_day.get("used_percent")
+    seven_reset = seven_day.get("resets_at")
 
     now_ts = datetime.now(timezone.utc).timestamp()
     if five_reset and five_reset < now_ts:
@@ -206,6 +304,14 @@ def _extract_rate_limits(path, models):
         model=models.get(session_id, DEFAULT_CODEX_MODEL),
         updated_at=timestamp,
     )
+
+
+def _timestamp_key(value):
+    try:
+        parsed = datetime.fromisoformat((value or "").replace("Z", "+00:00"))
+        return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+    except (TypeError, ValueError):
+        return datetime.min.replace(tzinfo=timezone.utc)
 
 
 def _project_from_cwd(cwd):

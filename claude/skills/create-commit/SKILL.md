@@ -30,11 +30,13 @@ description: >-
    - Cache / 临时目录（.cache/、node_modules/）
    - Secrets / credentials
 
-   判断不确定时用 `AskUserQuestion` 确认；无法 ask 时倾向包含。
+   判断不确定时用 `AskUserQuestion` 确认；无法 ask 时排除不确定的 untracked 文件，并在结果中列出未纳入项。
 
-3. **生成 commit message**：格式见下方。
+3. **文档同步 checkpoint**：staging 范围定后，判断本次改动是否产生**用户可感知变化 / 服务增删改 / 公共接口变化**（判据见 `~/.claude/references/docs-organization-protocol.md`）。是 → 对应 [User] 档（README / CHANGELOG / operations）必须一并同步进本次 staging，未同步则先补齐再继续；开发者档（architecture / adr / experiences）与 ux-contract 按协议各自路径、不在此强制。例外：本次 commit 由已声明会集中同步文档的 caller（execute-plan / execute-ux-contract 的完整 recipe）驱动时，尊重其编排、不在此重复要求。
 
-4. **执行**：用 `git add <specific files>` stage 第 2 步选定的范围（**禁止** `git add -A` / `git add .`），然后 `git commit`。
+4. **生成 commit message**：格式见下方。
+
+5. **执行**：用 `git add <specific files>` stage 第 2 步选定的范围**及第 3 步补齐的 [User] 档**（**禁止** `git add -A` / `git add .`），然后 `git commit`。
 
 ## Commit Message 格式
 

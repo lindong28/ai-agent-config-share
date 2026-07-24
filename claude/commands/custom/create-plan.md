@@ -28,7 +28,7 @@ origin: 2026-04-30
 
 单趟 pipeline，分支点用【】标（L1/L2/L3 = §1 三层产物意识）：
 
-align（§2 各 facet：L1 → 取舍偏好 → L2 → L3 + 横切）→【spec 覆盖的 facet 跳过 align，plan 引用 spec】→【Best-of-N：align 收敛后 fan-out N 个 writer、用户挑选】→ 写 plan.md（§3）→ 审查（`/custom:review-plan`，loop-until-clean gate）→【long-task 默认启用：定稿后 bootstrap state.md / journal.md + banner】→ handoff。
+align（§2 各 facet：L1 → 取舍偏好 → L2 → L3 + 横切）→【spec 覆盖的 facet 跳过 align，plan 引用 spec】→【Best-of-N：align 收敛后 fan-out N 个 writer、用户挑选】→ 写 plan.md（§3）→ 审查（独立 Codex reviewer；见「审查」）→【long-task 默认启用：定稿后 bootstrap state.md / journal.md + banner】→ handoff。
 
 align 是深度活、不并行；审查是 gate——未收敛不进 bootstrap / handoff；三个【】分支各在 §2 决策、§3 执行。
 
@@ -36,11 +36,13 @@ align 是深度活、不并行；审查是 gate——未收敛不进 bootstrap /
 
 ## Consumer 意识 + plan 的输入声明与内容取舍
 
-plan.md 由 implementer（新 claude code session）+ reviewer（`/custom:review-plan`）阅读——除让 reader 不重读本会话就能推进 / 审外，还须凭 verify 步骤自证完成、让 reviewer 能审取舍（详见 §1 三层 framing + §3 必答项）。
+plan.md 由 implementer（新 claude code session）+ reviewer（按当前 harness 选择 transport 的独立 Codex context；执行契约见「审查」）阅读——除让 reader 不重读本会话就能推进 / 审外，还须凭 verify 步骤自证完成、让 reviewer 能审取舍（详见 §1 三层 framing + §3 必答项）。
 
 **唯一入口**：plan.md 是 review / 实施的唯一入口。引用上游工件（spec.md / PRD / design doc）时，plan 自身要在文档显眼处（典型：顶部"输入"段）说明：上游路径 + 上游覆盖什么 lens（如"L1 / 横切取舍由 spec 承载，详见 spec.md §X"）+ plan 自身聚焦什么（如"本 plan 含 L3 设计 + L2 verify 的实施版"）。
 
 判据：facts inline 进 plan 会节省 N 次 implementer 跳转 → 含（典型如 API 调用模板、外部规范摘录、可复用代码具体定位）；planner 研究过程 / alignment 草稿 / 推翻方案中间路径 → 不含。
+
+**并发隔离声明**：若本 plan 可能与其它 agent session 并发落地，按 `~/.claude/references/concurrent-plan-isolation.md` 在 plan 里声明隔离方案；不确定是否并发时默认声明。
 
 ---
 
@@ -90,7 +92,7 @@ planner 和 user 对齐的过程中，至少要让以下几类信息变清晰。
 
 **反推方向**：每个对齐 facet 带 Layer 标——L1 是 L2/L3 的契约、L2 是 L3 的契约。建议从 L1 开始扫到 L3，但访谈中暴露上层缺失时允许回退补。任何时候问『这是为最终产物服务的吗？』，否就是设计走偏。
 
-研究 / 探索 / 跑命令确认假设是对齐的有机组成部分——读 reference 代码、查外部规范、跑 probe 确认环境——能让你给出更高质量 plan 的动作都该做，不要因为没明确写出就跳过。（注意：这里的"确认假设"是 research-time probe，跟 §1 三层框架里的 L2/L3 verify 不是一回事。）
+研究 / 探索 / 跑命令确认假设是对齐的有机组成部分——读 reference 代码、查外部规范、跑 probe 确认环境——能让你给出更高质量 plan 的动作都该做，不要因为没明确写出就跳过。验证一个 load-bearing 假设时 probe 到足以推翻它的深度——主动找什么会让它为假，而非找到一个支持证据就停。（注意：这里的"确认假设"是 research-time probe，跟 §1 三层框架里的 L2/L3 verify 不是一回事。）
 
 **borderline 决策的两条 path**：
 
@@ -132,6 +134,16 @@ planner 和 user 对齐的过程中，至少要让以下几类信息变清晰。
 - 性能 / 成本 / 稳定性 三角中的偏向
 - 代码复杂度 vs 可演进性
 - 当下交付速度 vs 长期维护成本
+
+### rigor 校准（必答；反转成本高）
+
+读取 `~/.claude/references/rigor-tiers.md`。这是 mandatory intake，不因 spec 已覆盖其他 facet 而跳过，也不得作为软性取舍维度自行 default。
+
+分别以轴名 R（反转成本 / blast radius）与 G（回归容忍度 / 生产稳定性）采集 stakes，独立推导 `(A,V)`（stakes 轴只写 R/G，assurance 维只写 A/V，不把轴 G 改称轴 V），各给一句理由，按 rigor-tiers.md 记录契约落盘。校准本身按本节所属 §2 的两条 path 处置——rigor 默认是高反转成本决策：推导出 `A1+` / `V1+`、或两轴判断非显然时，**必须**用 `AskUserQuestion` 让用户确认或改向量；仅当推导为 `(A0,V0)` 且两轴显然（可逆本地、回归易捕获）才可自行 default，但**必须**写进 plan 末 Defaulted Decision 表供 reviewer 审。二者必居其一：不得落一个既未经用户确认、也未进 Defaulted Decision 表的向量——否则 reviewer 无法区分"问过"与"静默默认"，退回本次要消灭的 checklist。
+
+任务取代或续接已有 plan / charter 时，继承的 rigor 一律经 `AskUserQuestion` 重新抛给用户复核（继承本身即高反转成本），不得静默沿用；复核结论落盘。
+
+定档后做对称校验：proportionality 是双向的（rigor-tiers invariant 既判过度也判不足）——逐一回看该向量据以省去或降低的每个机制，确认没有哪个真实失败模式或威胁因此失去必要保护。何为"必要保护"依赖场景容忍度（如能接受停机多久、数据丢失容忍），属上文按 R/G 采集的 stakes，未对齐则回看时补齐。降复杂度的惯性最容易砍穿必要保护。某 unit 的职责是驱动无法忠实 mock 的外部接口且 gate 住 A2 live 动作时，其 V2 的满足机制落盘为"真实接口整路 sweep（含 live-only 分支）"而非逐 touchpoint mock（见 rigor-tiers.md「外部接口 driver 的 V2 落地」），供 reviewer 审。
 
 ### 用户视角 verify（L2）
 
@@ -234,6 +246,7 @@ planner 和 user 对齐的过程中，至少要让以下几类信息变清晰。
 | 要做什么（明确指向新建/修改的具体文件、API、模块） | "整理一下" / "优化性能" |
 | 使用方式 / 下游用途：使用者拿到产物用来做什么决策 / 后续动作（决定设计深度——如对比报告"选一个 vs 取长补短"） | 没说 → implementer 无从判断要做多深 |
 | 取舍偏好 + 三层影响：用户在产品/UX/工程维度上的相对优先级，以及它在 L1 产物形态、L2 verify 维度阈值、L3 实现取舍各自塑造了什么；不适用任务（binary feature 等）需说明原因 | "随便选" / 没列 / 只列一句"用户说要好用" |
+| rigor `(A,V)`：默认值 + per-phase override + label + 两轴理由；replan 时含继承复核结论 | 只写 `light/standard/max` / 从旧 plan 静默继承 |
 | 用户视角 verify（L2：覆盖 happy + error path 的可观测条件，独立于内部实现；必须 implementer-executable form——命令+预期输出 / subagent 模拟用户流程 / 截图比对脚本 / 评测分数断言 / 结构化 rubric。有 spec 时是 spec dimension 的翻译版，每条 spec dimension 必须有 plan 对应步骤） | "跑一下应该 OK" / "实现完了再看" / "类型对了就行" / "使用者满意"（spec 措辞照搬不翻译） |
 | 内部 verify（L3：每个非平凡设计决策对应的 verify——unit test / 类型签名 / contract test / 关键不变式断言；agent 可独立跑） | "走个 lint" / "看下编译过没过" |
 | UX 契约影响（用户可感知行为变化且产品有 ux-contract.md 时）：动哪个 / 哪些 ux-contract section + 该 section 投影出的 L2 条目（用 ux-contract 验收 lens 写、进 user-facing surface）+ 对齐过的取舍决策（若有）+ 给 execute-plan 的 apply 指令；无影响 / 产品无 ux-contract 需一句理由 skip | 用户可感知行为变化但 plan 对 ux-contract 只字未提（默认 drift）/ 记了契约 delta 却无对应 L2 verify |
@@ -282,9 +295,11 @@ plan 不留 open question。任何 OQ 必须先走升级：
 
 ### 审查
 
-自检通过后、handoff 之前，执行 `/custom:review-plan <plan path>` 进行循环审查。循环未终止不进入 handoff——review-plan 的 gate 比 §3 表格更全，跳过会让 implementer 撞上未发现的 plan 缺陷。
+自检通过后、handoff 之前，按 `~/.claude/skills/review-gate/SKILL.md`「分档执行」和「gate 裁决」的 harness-aware transport / lifecycle 规则调度独立 Codex reviewer；只复用独立 context、续用、失败与不可续处置，不继承该 gate 的 severity、复核范围或终止语义。workdir 使用本次 plan 对应的项目根（即调用 create-plan 时适用项目指令的根）。
 
-- **收敛性**：判断 finding 是否需修。需修 → 改 → 重审。循环到一轮无需修。
+reviewer prompt 给出 plan 的绝对路径，并显式调用 Codex bridge `$custom-review-plan`（共享 `/custom:review-plan` 的 review-plan 契约）；review 内容、severity、修复与重审仅由该契约定义。prompt 另须传入 caller 边界：独立 reviewer 不得直接向用户发 AskUserQuestion；需要用户决策时，返回原 finding 标识、可直接发问的选项与取舍后暂停。续用 prompt 带回同一 finding 标识与用户原始选择，再继续 review-plan 控制流。原 reviewer 不可续时，新 reviewer 的 prompt 重含 plan 路径、bridge、caller 边界与全部已决策事实（finding 标识 + 用户原始选择），并从 review-plan 起点完整重审到终止判据。
+
+外层控制流：启动独立 Codex reviewer →【review-plan 需要用户决策（含收敛停滞熔断触发的"定稿 vs 继续深审"决策）：主 session 用 AskUserQuestion 拍板、按同一 transport / lifecycle 续用 reviewer ↺】→ reviewer 明确报告 review-plan 的终止判据已满足（severity 门控 + 收敛预算，见 review-plan「终止判据」与「收敛预算与停滞熔断」，非"零发现"、非"反证再挑不出更细项"）→ long-task bootstrap / handoff。transport 调用成功不等于审查终止；任何未明确满足终止判据的结果都留在审查 gate 内。收敛停滞时终止由用户拍板"定稿"达成，循环不得因目标反证仍能规格化出更细项而自我延续。正常路径由 reviewer 报终止；此外主 session 给这个 review 循环挂一个**独立轮次计数**作熔断兜底：每向 reviewer 发起或续用一轮就 +1（无论该轮是否需要用户决策——这是主 session 可观测的动作、不依赖 reviewer 自报，才兜得住 reviewer 只顾规格化更细 findings、不进用户决策分支的 momentum 场景）。计数达到 review-plan「收敛预算与停滞熔断」定义的收敛预算（其粒度下即等量的 reviewer 往返轮数；对不齐时宁可偏早）时，即便 reviewer 仍在报更细的新 findings 未报终止，主 session 也直接发起"定稿 vs 继续深审"的 AskUserQuestion（选"继续深审"即重置计数、开新预算窗口），不等 reviewer 自报停滞。
 
 ### 长任务模式 bootstrap
 

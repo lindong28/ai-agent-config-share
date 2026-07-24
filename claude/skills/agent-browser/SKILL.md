@@ -8,13 +8,17 @@ allowed-tools: Bash(npx agent-browser:*), Bash(agent-browser:*)
 
 ## Default Path (zero-config, works everywhere)
 
+**Default to headed (visible) mode — always pass `--headed`** unless headless is explicitly required (e.g. a pure-CI screenshot job with no human watching and no bot-protected target). Headless is the CLI default, but it is the wrong default here: a headless, automation-launched browser (1) cannot be seen by the user, so any human-in-the-loop step (login, 2FA, CAPTCHA) is impossible, and (2) sets `navigator.webdriver=true` with a `HeadlessChrome` user-agent, which bot-protection (Cloudflare Turnstile, etc.) detects and blocks on sight.
+
 ```bash
-agent-browser open <url>           # navigate (auto-launches a browser if none)
-agent-browser snapshot -i          # get @e1 / @e2 refs
-agent-browser eval "<js>"          # read DOM / verify state
+agent-browser --headed open <url>      # navigate in a VISIBLE window (auto-launches a browser if none)
+agent-browser --headed snapshot -i     # get @e1 / @e2 refs
+agent-browser --headed eval "<js>"     # read DOM / verify state
 ```
 
 This path needs **no** `--cdp`, **no** Chrome Dev setup, and **no** prerequisite check. Use it for ad-hoc DOM verification, plan L2 checks, and any task that doesn't require reusing the user's logged-in Chrome profile.
+
+> **`--headed` needs a GUI session, and launched browsers are still flagged as automation.** If the CLI runs from a non-GUI context (`launchctl managername` prints `Background` — true for SSH shells, background daemons, and spawned sub-agents), even `--headed` cannot draw a window: it silently falls back to headless and the user (often on remote desktop) sees nothing. For any site that needs a human step or blocks automation, do NOT let agent-browser launch its own browser. Instead launch the user's **real** browser into the GUI session and attach over CDP: `open -na "Google Chrome" --args --remote-debugging-port=9222 --user-data-dir=/tmp/ab-profile "<url>"`, then `agent-browser close` (closes the session; if a stale daemon persists, see "Troubleshooting: Stale Daemon") and `agent-browser --cdp 9222 ...`. A browser launched this way keeps `navigator.webdriver=false`, so it is not flagged — and the user can see and interact with it.
 
 **Use the Chrome Dev opt-in path below only when you need persistent login state from the user's main Chrome profile** (e.g., LinkedIn / GitHub / authenticated SaaS). Trying `--cdp` without first verifying Chrome Dev runs is the #1 cause of false failures.
 
@@ -24,7 +28,7 @@ This path needs **no** `--cdp`, **no** Chrome Dev setup, and **no** prerequisite
 
 > **Prerequisite check — run this before any `--cdp` command:**
 > ```bash
-> ls -d "/Applications/Chrome Dev.app" >/dev/null 2>&1 && command -v chrome-airjelly >/dev/null 2>&1 \
+> ls -d "/Applications/Chrome Dev.app" >/dev/null 2>&1 && command -v chrome-dev >/dev/null 2>&1 \
 >   && curl -fsS http://localhost:9222/json/version >/dev/null \
 >   && echo "Chrome Dev ready" || echo "Chrome Dev NOT available — use Default Path above"
 > ```
@@ -37,9 +41,9 @@ This user *may* have a dedicated **Chrome Dev** app (`/Applications/Chrome Dev.a
 | Item | Value |
 |------|-------|
 | App | `/Applications/Chrome Dev.app` |
-| Launch script | `/opt/homebrew/bin/chrome-airjelly` |
+| Launch script | `/opt/homebrew/bin/chrome-dev` |
 | Debug port | `9222` |
-| Profile dir | `~/Library/Application Support/Chrome-AirJelly` |
+| Profile dir | `~/Library/Application Support/Chrome-Dev` |
 | Flags baked in | `--remote-debugging-port=9222 --remote-allow-origins=* --user-data-dir=<profile>` |
 
 ### Standard Connection Workflow
@@ -48,7 +52,7 @@ This user *may* have a dedicated **Chrome Dev** app (`/Applications/Chrome Dev.a
 # 1. Verify Chrome Dev is running and connectable
 curl -s http://localhost:9222/json/version | python3 -c "import sys,json; d=json.load(sys.stdin); print('Connected:', d['Browser'])"
 
-# 2. Always close stale daemon first
+# 2. Close any existing session first (does not kill a stale daemon — see Troubleshooting: Stale Daemon)
 agent-browser close 2>/dev/null; sleep 1
 
 # 3. Connect and use
@@ -67,20 +71,21 @@ sleep 6
 curl -s http://localhost:9222/json/version | python3 -c "import sys,json; print(json.load(sys.stdin)['Browser'])"
 ```
 
-### Troubleshooting: Daemon Stuck (EAGAIN / Resource Unavailable)
+### Troubleshooting: Stale Daemon (EAGAIN / about:blank / healthy-page timeouts)
 
-If you see `Resource temporarily unavailable (os error 35)`, the daemon is stale from a previous session:
+The browser persists via a background **daemon**. When it goes stale — a previous session closed Chrome, the browser restarted, or the socket died — commands hit a dead socket: `Resource temporarily unavailable (os error 35)`, commands landing on `about:blank`, or timeouts on a page that is actually healthy.
+
+**`close` / `close --all` do NOT fix this** — they close browser *sessions* but leave the daemon process running (verified). Reset the daemon by killing its process, scoped so you don't nuke sibling agents' daemons:
 
 ```bash
-# Kill the stuck daemon
-pkill -f "agent-browser" 2>/dev/null
-sleep 2
-
-# Retry
-/opt/homebrew/bin/agent-browser --cdp 9222 open "https://example.com"
+# Multiple parallel agents (--namespace): kill only your namespace's daemon.
+# The namespace token appears in the daemon's argv — pick a distinctive one.
+pkill -f "<your-namespace>" 2>/dev/null; sleep 1
+# Single default daemon (no namespaces in play): kill it outright
+pkill -f agent-browser 2>/dev/null; sleep 1
 ```
 
-> **Root cause:** The agent-browser daemon persists between sessions. If a previous session closed Chrome or the browser restarted, the daemon holds a dead socket. Always run `agent-browser close` before starting a new task, or `pkill -f agent-browser` if `close` itself hangs.
+Then start fresh (e.g. `agent-browser --cdp 9222 open "https://example.com"`). Don't retry repeatedly against a stale daemon — kill it after the first unexplained stall rather than burning wall-clock.
 
 ### Why NOT --auto-connect or --cdp with Regular Chrome
 
@@ -164,10 +169,10 @@ curl -s http://localhost:9222/json/version | python3 -c "import sys,json; print(
 
 ```bash
 python3 {baseDir}/templates/extract-chrome-cookies.py <domain-filter> <output.json> \
-  --user-data-dir "$HOME/Library/Application Support/Chrome-AirJelly"
+  --user-data-dir "$HOME/Library/Application Support/Chrome-Dev"
 # Example:
 python3 {baseDir}/templates/extract-chrome-cookies.py bigmodel ./bigmodel-cookies.json \
-  --user-data-dir "$HOME/Library/Application Support/Chrome-AirJelly"
+  --user-data-dir "$HOME/Library/Application Support/Chrome-Dev"
 ```
 
 Requires `pip install websockets`. The script reads `DevToolsActivePort` from the given `--user-data-dir`, connects via WebSocket, and exports cookies in Playwright-compatible JSON format.
@@ -598,6 +603,8 @@ agent-browser screenshot device.png
 
 The `scale` parameter (3rd argument) sets `window.devicePixelRatio` without changing CSS layout. Use it when testing retina rendering or capturing higher-resolution screenshots.
 
+**Real-browser zoom / window resize is unreliable under the Background headless-fallback.** When `launchctl managername` is `Background` (SSH, background daemons, spawned sub-agents), `--headed` silently falls back to headless (see the GUI-session note near the top). In that state, zooming with real browser shortcuts (`Cmd/Ctrl +`), resizing the OS window, or anything depending on a real window's DPR does **not** move the observable values — `innerWidth`, `devicePixelRatio`, and `visualViewport` stay fixed even though the commands exit 0. To accept a "user actually zoomed / resized the window" behavior, attach to a real GUI browser over CDP (see the same note); otherwise mark that zoom level **uncovered** — an exit-0 shortcut is not a pass. The CSS size/DPI that `set viewport ... <scale>` emulates is fine for layout screenshots but does not exercise the real zoom path.
+
 ### Visual Browser (Debugging)
 
 ```bash
@@ -724,7 +731,9 @@ agent-browser diff url https://staging.example.com https://prod.example.com --sc
 
 ## Timeouts and Slow Pages
 
-The default timeout is 25 seconds. This can be overridden with the `AGENT_BROWSER_DEFAULT_TIMEOUT` environment variable (value in milliseconds).
+The default timeout is 25 seconds (the *action* timeout: click / eval / wait), set via `AGENT_BROWSER_DEFAULT_TIMEOUT` (milliseconds).
+
+> **Observed:** raising `AGENT_BROWSER_DEFAULT_TIMEOUT` on a command while a daemon is already running does not change the timeout — the daemon read it when it first started, so you must reset the daemon (see "Troubleshooting: Stale Daemon") and rerun with the env set. And it governs *actions*, not `open` navigation: a genuinely hung page still stalls ~25 s regardless, so treat a slow `open` as a page/daemon issue, not a timeout to raise.
 
 **Important:** `open` already waits for the page `load` event before returning. In most cases, no additional wait is needed before taking a snapshot or screenshot. Only add an explicit wait when content loads asynchronously after the initial page load.
 
@@ -789,7 +798,7 @@ agent-browser --session agent1 close   # Close specific session
 agent-browser close --all              # Close all active sessions
 ```
 
-If a previous session was not closed properly, the daemon may still be running. Use `agent-browser close` to clean it up, or `agent-browser close --all` to shut down every session at once.
+`close` / `close --all` close browser sessions but do not kill the daemon process itself (verified). If the daemon is stale (about:blank, timeouts on a healthy page, os error 35), `close` won't fix it — see "Troubleshooting: Stale Daemon" for the scoped reset.
 
 To auto-shutdown the daemon after a period of inactivity (useful for ephemeral/CI environments):
 

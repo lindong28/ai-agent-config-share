@@ -6,6 +6,28 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class WebStaticTests(unittest.TestCase):
+    def test_overview_shows_only_codex_weekly_quota(self):
+        html = (ROOT / "web" / "index.html").read_text()
+
+        self.assertIn(">Codex 7d<", html)
+        self.assertNotIn(">Codex 5h<", html)
+        self.assertIn(">Claude 5h<", html)
+        self.assertIn(">Claude 7d<", html)
+
+    def test_overview_keeps_the_latest_successful_response(self):
+        js = (ROOT / "web" / "app.js").read_text()
+
+        self.assertIn("overviewGeneration", js)
+        self.assertIn("renderedOverviewGeneration", js)
+        self.assertIn("generation < renderedOverviewGeneration", js)
+        self.assertIn("overview-load-error", js)
+
+    def test_new_javascript_removes_the_visible_legacy_codex_card(self):
+        js = (ROOT / "web" / "app.js").read_text()
+
+        self.assertIn('qs("#codex-five-hour")', js)
+        self.assertIn('closest(".kpi-card")', js)
+
     def test_overview_side_panel_links_preserve_selected_range(self):
         html = (ROOT / "web" / "index.html").read_text()
 

@@ -481,8 +481,6 @@ AGENT_BROWSER_PREEXISTING=0
 command -v agent-browser >/dev/null 2>&1 && AGENT_BROWSER_PREEXISTING=1
 
 ensure_npm_global "@modelcontextprotocol/server-github"
-ensure_npm_global "@modelcontextprotocol/server-memory"
-ensure_npm_global "@modelcontextprotocol/server-sequential-thinking"
 ensure_npm_global "@upstash/context7-mcp"
 ensure_npm_global "agent-browser"
 

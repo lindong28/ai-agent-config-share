@@ -24,7 +24,7 @@
 
 | 页面 | 入口 | 能力 |
 |---|---|---|
-| Overview | `/` | KPI 卡片（Today cost、Week cost、Claude 5h/7d 配额、Codex 5h/7d 配额）；「Cost over time」成本时间图；「Top projects this week」「Model mix this month」侧面板 |
+| Overview | `/` | KPI 卡片（Today cost、Week cost、Claude 5h/7d 配额、Codex 7d 配额）；「Cost over time」成本时间图；「Top projects this week」「Model mix this month」侧面板 |
 | Explore | `/explore` | 透视：x 轴（day/week/month/project/model/agent）× 分组（none＝不分组，或任一 x 轴维度）× 指标（cost / input / output / cache_read / cache_creation / total / messages）；预设按钮（Daily cost / Project cost / Model tokens / Agent by project / Cache read）一键切常用组合；agent/project/model **单选下拉过滤**（各以「All agents/projects/models」为首项 + 范围内可选值）；图 + 表 |
 | Sessions | `/sessions` | session 列表（列：agent/project/model/起始/cost/tokens/messages）；排序下拉（Time / Cost / Tokens / Duration）；行展开看 turn 级明细 |
 | Network | `/network` | 五块诊断卡：Local（LAN IP / IPv6 泄漏 / DNS+地域）、Public（IP/位置/ISP/时区）、Risk（proxycheck 风险分+type、ip-api hosting/marked-proxy、stopforumspam 垃圾评分+报告次数、本地 shell 代理环境变量）、Timezone（CLI vs 公网时区匹配）、Conclusion（逐条结论 + verdict 规则说明）；总体 verdict banner + Refresh |
@@ -71,7 +71,7 @@
 ### B. Overview `/`
 
 - **B1 Week cost 窗口可读**：Week cost 卡片副标题显式显示窗口起止 + 时区，语义为「本地时区本周一 00:00 → 此刻」（形如 `周一 <本周周一日期> 00:00:00 <tz-offset> → <now> <tz-offset>`，本机 locale 渲染）；**判据是起始 = 本机时区本周周一 00:00（非滚动 7 天、非周日起），不依赖具体日期**（不同周跑结果不同，对照规则非对照固定日期）。
-- **B2 Today / Week / 配额 卡片**：Today cost = 今日累计；Week cost = 本周至今；Claude/Codex 5h、7d 配额显示百分比 + reset 时间（带时区）+ 更新新鲜度。
+- **B2 Today / Week / 配额 卡片**：Today cost = 今日累计；Week cost = 本周至今；Claude 5h、7d 与 Codex 7d 配额显示百分比 + reset 时间（带时区）+ 更新新鲜度；Codex 不显示已取消的 5h 配额卡片。
 - **B3 Cost over time 面板**：标题为「Cost over time」（非旧「30 day cost」）；按所选 range 取数、随 range 变化（长范围数据跨度严格大于短范围）；长范围自动按周/月聚合（≤90d 天 / ≤1y 周 / >1y 月；`6m` 同 `1y` 走周，`All` 走月）——**粒度在面板副标题 meta 行可读**（形如 `<range> · <day|week|month> buckets · historical rollup`），选 90d 显示 day、1y 显示 week、2y 与 All 显示 month；含「历史成本按采集时定价冻结」footnote。
 - **B4 长范围覆盖提示（边界）**：当所选 range 起点早于最早采集日时，面板显示覆盖提示（如「历史自 <最早日> 起累积；更早未采集」）；range 在数据范围内（如 7d）时不显示该提示，避免误导。**`All`（无界窗口）下覆盖提示恒显示**（其起点恒早于最早采集日）。
 - **B5 侧面板**：「Top projects this week」按本周成本排序的项目；「Model mix this month」本月模型 token 构成；两者 →Explore 链接带当前 range。

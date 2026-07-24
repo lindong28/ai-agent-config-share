@@ -231,7 +231,7 @@
     );
   }
 
-  function renderOverview(data) {
+  function renderOverview(data, selectedRange) {
     qs("#today-cost").textContent = money(data.today.cost_usd);
     qs("#today-tokens").textContent = integer(data.today.tokens) + " tokens";
     qs("#week-cost").textContent = money(data.week.cost_usd);
@@ -262,7 +262,7 @@
     });
     const costMeta = qs("#cost-over-time-meta");
     if (costMeta) {
-      costMeta.textContent = `${rangeLabel(getRange())} · ${costGranularity} buckets · historical rollup`;
+      costMeta.textContent = `${rangeLabel(selectedRange || getRange())} · ${costGranularity} buckets · historical rollup`;
     }
     const coverage = qs("#cost-over-time-coverage");
     if (coverage) {
@@ -278,7 +278,7 @@
     const costLink = qs("#cost-over-time-link");
     if (costLink) {
       const url = new URL("/explore", window.location.origin);
-      url.searchParams.set("range", getRange());
+      url.searchParams.set("range", selectedRange || getRange());
       url.searchParams.set("x", costGranularity);
       url.searchParams.set("group", "agent");
       url.searchParams.set("metric", "cost");
@@ -354,14 +354,15 @@
   }
 
   function renderProviderQuota(provider, block) {
-    qs(`#${provider}-five-hour`).textContent = pct(block?.five_hour_pct);
-    qs(`#${provider}-five-reset`).textContent = resetText(block?.five_hour_resets_at);
+    const fiveHour = qs(`#${provider}-five-hour`);
+    if (fiveHour) {
+      fiveHour.textContent = pct(block?.five_hour_pct);
+      qs(`#${provider}-five-reset`).textContent = resetText(block?.five_hour_resets_at);
+      qs(`#${provider}-five-updated`).textContent = updatedText(block?.updated_at);
+    }
     qs(`#${provider}-seven-day`).textContent = pct(block?.seven_day_pct);
     qs(`#${provider}-seven-reset`).textContent = resetText(block?.seven_day_resets_at);
-
-    const updated = updatedText(block?.updated_at);
-    qs(`#${provider}-five-updated`).textContent = updated;
-    qs(`#${provider}-seven-updated`).textContent = updated;
+    qs(`#${provider}-seven-updated`).textContent = updatedText(block?.updated_at);
   }
 
   function updatedText(iso) {
@@ -634,12 +635,49 @@
   }
 
   async function initOverview() {
+    const retiredFiveHour = qs("#codex-five-hour");
+    const legacyCard = retiredFiveHour && retiredFiveHour.closest(".kpi-card");
+    const compatibilityNodes = qs("#codex-five-hour-compat");
+    if (legacyCard || compatibilityNodes) {
+      (legacyCard || compatibilityNodes).remove();
+    }
+    let overviewGeneration = 0;
+    let renderedOverviewGeneration = 0;
     async function load(force) {
-      const data = await api("/api/overview", { range: getRange(), force: force ? "1" : undefined });
-      renderOverview(data);
+      const generation = ++overviewGeneration;
+      const selectedRange = getRange();
+      let data;
+      try {
+        data = await api("/api/overview", { range: selectedRange, force: force ? "1" : undefined });
+      } catch (error) {
+        if (generation === overviewGeneration) {
+          showOverviewLoadError(error);
+        }
+        return;
+      }
+      if (generation < renderedOverviewGeneration) {
+        return;
+      }
+      renderedOverviewGeneration = generation;
+      const error = qs("#overview-load-error");
+      if (error) {
+        error.remove();
+      }
+      renderOverview(data, selectedRange);
     }
     bindShell(load);
     await load(false);
+  }
+
+  function showOverviewLoadError(error) {
+    let message = qs("#overview-load-error");
+    if (!message) {
+      message = document.createElement("p");
+      message.id = "overview-load-error";
+      message.className = "main error";
+      document.body.appendChild(message);
+    }
+    message.textContent = `Failed to refresh overview: ${error.message || error}`;
   }
 
   async function initSessions() {
@@ -724,13 +762,21 @@
   // unknowingly). The server self-reports staleness via /api/health.stale; this
   // banner makes it visible on every access path, including a long-open tab or a
   // phone on the Tailnet that never went through `tt-web open`.
+  let pageWebSignature = null;
   async function pollFreshness() {
     try {
-      const res = await fetch(new URL("/api/health", window.location.origin), { cache: "no-store" });
+      const url = new URL("/api/health", window.location.origin);
+      url.searchParams.set("asset_watch", "1");
+      const res = await fetch(url, { cache: "no-store" });
       if (!res.ok) {
         return;
       }
       const json = await res.json();
+      if (pageWebSignature && json.web_signature && json.web_signature !== pageWebSignature) {
+        window.location.reload();
+        return;
+      }
+      pageWebSignature = json.web_signature || pageWebSignature;
       if (json && json.stale) {
         showStaleBanner();
       }
@@ -779,7 +825,9 @@
     for (let attempt = 0; attempt < 40; attempt += 1) {
       await new Promise((resolve) => setTimeout(resolve, 500));
       try {
-        const res = await fetch(new URL("/api/health", window.location.origin), { cache: "no-store" });
+        const url = new URL("/api/health", window.location.origin);
+        url.searchParams.set("asset_watch", "1");
+        const res = await fetch(url, { cache: "no-store" });
         if (res.ok) {
           const json = await res.json();
           if (json && !json.stale) {

@@ -45,9 +45,23 @@ def _source_files():
     return files
 
 
+def _web_files():
+    return sorted(path for path in WEB_ROOT.rglob("*") if path.is_file())
+
+
 def _source_signature():
     digest = hashlib.sha256()
     for path in _source_files():
+        try:
+            digest.update(path.read_bytes())
+        except OSError:
+            continue
+    return digest.hexdigest()[:16]
+
+
+def _web_signature():
+    digest = hashlib.sha256()
+    for path in _web_files():
         try:
             digest.update(path.read_bytes())
         except OSError:
@@ -133,11 +147,12 @@ def session_detail(session_id):
     return {"meta": _session_stats(entries), "entries": [_entry_json(entry) for entry in entries]}
 
 
-def health(_query):
+def health(query):
     return {
         "ok": True,
         "signature": BOOT_SIGNATURE,
-        "stale": _source_signature() != BOOT_SIGNATURE,
+        "web_signature": _web_signature(),
+        "stale": _source_signature() != BOOT_SIGNATURE or _first(query, "asset_watch", "") != "1",
     }
 
 
@@ -339,6 +354,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "no-store")
         self.end_headers()
         if send_body:
             self.wfile.write(data)

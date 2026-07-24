@@ -46,7 +46,7 @@ Framing（§1，贯穿全程）→ 对齐（§2）→ Extract：codex 提取（�
 
 ## 3. Extract（offload 给 codex）
 
-编排机制照 `~/.claude/commands/custom/execute-plan.md` 的「启动 Codex」（后台 spawn + session id 捕获）、「等待、轮询与周期汇报」（增量轮询）、「判定 Codex 输出并裁决」（resume 调用形与异常处置）三节——借其法，读该文件自取，不在此复述；完成判据以本节的对账 invariant 为准，该文件裁决节里基于 plan verify 证据的完成判据不适用。与 codex English、与用户中文。
+编排机制照 `~/.claude/commands/custom/execute-plan.md` 的「启动 Codex implementer（harness-aware transport）」、「等待、轮询与周期汇报」（transport-aware wait）、「判定 Codex 输出并裁决」（continuation handle 与异常处置）三节——借其法，读该文件自取，不在此复述；完成判据以本节的对账 invariant 为准，该文件裁决节里基于 plan verify 证据的完成判据不适用。与 codex English、与用户中文。
 
 **spawn 前独立 grep**：supervisor 先自行 grep 枚举 LLM-call 签名（SDK import / HTTP LLM endpoint / 本地推理调用）——无论范围是否已对齐都做。该签名清单是 §2 判定多路径的依据，也是下方对账 invariant 的独立锚，**不得放进 spawn prompt**：对账的独立性依赖两侧不同源。
 

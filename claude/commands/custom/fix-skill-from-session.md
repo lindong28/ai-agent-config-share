@@ -1,14 +1,24 @@
 ---
 name: fix-skill-from-session
-description: 扫当前 session 中 command / skill / script / hook 出现的错行为或模糊指令，定位到 source-level 修复并应用。
-disable-model-invocation: true
+description: 当前 session 中 command、skill、reference、agent 定义、script、hook 或 harness 适配层出现行为错误、漏 use case 或模糊指令，需要 source-level 修复时使用。
 ---
 
 # fix-skill-from-session
 
 ## 何时使用
-- 显式 `/fix-skill-from-session [问题描述]`（描述可选，无则自扫 session）
-- 触发场景：当前 session 中某个 artifact（command / skill / script / hook）行为不对、漏 use case、或指令模糊导致 model 反复走偏
+- 显式 `/custom:fix-skill-from-session [问题描述]`（描述可选，无则自扫 session），或 `/custom:review-session-skills` 经用户选择 finding 后调用
+- 触发场景：当前 session 中某个 harness artifact 行为不对、漏 use case、或指令模糊导致 model 反复走偏
+
+---
+
+## 输入与终态
+
+| 入口 | 输入 |
+|---|---|
+| 直接调用 | 可选的问题描述与当前 session 执行记录 |
+| review handoff | finding、执行证据、归属 artifact 候选与不确定性；均作为待独立核实的诊断输入，不是既定结论 |
+
+诊断成立时进入 source-level 修复；直接调用未诊断出有效问题、或 review handoff 的 finding 被诊断推翻时，报告 no-fix 依据并停止，不为产生 edit 而制造问题。
 
 ---
 
@@ -16,7 +26,7 @@ disable-model-invocation: true
 
 ### 你产出什么、谁来用
 
-交付物是对 source artifact（`.md` / 脚本 / hook 配置）的精确 edit。受益方两类：
+问题成立时，交付物是对 source artifact（`.md` / 脚本 / hook 配置）的精确 edit。受益方两类：
 
 - **当前 session**：edit 立即生效，下次 invoke 同一 artifact 不再踩同坑
 - **未来所有 invocations**：source 修了，所有调用都受益。这是 fix 而非 memory 的本质价值
@@ -105,9 +115,9 @@ fix 过程中至少要让以下几类信息变清晰。**这不是顺序步骤**
 
 ## 3. 输出
 
-交付物是对 source artifact 的精确 Edit。不要绕到 memory / instinct。
+问题成立时，交付物是对 source artifact 的精确 edit。不要绕到 memory / instinct。
 
-### 必须满足（不能满足即失败）
+### 修复分支必须满足（不能满足即失败）
 
 | Fix 后必须满足 | 不合格示例 |
 |---|---|
@@ -124,7 +134,7 @@ fix 过程中至少要让以下几类信息变清晰。**这不是顺序步骤**
 
 ### 审核
 
-完成 Edit 后执行 `/custom:review-skill` 审核目标文件中本次 fix 的改动部分。
+完成 edit 后执行 `/custom:review-skill <target> max-principle-per-subagent=100` 审核目标文件中本次 fix 的改动部分；用户显式要求全面审查时省略该覆盖，沿用 review-skill 自身的默认值。
 
 - **收敛性**：判断 finding 是否需修。需修 → 改 → 重审。循环到一轮无需修。
 
@@ -132,7 +142,7 @@ fix 过程中至少要让以下几类信息变清晰。**这不是顺序步骤**
 
 ## 反模式
 
-- **替用户拍 fix 不 ask**：诊断完直接 Edit——剥夺用户 say no 的机会，且把 confirmation bias 直接落地
+- **替用户拍 fix 不 ask**：诊断完直接 edit——剥夺用户 say no 的机会，且把 confirmation bias 直接落地
 - **修单点不重读整段**：单点 fix 容易破坏相邻语义 / 跨段一致性——不重读就 catch 不到
 - **把"我审过了"当 verify**：扫自己引导的 artifact 时 confirmation bias 强，必须独立重读判断
 - **枚举错误而非找 principle**：fix 只规避了本次特定实例（"不要写 X Y"），没有找到背后的 principle（"lens 应该是启发式提问"）。枚举只能防止已知坑，principle 能防止未知坑

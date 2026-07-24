@@ -187,8 +187,6 @@ check_npm() {
     fi
 }
 check_npm "@modelcontextprotocol/server-github"
-check_npm "@modelcontextprotocol/server-memory"
-check_npm "@modelcontextprotocol/server-sequential-thinking"
 check_npm "@upstash/context7-mcp"
 check_npm "agent-browser"
 
@@ -263,7 +261,7 @@ TOML="$HOME/.codex/config.toml"
 if [ ! -f "$TOML" ]; then
     emit FAIL "config.toml" "$TOML missing (manual merge step not done — see README)"
 else
-    for srv in openaiDeveloperDocs exa context7 github memory sequential-thinking ask-user; do
+    for srv in openaiDeveloperDocs exa context7 github ask-user; do
         if grep -qF "[mcp_servers.$srv]" "$TOML"; then
             emit PASS "config.toml/mcp" "$srv entry present"
         else

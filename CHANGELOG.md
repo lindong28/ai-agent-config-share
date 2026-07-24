@@ -2,6 +2,16 @@
 
 > Append-only（最新在前）。仅记录用户可感知的变更。
 
+## 2026-07-24
+
+- 新增：命令 `/custom:review-alerting`（审服务告警设计质量并修复）、`/custom:review-claude-md`（审单个 CLAUDE.md / AGENTS.md 指令文件）、`/custom:review-session-skills`（审当前 session 触发的 skill）、`/custom:review-agent-rules`（审 agent 规则栈：加载关系 / 冲突 / 能力最小权限）、`/custom:review-memory`（审跨 session 记忆）
+- 新增：references `rigor-tiers.md`（plan 严谨度按 (A,V) 正交分层）、`concurrent-plan-isolation.md`（并发 plan 隔离协议）、`background-agent-monitoring.md`（后台 agent 巡检 + teammate 回收）、`alerting-review-principles.md`（告警设计质量原则）、`claude-md-review-principles.md`（CLAUDE.md 写作原则）——补齐 create-plan / execute-plan / review-gate / service-operations-protocol 的引用依赖
+- 变更：`codex/config.toml` 默认模型 `gpt-5.5`→`gpt-5.6-sol`（reasoning effort `xhigh`→`high`）；`[mcp_servers.ask-user.tools.AskUserQuestion] approval_mode = "approve"`；移除已弃用的 `[mcp_servers.memory]` 与 `[mcp_servers.sequential-thinking]`。install.sh / verify.sh 同步移除这两个 npm 包的安装与检查
+- 变更：`execute-ux-contract` 升级 —— test 阶段可按依赖分组并行（`max-parallel`，默认 5）；§3 收尾从内联 commit 改为「文档同步 recipe → Commit」；可即时修复范围含 Medium；fix session 引入 tdd-workflow 的回归测试 RED→GREEN 约束；获批准的 ux-contract 修正走独立 session + 独立 commit
+- 变更：`claude/skills/agent-browser` 更新到上游最新 —— 纠正「stale daemon」处置指南（`agent-browser close` 不 kill daemon）、新增 `chrome-dev-setup.md` 与 cookie 提取/注入模板
+- 变更：tt-web —— 刷新走 `/api/health?asset_watch=1` 资产监视；KPI 卡片区分「Claude 5h / 7d」与「Codex 7d」quota；新增 Codex rate-limit 解析测试
+- 变更：`claude/CLAUDE.md` Long-Task Protocol 增补「执行中提升」判据（跨 session / context compaction 时判断是否提升为 long-task mode）；`supervise` 增补「判据不可降级」处置腿；多个 command / reference（create-plan / review-plan / review-skill / docs-organization-protocol / skill-review-principles 等）对齐同步
+
 ## 2026-07-12
 
 - 新增：`ask-user-mcp/` —— 给 Codex 提供 Claude 兼容 `AskUserQuestion` 的 MCP server（MCP elicitation 在 Codex TUI 弹原生表单）。install.sh 把它 symlink 到 `~/.codex/ask-user-mcp` 并装 node deps；`codex/config.toml` 新增 `[mcp_servers.ask-user]` + `[approval_policy.granular] mcp_elicitations = true`（替代旧 `approval_policy = "never"`，保持自动批准同时让表单浮现）

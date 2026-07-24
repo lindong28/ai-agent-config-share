@@ -120,9 +120,38 @@ status() {
   echo "tt-web running: pid=$pid port=$port uptime=${uptime:-unknown} url=http://$CONNECT_HOST:$port"
 }
 
+compile_ok() {
+  # Mirror server.py's _source_files(): top-level *.py + parsers/**/*.py. Returns
+  # nonzero if any fails to compile, so we never restart into broken code.
+  python3 - "$ROOT_DIR" <<'PY' 2>/dev/null
+import pathlib, py_compile, sys
+root = pathlib.Path(sys.argv[1])
+files = sorted(root.glob("*.py")) + sorted((root / "parsers").glob("**/*.py"))
+for f in files:
+    py_compile.compile(str(f), doraise=True)
+PY
+}
+
+refresh_if_stale() {
+  local port stale
+  port="$(cat "$PORT_FILE" 2>/dev/null || echo "$BASE_PORT")"
+  stale="$(curl -fsS "http://$CONNECT_HOST:$port/api/health?asset_watch=1" 2>/dev/null \
+    | python3 -c 'import json,sys; print("1" if json.load(sys.stdin).get("stale") else "0")' 2>/dev/null || echo 0)"
+  [ "$stale" = "1" ] || return 0
+  if compile_ok; then
+    echo "tt-web: 检测到代码已更新，重启以加载新代码…"
+    stop >/dev/null || true
+    start
+  else
+    echo "tt-web: 代码已更新但存在语法错误，未重启；打开当前(旧)版本。" >&2
+  fi
+}
+
 open_dashboard() {
   if ! is_running; then
     start
+  else
+    refresh_if_stale
   fi
   local port
   port="$(cat "$PORT_FILE")"

@@ -14,13 +14,14 @@ tools: ["Read", "Write", "Edit", "Bash", "Grep", "Glob", "AskUserQuestion", "Age
 |---|---|
 | type | 要更新的文档类型：readme / architecture / adr / plans / experiences / issues / contracts / changelog / data / claude-md |
 | context | caller 独有的上下文（用户说了什么、刚改了什么）。Repo 状态由 subagent 自行读取 |
+| write_contract | 可选；caller 已从 `docs-organization-protocol.md` 解析出的写入路径与允许的 mutation shape，用于约束本次写入 |
 | interactive | `true`（手动触发，可 AskUserQuestion）或 `false`（自动触发，自主完成） |
 
 doc-updater 作用于**当前 CWD 所在的 repo**（在其中读写文档）；目标 repo 不是它时，caller 须在 spawn 前先把 CWD 切到目标 repo。
 
 ## 执行
 
-基于 context + repo 状态更新指定类型的文档。格式和规则参考 `~/.claude/references/docs-organization-protocol.md` 对应的 §4.x；建议格式模板见 `~/.claude/references/docs-format-templates.md`。如果新增了文件，同步更新 docs/CLAUDE.md 索引。
+基于 context + repo 状态更新指定类型的文档。caller 提供 `write_contract` 时，在每次写入前按它检查目标文件与 mutation shape；不满足时不修改，在返回报告中说明阻塞。未提供时沿用基于 context + repo 状态 + 协议对应 §4.x 的既有行为。建议格式模板见 `~/.claude/references/docs-format-templates.md`。如果新增了文件，同步更新 docs/CLAUDE.md 索引。
 
 `interactive = true` 时，对取舍不确定的内容可通过 AskUserQuestion 上升到用户。以下是各类型常见的对齐方向（不限于此）：
 
@@ -44,6 +45,7 @@ doc-updater 作用于**当前 CWD 所在的 repo**（在其中读写文档）；
 - **已起草 / 更新的文档**：类型 + 落点（新建 or 增量）。
 - **未预见取舍**：起草中浮现、超出 caller 传入 `context` 已对齐范围的取舍点（`interactive = true` 时已就地 AskUserQuestion 的无需再列）。
 - **缺失依赖**：按协议须补、但 doc-updater 不自动生成的产物（如缺失的生命周期脚本）。
+- **写入阻塞**：`write_contract` 不允许的目标或 mutation shape + 未执行原因。
 
 ## 约束
 

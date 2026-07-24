@@ -97,14 +97,18 @@ origin: 2026-05-31
   - **out-of-scope** → 仅记录，不在本轮解决
 - **终止**：in-scope 集清空且无新 in-scope issue 产生（干净终止）；或某 in-scope issue 合法 stop（通过 Stop Gate）无法推进（该 issue 留 open、半成品交阶段 D，其余已完成产物照进阶段 C）。两种都是阶段 B 出口。
 
-### 阶段 C：Commit（阶段 B 终止后、handoff 前）
+### 阶段 C：文档同步与 Commit（阶段 B 终止后、handoff 前）
 
-**判据**：working tree 有本节 Scope 内的 committable diff（完成的 simple 产物 / A2 · 阶段 B 台账回写 / doc 同步）→ 执行本节 commit；不因 in-scope 未清空（某 issue 合法 stop）而跳过整节——batch 下部分完成是常态，合法 stop 的 issue 半成品排除在 Scope 外、留给用户（阶段 D 注明），不入 commit。全部已修 / 陈旧的一轮同理：无新 issue 落地但 A2 归档 / 描述订正是 Scope 内 diff，须 commit 使台账持久化。Scope 内确无 committable diff（纯合法 stop 无其它产物 / 全 out-of-scope 无 A2 回写）→ 跳过本节，由阶段 D 注明。
+**文档同步（阶段 B 终止后先做）**：先从本轮 issue 台账所属工作树确定目标 repo 的绝对根路径 `target_repo`，把 CWD 切到该路径；再读 `~/.claude/commands/custom/sync-docs.md`「被 supervisor 编排复用」契约，对本 command 拥有的收尾切片执行完整 recipe，不直接调用 `/custom:sync-docs`。传入本轮 goal、A3 批准的 triage、simple session 产物与 verify、issue 台账回写、本节 residual diff；审查范围只覆盖该切片受影响的文档及其索引 / cross-ref。complex issue 已由 execute-plan 提交的代码与文档仅作排除语境，不再进入本轮审查（避免 CHANGELOG 重复 entry）。
 
-**Doc 同步（commit 前先做）**：本节 commit 切片内（simple issue 产物 / issue 文件回写 / 未走 execute-plan 的改动）有用户可感知的变化时，按 `~/.claude/references/docs-organization-protocol.md` §5 spawn `doc-updater`（`interactive=false`）同步。complex issue 的代码 + doc 同步已由 execute-plan commit，不重复触发（CHANGELOG append-only，重复 spawn 致重复 entry）。
+Caller delta：目标 repo 的文档编辑与 commit ownership 仍属本节；本节显式承接 recipe 返回的 supporting artifact gate，在 Commit 判据前执行 `review-gate`，gate 修复若改变文档或其陈述事实则重新进入 recipe。原则缺口的 owning repo 独立 commit 由 recipe 支路完成，不并入目标 repo 的本节 commit；完成后回到文档审查循环。
+
+Recipe status 为 `awaiting-caller-gate` 时先执行返回的 supporting artifact gate；gate passed 后按恢复点续跑 recipe，gate blocked 时保留两层状态与恢复点并按 Stop Gate 交接。只有 recipe `converged` 才进入 Commit 判据；recipe `blocked` 同样不把阶段 C 报成完成，解除后重进本节。
+
+**Commit 判据**：recipe 收敛后，working tree 有本节 Scope 内的 committable diff（完成的 simple 产物 / A2 · 阶段 B 台账回写 / 文档同步）才 commit；不因 in-scope 未清空（某 issue 合法 stop）而排除其余成品。合法 stop 的 issue 半成品排除在 Scope 外、留给用户（阶段 D 注明）。全部已修 / 陈旧的一轮同理：A2 归档 / 描述订正是 Scope 内 diff，须 commit 使台账持久化。Scope 内确无 committable diff 时只跳过目标 repo commit，不跳过上述文档审查，由阶段 D 注明原因。
 
 **Scope**：
-- 进 commit：本轮 simple issue 修复的代码（complex 代码已由 execute-plan 提交，不在此切片）+ A2 / 阶段 B 的 issue 文件回写（任一判定 resolved 的 issue——A2 已修 / 阶段 B 修复——从 domain 文件删条 + 写入 `archive/closed.md` 两侧改动；新 issue 写入对应 domain 文件）+ doc 同步产出
+- 进 commit：本轮 simple issue 修复的代码（complex 代码已由 execute-plan 提交，不在此切片）+ A2 / 阶段 B 的 issue 文件回写（任一判定 resolved 的 issue——A2 已修 / 阶段 B 修复——从 domain 文件删条 + 写入 `archive/closed.md` 两侧改动；新 issue 写入对应 domain 文件）+ doc 同步产出 + recipe 授权且已过 gate 的 supporting artifact
 - 不进 commit：repo 中与本轮无关的 in-flight 改动——resolve-issues 常对着有前序 session 未提交工作的 repo 跑，勿卷入；runtime / build artifact；过程性 log
 - 某文件本轮回写叠在前序未提交内容之上、或被 execute-plan §6 注明为撞车排除文件（无法按文件拆开）→ 整体留给用户连同其历史工作处理，本节不单独提交，阶段 D 注明
 
@@ -116,10 +120,12 @@ origin: 2026-05-31
 
 **必含**（无对应事实则注明"无"，不编造填充）
 - 本轮 goal + in-scope / out-of-scope 计数
-- 每个本轮委派解决的 issue（阶段 B，simple / complex）：路由 + session id 或 plan 路径 + commit hash（该 issue 落地的可追溯 anchor——simple 产物与 issue 回写为阶段 C 产物，complex 代码为 execute-plan 的 commit 产物经其 §6 返回；无 hash 则注明原因——凡阶段 C 未提交该产物者：叠加前序未提交工作留给用户、或该 issue 合法 stop 半成品不入 commit 留给用户（纯 stop 轮整节跳过 / 混合轮单独排除，均属此））+ verify 证据
+- 每个本轮委派解决的 issue（阶段 B，simple / complex）：路由 + session id 或 plan 路径 + commit hash（该 issue 落地的可追溯 anchor——simple 产物与 issue 回写为阶段 C 产物，complex 代码为 execute-plan 的 commit 产物经其 §6 返回；无 hash 则注明原因——凡阶段 C 未提交该产物者：叠加前序未提交工作留给用户、或该 issue 合法 stop 半成品不入 commit 留给用户（纯 stop 轮跳过目标 repo commit / 混合轮单独排除，均属此））+ verify 证据
 - 回写纠正 / 归档了哪些 issue：陈旧回写 + 本轮 open→resolved 的所有 issue（A2 已修与阶段 B 修复，均移入 archive）
 - 新产生并纳入 / 仅记录的 issue
 - 残余风险 / 未纳入项及理由
+- 阶段 C 的完整 sync-docs manifest：recipe / caller gate status transition 轨迹与当前状态（含 `awaiting-caller-gate + gate blocked` 的合法 stop）、审查范围、实际起草 / 编辑的文档 / supporting artifact / 原则文件、coverage 状态与轮数、原始范围终审结果、最终 findings / decisions / edits、未解决的取舍 / 缺失依赖 / 写入阻塞及恢复点、caller gate 结果 + 目标 repo commit hash（无对应项或跳过 commit 均注明原因）
+- 原则缺口支路状态：not-triggered / committed / rejected / deferred；非 not-triggered 时附原因，committed 时再附原则文件 + owning repo + 独立 commit hash + scope
 
 **适用时含**
 - complex issue 的 plan 路径 + execute-plan 的 UX gate 轮次与最终 issue 状态

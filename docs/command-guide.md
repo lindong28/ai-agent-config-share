@@ -27,6 +27,11 @@
 | `/custom:borrow-design <target> <reference>` | 对比两份 anatomy / design 文档，产出 consumer-aware、ROI 排序的 borrow checklist（不落地合并） | 否（单次执行，user-only） |
 | `/custom:anatomize-llm-workflow <系统>` | 把 LLM 调用型系统的 workflow 提取成质量诊断地图、逐节点审查 prompt | 否（单次执行） |
 | `/custom:create-eval-harness <判定 prompt>` | 给单个语义判定 prompt（judge / 分类 / 路由 / 抽取）建带标签 eval 与回归测试 | 否（单次执行，user-only） |
+| `/custom:review-claude-md <path>` | 按 `claude-md-review-principles.md` 审查单个 CLAUDE.md / AGENTS.md 指令文件的写作质量与结构 | 三阶段循环（审查→决策→落地） |
+| `/custom:review-agent-rules` | 审 agent 规则栈：加载关系、跨文件冲突、能力最小权限 | 同上 |
+| `/custom:review-session-skills` | 审当前 session 触发过的 skill / command 行为是否合规 | 同上 |
+| `/custom:review-memory` | 审跨 session 记忆（当前 harness 范围）是否准确 / 值得留存 | 同上 |
+| `/custom:review-alerting <项目>` | 按 `alerting-review-principles.md` 审服务故障告警设计质量（值不值得 page、多严重、说什么、要不要合并）并修复 | 同上 |
 
 注：所有 `create-*` / `fix-*` 命令**已经在内部 invoke 对应的 review 循环**. 但有时候内置的循环还是不够，需要额外手动多次触发review。
 

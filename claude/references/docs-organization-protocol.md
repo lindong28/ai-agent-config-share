@@ -34,6 +34,13 @@ User 是拿到源代码后需要部署、使用、运维的人——部署（环
 
 每个文档标注其**最上层消费者**——标注 `[User]` 意味着三层都看，`[Developer]` 意味着开发者和 Agent 看，`[Agent]` 意味着仅 Agent 需要看。
 
+**Triage 先看消费者**：决定某文档 keep / move / remove（含"溶进 skill 后删除"类 dissolution）前，先查它的最上层消费者，不按上一次 triage 的套路惯性处置。skill 是 Agent 执行面，只有 Agent 读得到——分界线是最上层消费者是否为 Agent：
+
+| 最上层消费者 | 能否溶进 skill 后删除 | 处置 |
+|---|---|---|
+| `[Agent]`（reference notes 等） | 可 | 内容并入 skill，原文件删除 |
+| `[User]` / `[Developer]`（人类读者的政策、教学、架构类文档） | 不可——改成「以 skill 为准」的 redirect stub 等于让读者去读读不到的材料 | 保留并直陈自身内容；仅把可执行清单、判读细则类执行细节用指针 defer 给 skill（skill 仍是 methodology 单一权威）；成段推导/教学直觉移入承载它的同消费者文档，原处留一行立场 + 指针 |
+
 ### 目录结构
 
 ```
@@ -232,7 +239,7 @@ Lens：你做了一个设计选择，且未来 agent 如果不知道这个选择
 
 **What**：已完成 plan 的 plan.md 和 spec.md 归档。保留设计意图和需求定义的历史记录。
 
-**Format**：目录结构，每个 plan 一个子目录（`<YYYYMMDD>-<short-name>/`），仅归档 plan.md + spec.md（不含 state.md / journal.md）。
+**Format**：目录结构，每个 plan 一个子目录（`<YYYYMMDD>-<short-name>/`），仅归档 plan.md + spec.md 这类设计/需求产物。归档件在正文之前附 2 行 **Archive status** 导航头——说明执行过程临时产物（如 `state.md` / `journal.md`，若有）按本节不入档，并给出实际结果/裁决的当前查阅入口（须指向具体可定位的文件/章节，非泛指"相关文档"）；不修改 plan 正文本身。
 
 **何时写**
 
@@ -316,6 +323,12 @@ Lens：你花了非平凡的时间解决一个问题，且解法不能从代码�
 - 找到一个有效的 workaround
 - 总结出一个可复用的 pattern
 - 从 journal.md `[lesson]` / `[fact]` 条目提升（见 §5）
+
+**候选筛选**（尤其从 journal 批量提升时，先剪枝再落笔）：
+
+- **去重优先**：写入前先扫 `~/.claude/references/` 与本项目 `docs/experiences/`，已被既有内容覆盖的候选 → cut，避免冗余 / 与既有内容漂移。
+- **Trust-the-LLM 剪枝**：把候选用 1-2 句 WHAT-framing 交 SOTA 模型，它会自动产出对的东西吗？会 → 模型已知 → cut，别记大段常识。
+- **跳过 efficiency-only、要求可泛化**：agent 自己探索能完成、只是慢一点的事不值得记；留下的必须提升未来同类任务的成功率或质量，且能泛化到本项目同类任务、非只对该次 journal 单次任务有用。
 
 写入时找到与 topic 匹配的文件。没有合适的文件时创建新的 topic 文件并更新 experiences/README.md 索引。
 
@@ -525,7 +538,7 @@ task 产物的条目是执行过程中的即时记录，面向"接手同一任�
 
 ## 6. 初始化与更新 docs/
 
-通过 `/custom:sync-docs [改了什么]` 命令手动触发。给出改动描述则补该改动的文档，空参数则审查并修全部现有文档。文档不存在则创建，已存在则增量更新。创建时按 §2 目录结构初始化、生成 docs/CLAUDE.md 索引、按 `docs-format-templates.md` 初始化各文档。
+独立维护时通过 `/custom:sync-docs [改了什么]` 手动触发；拥有收尾职责的 supervisor 按 `sync-docs.md`「被 supervisor 编排复用」契约执行完整 recipe，不内联调用命令。独立命令给出改动描述则补该改动的文档，空参数则审查并修全部现有文档。文档不存在则创建，已存在则增量更新。创建时按 §2 目录结构初始化、生成 docs/CLAUDE.md 索引、按 `docs-format-templates.md` 初始化各文档。
 
 详见 `~/.claude/commands/custom/sync-docs.md`。
 

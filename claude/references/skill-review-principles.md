@@ -37,6 +37,7 @@ A useful contract has two layers: (a) **meaning per field** — not "tag_violati
 
 When reviewing:
 - For wrapped-program skills, locate the contract (README section, entry-point docstring, schema spec). If absent, stop the audit — the rest is built on guesses.
+- Contract discovery is complete when every load-bearing interpretation is grounded in the controlling authoritative contract(s); extend it only for unresolved semantic dependencies, including unclear precedence or version, not mere transitive connectivity.
 - Flag contracts that list fields by name and type without explaining semantic meaning or intended consumer behavior.
 - For each program output the SKILL.md consumes, hold contract and SKILL.md side by side: does the skill's interpretation match the contract's stated meaning? Does the skill's response match the contract's stated consumer behavior?
 - Flag SKILL.md sections acting on fields whose semantics aren't in the contract — either the contract is incomplete or the skill is fabricating.

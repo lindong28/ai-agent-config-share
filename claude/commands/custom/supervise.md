@@ -141,7 +141,7 @@ Bash({ command: "~/.claude/bin/poll-progress.sh <output-file>" })
 
 | 观察到的现象 | 下一步 |
 |---|---|
-| Agent 停止（无论是否声称完成） | 先 `Read(<output-file>)` 全量取证（见 §3），再裁决；核对两个 lens：(1) **verify 证据 ≥ success criteria**（每个 criterion 有可观察证据；存在性 / 通过性证据——命中 ≥1 / 有输出 / 文件存在 / exit 0——不自动满足 §1 锁定的量级 / 覆盖类 criterion，PASS≠任务完成）(2) **Stop Gate 检查**——agent 把残余工作推给用户的部分，必须通过 `plan-execution-principles.md` Stop Gate（§0）的全部 gate。"Agent 声称 blocked" 不等于 "gate 已通过"——supervisor 必须独立验证每个 gate，而不是接受 agent 的 self-report。两个 lens 都满足 → 进 §5；任一缺项 → resume，resume-prompt 指出哪几项 criterion 未达成 + supervisor 在 log 里看到的相关线索；回到 §3 |
+| Agent 停止（无论是否声称完成） | 先 `Read(<output-file>)` 全量取证（见 §3），再裁决；核对两个 lens：(1) **verify 证据 ≥ success criteria**（每个 criterion 有可观察证据；存在性 / 通过性证据——命中 ≥1 / 有输出 / 文件存在 / exit 0——不自动满足 §1 锁定的量级 / 覆盖类 criterion，PASS≠任务完成）。交付物只满足 criterion 的**更松读法**（"一套 / full set"用单个结案、把一个目标当另一个目标验）＝ `plan-execution-principles.md`「判据不可降级」所指"以更易满足的代理判据替换原判据"，按其处置：能 resume 补齐到字面达成的走本行下方"缺项→resume"、不惊动用户；字面达成不可行、只能降级判据的（如"当前 UX 一次只出 1 个"）停→按 Dialogue facet `AskUserQuestion` 交用户裁决，不由 supervisor 单方消化。(2) **Stop Gate 检查**——agent 把残余工作推给用户的部分，必须通过 `plan-execution-principles.md` Stop Gate（§0）的全部 gate。"Agent 声称 blocked" 不等于 "gate 已通过"——supervisor 必须独立验证每个 gate，而不是接受 agent 的 self-report。两个 lens 都满足 → 进 §5；任一缺项 → resume，resume-prompt 指出哪几项 criterion 未达成 + supervisor 在 log 里看到的相关线索；回到 §3 |
 | Agent 抛出问题需要用户决策 | 见下方 **Dialogue facet** |
 | Agent 异常 / 无 session id / `.output` 数据截断（进程异常致数据残缺，非 §3 `poll-progress.sh` 回显层面的跳过） | 按 wrapper / 适配层问题处理：排查 stderr / 退出码 + 看 `git status` 判断是否已部分完成。反转成本高（重启丢全部上下文 / resume 损坏 session 后续不可信），supervisor 不要 silent decide——把诊断结果 + 候选 [resume 同 session / 重启新 session / 放弃交还用户] 通过 `AskUserQuestion` 让用户拍板 |
 | Agent stuck（启动 5 分钟后仍无实质输出） | Stuck session 无可复用上下文——kill 进程，用相同 spawn-prompt 启动新 session（不 resume）。连续两次 stuck → 升级用户（可能是 backend 不可用或 prompt 触发死循环） |
@@ -191,6 +191,7 @@ resume-prompt 只列：哪几项 success criterion 未达成（无证据；存�
 **例外**——下面这些不是 agent 决策点（没有可被采纳的 agent 推荐来吸收其反转成本），autopilot 一律不抑制、仍升级用户：
 - §4 表格中任何要求升级用户的异常 / 不可恢复行：Agent 异常 / 无 session id / `.output` 数据截断（重启丢上下文 / resume 损坏 session），以及连续两次 stuck。
 - §3「环境争用监测」中反转成本高或可逆性不确定（尤其触及线上）的干预决策——仍按 §3 走 `AskUserQuestion`。
+- §4 lens 1 的**判据降级**（字面达成不可行、只能用更松代理判据结案）——降级用户锁定的 criterion 不是 agent 决策点（无可采纳的 agent 推荐吸收其反转成本），autopilot 不抑制、仍停→升级用户；能 resume 补齐到字面达成的不在此列（照常 resume）。
 
 ### 5. 任务结束：general.md 落地
 
@@ -242,7 +243,7 @@ Type 定义：
 - Backend + session id + workdir
 - 用户原始 task + 用户锁定的 success criteria
 - 最终 outcome：完成 / 合法 stop / 失败
-- Verify 证据摘要（每个 success criterion 对应的可观察信号）
+- Verify 证据摘要（每个 success criterion 对应的可观察信号）。任何走**判据降级**路径结案的 criterion（§4 lens 1），作为显式 delta 列出（criterion 原文 vs 实际交付值 + 降级理由），不报为普通"达成"
 - **Working tree 状态摘要**（`git status` / diff 体量）——若 agent 已 commit 则给出 commit hash；若未 commit 则明示"改动在 working tree，用户后续自行 commit"
 - Supervisor 中间观察的简短总结（resume 次数 / dialogue 升级次数）
 - `general.md` 落地状态：新增 N 条 / 更新 M 条 / 无 issue

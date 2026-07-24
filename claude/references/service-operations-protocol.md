@@ -1,6 +1,6 @@
 # Service Operations Protocol
 
-项目中"长期运行的服务"的**运维接口约定**——统一**生命周期脚本的命名与契约**（一套动词名 + 跨项目一致的行为保证）、**及 pull 的代码如何在运行服务上生效（收敛部署）**，让用户在任何项目里用同一套命令发现、部署、运维服务。**Trust-the-LLM 优先**：给的是 WHY + WHAT + 契约，不是逐行模板。
+项目中"长期运行的服务"的**运维接口约定**——统一**生命周期脚本的命名与契约**（一套动词名 + 跨项目一致的行为保证）、**pull 的代码如何在运行服务上生效（收敛部署）**、**及服务失败时如何主动够到用户（故障告警，§6）**，让用户在任何项目里用同一套命令发现、部署、运维服务，并在服务出错时被及时告知。**Trust-the-LLM 优先**：给的是 WHY + WHAT + 契约，不是逐行模板。
 
 **与 `docs-organization-protocol.md` 的边界**：本协议是**脚本接口轴**——脚本怎么命名、什么契约、代码改动怎么生效、vendored 怎么办；服务该进哪些文档（README 服务章节、operations/services.md）的**结构**归 docs-org，本协议 §4 只提服务特定要求并指过去。
 
@@ -126,6 +126,7 @@
 - **有哪些服务** + 各自作用（一句话）
 - **怎么部署 / 起停 / 查状态 / 移除**——指向该服务的运维入口（repo own→§3 脚本，取实现子集；vendored→上游原生接口）
 - **可选服务**（§3.6）额外标注：默认不装、用什么 flag/env/命令开启——让用户知道这台机怎么把它开启
+- **故障告警**（§6）——**若该服务会告警**（是否需要按 §6.1 判据）：述其路径（in-service emit 还是靠外部探针），让用户知道"出错时会不会有人喊我"；§6.1 判为无需告警的服务免此项
 - **重内容下沉**——单服务运维细节多到会撑大 README 时，移到 `docs/operations/`，README 只留清单 + 运维入口 + 一条引用链接
 
 判据：用户读完这节，不读源码就知道"在跑什么、怎么起停查"。骨架见 `docs-format-templates.md` §4.1。
@@ -144,10 +145,51 @@
 |---|---|
 | 新增服务 | README 服务章节 + operations/services.md 加条目；提示补齐运维入口（repo own→生命周期脚本；vendored→确认原生接口已文档化）；若是 §3.6 可选服务，另标注其 opt-in 入口（默认不装 + 开启命令） |
 | make-live 路径（代码改动如何生效） | README 服务章节 / operations 必述该服务的 make-live：再跑 `./install.sh`（无 install 的手动 server→stop && start）后新代码经传播 / 构建 / 生命周期哪条路到达运行态（见 §3.5）；repo own 与 vendored 都要说明；若服务持代码之外的持久状态（DB schema / 磁盘配置），另述其迁移路径（见 §3.5） |
+| 故障告警链路新增 / 改（§6） | README 服务章节 / operations 标注该服务是否告警、in-service emit 还是靠外部探针、dedup-key；repo own 新增 in-service emit 时确认走 `im-notify --alert --dedup-key`（非手搓 webhook）；vendored→标注上游原生告警接口、不包 im-notify（§6.5） |
 | 移除服务 | 两处删条目 |
 | 部署方式变化 | 更新 supervisor / 脚本标注 |
-| 裸命令运维 | 提示该换成规范脚本（仅 repo own 的服务） |
+| 裸命令运维 | 提示该换成规范脚本（仅 repo own 的服务）；服务内手搓 webhook 告警提示改走 `im-notify --alert`（§6.3） |
 
 sync-docs 审查侧的 flag 条件见 `docs-review-principles.md` §5（服务覆盖、裸命令该换脚本；vendored 原生接口不算缺陷）。
 
 doc-updater 报告缺失的脚本，**不自动写脚本**（生成代码超出文档范畴）。
+
+---
+
+## 6. 故障告警（push 可观测）
+
+§3 的 `status` 是 **pull** 可观测——你主动跑才看到。但长期服务会在你不看时失败，需要 **push**：失败主动够到你。本节是 `status` 契约的 push 对偶，让"造服务"这件事默认就带上"它坏了我怎么知道"，而非每次等用户提。
+
+本节管**投递与去重契约**（怎么发、发不发、别刷屏）；告警的**设计质量**——值不值得 page、多严重、消息说什么、多告警要不要合并——见 `alerting-review-principles.md`。构建或审核告警时两档都要过（审核用 `/custom:review-alerting`）。
+
+### 6.1 作者自检：这个服务需要 push 告警吗
+
+判据：它失败时，用户会及时知道吗？不会 → 需要 push 告警。空闲无害、失败也无所谓的服务不强求。判据由服务作者按 §3.5 作者自检 的方式自评——造服务时就问，别留到出过一次事故才补。
+
+### 6.2 两类失败 → 两种机制（关键）
+
+"服务出错"其实是两类，**探测位置不同**，别指望一种机制够到另一类：
+
+| 失败类 | 谁能看见 | 机制 |
+|---|---|---|
+| 崩溃 / 进程死 / 卡死 / 崩溃环 | **外部探针**——进程自己已经死了，喊不出话 | launchd 服务：复用 fleet 级 watchdog（system-config `watchdog.sh` 已在监所有 launchd user agent 的崩溃环 / 日志暴涨 / 高 CPU），注册为它看得见的 supervisor 作业即被覆盖。cron / 非 launchd 的进程死 watchdog 看不全——用 `run-or-alert`（§6.3）包住命令，非零退出即告警 |
+| 应用级健康失败——进程活着但活儿失败（抓取 0 条、API 全 500、pipeline 产出空、额度耗尽） | **只有服务自己的代码** | **in-service emit**：在失败路径调 `im-notify --alert`（§6.3） |
+
+外部探针抓「死没死」，in-service emit 抓「活着但错了」。后者是造服务时最容易漏的——它要求你写业务逻辑时主动想到"这个失败外面看不见，得自己喊一声"。
+
+### 6.3 发送走 `im-notify` 家族（复用 infra，别手搓 webhook）
+
+两条复用入口，别每个项目重写 webhook POST（源 `im-notify/`，均已在 PATH）。两者都走 `im-notify --alert`，须先在 `~/.claude/.env` 配好 `FEISHU_GENERAL_ALERT_WEBHOOK`（与 notification 通道分开），否则 exit 2 不发：
+
+- **in-service emit**（应用级健康失败）：失败路径直接调 `im-notify --alert --dedup-key <svc>`。`--dedup-key` 按 key 下文本精确匹配去重（崩溃环只告警一次，不刷屏）；精确匹配语义与易变指标处理见 `im-notify/README.md` § Two modes
+- **cron / 非 launchd 的进程死**：用 `run-or-alert --key <svc> -- <命令>` 包住——命令非零退出即告警、退出 0 自动复位使复发能重告警，原退出码透传。这是崩溃类里 watchdog 看不全那部分的复用件；行为细节见 `im-notify/README.md` § run-or-alert
+
+### 6.4 告警值不值得发（纪律）
+
+**状态变化才告警**，非每次 error。去重由 `--dedup-key` 承担，但作者仍要选对 key 的粒度：一个 key = 一个"问题身份"。同一问题反复出现 = 一条；恢复了想重新感知，发一条不同文本（如 `recovered`）即可。滥发会被用户调成静音——那时告警等于没有。
+
+### 6.5 Vendored 例外
+
+与 §1 一致：上游自管的服务只文档化其原生告警接口，不在仓库里包 `im-notify` 调用（包装会被上游更新覆盖）。
+
+**记录在哪**：服务的告警路径（有没有、in-service 还是靠探针、dedup-key）是 [User] 运维信息，落 README 服务章节 / operations（落点结构归 docs-org，见 §4、§5）。

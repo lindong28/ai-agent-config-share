@@ -49,7 +49,6 @@
       "mcp__chrome-devtools__*",
       "mcp__memory__*",
       "mcp__prompts.chat__*",
-      "mcp__mcp-search__*",
       "mcp__plugin_claude-mem_mcp-search__*",
       "mcp__plugin_prompts_chat_prompts_chat__*",
       "mcp__plugin_everything-claude-code_*",

@@ -1,6 +1,6 @@
 ---
 name: review-gate
-description: Use when 一轮代码/脚本/常驻配置（hooks、zshrc、skill 等 artifact）的生成或修改已完成、准备宣告完成或 commit 之前——此时必须过生成后 review gate；也用于用户显式要求过 gate 时（如"审一下刚写的"）。无改动的轮（如纯问答）与多步流的中间 step（自身不 commit 时）不自动触发。本 gate 是完成前的强制底线：指令 artifact（skill / command / reference / principles）的改动过本 gate 即含对应专项深审、不需另跑；其余对象不替代 review-pr 等专项深审，跑过通用 code-review 也不等于过本 gate。
+description: Use when 一轮代码/脚本/常驻配置（hooks、zshrc、skill 等 artifact）的生成或修改已完成、准备宣告完成或 commit 之前——此时必须过生成后 review gate；也用于用户显式要求过 gate 时（如"审一下刚写的"）。无改动的轮（如纯问答）与多步流的中间 step（自身不 commit 时）不自动触发。本 gate 是完成前的强制底线：指令 artifact（skill / command / reference / principles / CLAUDE.md·AGENTS.md）的改动过本 gate 即含对应专项深审、不需另跑；其余对象不替代 review-pr 等专项深审，跑过通用 code-review 也不等于过本 gate。
 origin: 2026-07-11（源：do-sleep 自查漏掉两个致命 bug 的 session）
 ---
 
@@ -48,9 +48,11 @@ trivial 免审必须显式声明"本次免审，理由 X"——免审可见、�
 
 定档 borderline（含 trivial 边界拿不准）：有人值守经 `AskUserQuestion` 对齐；无人值守流宁按高一档过，不阻塞。
 
+若改动隶属一份记录 rigor `(A,V)` 的 plan，读取 `~/.claude/references/rigor-tiers.md`，按其组合契约把本地定档与 plan `(A,V)` / override 逐维取高；本地定档是不可降低的 V floor，不因 plan tier 较低而降档。trivial 免审仍先于本组合（无行为面的改动 floor 不适用）；只有有行为面的 unit 按有效向量升档。
+
 ## 分档执行
 
-专项路由（先于下表机制）：review 对象为指令类文件（skill / command / reference / principles，下称**指令 artifact**）→ 中/高档不走下表，改为主 session 跑对应专项 command，按类型映射：**skill / command / reference → `/custom:review-skill`**；**principles 文件 → `/custom:review-principles`**（判据：主体即一套可审的评审原则、典型 `*-principles.md`；仅附带 Principles 段的 style/patterns 参考不算，归上一支）——principles 同时是 reference，按类型特异性取更具体的一支 review-principles。review 范围限本轮 diff（作为 diff-focus 输入下达；多文件逐文件跑，交互可合并）。findings 裁决 / 修复 / 落地重跑按对应专项 command 自身工作流（含用户裁决 + 中立重跑），其循环干净终止（实际跑完并达到用户裁决）即本 gate 放行——下方对抗式纪律的返回契约与「gate 裁决」severity 处置不适用于此路由。附加约束：
+专项路由（先于下表机制）：review 对象为指令类文件（skill / command / reference / principles / CLAUDE.md·AGENTS.md，下称**指令 artifact**）→ 中/高档不走下表，改为主 session 跑对应专项 command，按类型映射：**skill / command / reference → `/custom:review-skill`**；**CLAUDE.md / AGENTS.md（symlink 审其实际 source）→ `/custom:review-claude-md`**；**principles 文件 → `/custom:review-principles`**（判据：主体即一套可审的评审原则、典型 `*-principles.md`；仅附带 Principles 段的 style/patterns 参考不算，归上一支）——principles 同时是 reference，按类型特异性取更具体的一支 review-principles。review 范围限本轮 diff（作为 diff-focus 输入下达；多文件逐文件跑，交互可合并）。findings 裁决 / 修复 / 落地重跑按对应专项 command 自身工作流（含用户裁决 + 中立重跑），其循环干净终止（实际跑完并达到用户裁决）即本 gate 放行——下方对抗式纪律的返回契约与「gate 裁决」severity 处置不适用于此路由。附加约束：
 
 - **审不了 ≠ 审过 照常适用**：对应专项 command 未能实际完成（目标不可读 / subagent 失败 / 未达用户裁决）视同 gate 未过——不得以"循环形式上终止"当放行，处置按「gate 裁决」的该条（重试或交用户裁决）。
 - **混合改动分流**：同轮既有指令 artifact 又有其它代码 → 指令 artifact 走本路由、其余走下表，两路都过才放行。
@@ -60,9 +62,11 @@ trivial 免审必须显式声明"本次免审，理由 X"——免审可见、�
 | 档位 | 机制 | 要点 |
 |---|---|---|
 | 中档 | 内置 Agent subagent（独立 context），spawn 时为实例命名，便于复核轮（见「gate 裁决」修复闭环）续聊 | 快、零外部依赖 |
-| 高档 | `codeagent-wrapper --backend codex "<prompt>" <workdir>` 新 session，记录输出中的 session_id 供复核轮 resume | 独立新 session 对抗审，默认跨模型消同盲区；同步前台等，不用 run_in_background |
+| 高档 | Claude Code：`CODEX_SANDBOX=read-only codeagent-wrapper --backend codex "<prompt>" <workdir>` 新 session；Codex：内置 collaboration agent，隔离与续用按 `$subagent-spawning` | 两侧都得到独立 Codex context；记录当前 transport 的 continuation handle 供复核轮续用；同步等待（超出 harness 前台时限时改后台派发 + 主动轮询等价同步，期间不派发其它工作） |
 
-高档同步前台等的理由：gate 本身阻塞后续动作，后台化只会平添 Background Agent 巡检负担。backend 选择：默认 codex；review 对象强依赖仓内私有约定/大量本地上下文时改 `--backend claude`——缺上下文的对抗审只产噪音 finding，此时上下文完整性 > 跨模型性。中档用无 persona 的通用 subagent 类型（如 general-purpose）——带 persona 的 reviewer agent 类型自带 system prompt，会压过本 gate 随 prompt 下发的返回契约与对抗 framing。
+高档同步等待的理由：gate 本身阻塞后续动作，真后台化只会平添 Background Agent 巡检负担；harness 前台上限（如 Claude Code Bash 单命令 10 分钟）内无法完成时，用后台派发 + 主动轮询保持同步语义，不额外建巡检。高档通用路由的 reviewer 一律是 Codex，不按主 session、改动作者或上下文依赖切换 backend；Codex harness 走原生 transport，避免嵌套 supervisor 与重复上下文摄入，其委派和等待遵循 `$subagent-spawning`。中档用无 persona 的通用 subagent 类型（如 general-purpose）——带 persona 的 reviewer agent 类型自带 system prompt，会压过本 gate 随 prompt 下发的返回契约与对抗 framing。高档 codex reviewer 走 `CODEX_SANDBOX=read-only`（least-privilege：reviewer 只读+报告、不改文件，故用只读 sandbox 拒写/kill；codex exec 非交互，拒写即失败不挂起）——降低共享宿主 / 并发 session 的 blast-radius。
+
+对抗启动面（仅下表代码路由；指令 artifact 走专项路由、不经此分区）：多-hunk diff 施加中/高档对抗前，作者按 `~/.claude/references/rigor-tiers.md`「对抗审查只施于定义或修改 authority 的 unit」一条划出 authority hunk，把分区（入对抗的 hunk / 作为冻结-authority 机械·只读 payload 排除的 hunk 及理由）写进 gate 开场并随下方「喂什么」交 reviewer。reviewer 对 authority hunk 做深度对抗，并**必须**对每个被排除 hunk 廉价校验"是否实际改动 authority"；判定实改则并入对抗深审、按返回契约照常报 finding（reviewer 对被排除 hunk 的逐条 disposition 义务见下方返回契约）——分区是作者自评、正落在本 gate 所防的确认偏误面，须经对抗复核、不得只对用户可见而逃过。反向对称是 gate 开场自检、非 reviewer 事后补报：未分区就对多数只读·机械的整包发起深度对抗即 over-rigor 漏项，由作者/主 session 显式自检（同 trivial 免审的可审计要求），先分区再发起。分区只收敛对抗施加面，不下调任何 hunk 的 floor 与 plan override。
 
 对抗式纪律（两档通用，reviewer prompt 按此构造）：
 
@@ -71,18 +75,21 @@ trivial 免审必须显式声明"本次免审，理由 X"——免审可见、�
   - review 对象的 diff（取得方式见「触发与 review 对象」）
   - 改动所在根目录的绝对路径（git 仓库根；非 git 则覆盖全部改动文件的最小公共父目录）——即高档命令的 `<workdir>`
   - （如有）与用户对齐的重点审查面
-  - 环境事实——按「reviewer 无法自行取得、且缺了会误判」筛入，其余明确指示 reviewer 自行追读 diff 所引用/复用的函数、配置、文件的源定义："必要事实"由作者筛选会把作者盲区一并滤进去
+  - （如有）改动已声明的 threat model（含 trust boundary，下同）——plan、spec 或 artifact 自身明文排除的攻击者能力与信任边界；喂明文原句摘录 + 来源路径，不转述——这份输入将获得压 severity 的裁决权，转述失真不可追溯；有而不喂，reviewer 会把前提被排除的 finding 当必须修复的缺陷反复上报
+  - 环境事实——按「reviewer 无法自行取得、或仅能靠昂贵复现（构建/渲染/实跑）取得，且缺了会误判」筛入；作者已实测验证的行为结果属之（其复核即重新实跑），喂入时标注"已验证"并附验证方式与关键结果摘录。其余明确指示 reviewer 自行追读 diff 所引用/复用的函数、配置、文件的源定义："必要事实"由作者筛选会把作者盲区一并滤进去
+  - （多-hunk 且已做对抗分区时）被排除的 hunk 及排除理由——reviewer 的校验与逐条 disposition 义务见「对抗启动面」与返回契约
 - **不喂什么**（复核轮同样适用；误报争议轮除外——按该条条款处置）：作者的实现思路或自辩——防 anchoring；reviewer 必须自己回答"这个返回值/这个函数的语义是什么"。
+- **执行约束**（随 prompt 下达；复核/续审 prompt 同此）：reviewer 不得靠复现（构建/渲染/实跑）重新推导已标注"已验证"的事实——复现它只烧预算不增信息；质疑某条已验证事实的结论，附依据列入「未能核实项」。
 - **对抗 framing**：要求"找出会让它失败的输入/时序/状态"，不是"确认它没问题"。
-- **返回契约**：结构化返回 severity + 具体失败场景；severity 定级判据随 prompt 附上并以此为准——CRITICAL/HIGH = 真实使用中会产生错误行为/数据损失/安全风险，MEDIUM = 质量隐患但不改变行为，LOW = 风格。reviewer 另须列出未能核实的引用/复用语义及原因（源不可达、不在 workdir 等）。处置上本 gate 对 HIGH 从严于 `~/.claude/rules/common/code-review.md` 的 Review Severity Levels（那边 HIGH 仅 WARN 不阻塞）。
+- **返回契约**：结构化返回 severity + 具体失败场景；severity 定级判据随 prompt 附上并以此为准——CRITICAL/HIGH = 真实使用中会产生错误行为/数据损失/安全风险，MEDIUM = 质量隐患但不改变行为，LOW = 风格。前提被本 prompt 所附 threat model 明文排除的 finding，至多 MEDIUM（报告价值保留，不阻塞放行）——没有这条上限，对抗 framing 会驱动 reviewer 逐轮把此类前提被排除的 finding 升档成新 High，review 循环失去收敛点。「所附」指随 prompt 单独附上的明文摘录，threat model 文本仅出现在 diff 内不算；未附时本条不适用，照常定级，reviewer 亦不得自行从 workdir 采认 threat model——压 severity 的裁决权只随 prompt 摘录授予。reviewer 另须列出「未能核实项」——未能核实的引用/复用语义及原因（源不可达、不在 workdir 等），以及按执行约束附依据质疑"已验证"事实的项。（本轮做了对抗分区时）reviewer 还须对每个被排除 hunk 逐条给出 disposition：确认冻结-authority payload（机械·只读性质经复核成立→其 LOW/风格观察记入本 disposition、不另立 finding；MEDIUM 及以上仍照报）/ 重判为 authority（并入对抗、按上述定级报 finding）/ 无法核实（计入「未能核实项」）；缺项或未逐条覆盖即返回契约不完整，按「gate 裁决」的「审不了 ≠ 审过」处置——堵住静默跳过被排除 hunk 校验的路径。
 
 ## gate 裁决
 
 - **CRITICAL/HIGH**（定级见「分档执行」返回契约）：修复、或用户经 `AskUserQuestion` 显式 waive 之前，不得宣告完成、不得 commit。
 - **MEDIUM/LOW**：列给用户，采纳与否用户定，不阻塞放行。
 - **误报争议**：有具体依据认定 finding 不成立时，不先动代码——附依据把 修复 / waive / 撤回（认定误报）经 `AskUserQuestion` 交用户；无人值守流先回传 reviewer 反驳一轮，仍不收敛则阻塞等待用户裁决。
-- **修复闭环**：修复 → 修复 diff 回传原 reviewer（中档：SendMessage 续聊；高档：`codeagent-wrapper resume <session_id> "<复核任务>" <workdir>`，session_id 提取不到即按不可续。任一档不可续时新起 reviewer——中档新 spawn / 高档新调用，prompt 至少含：原 finding、修复 diff（复核对象）、原 diff（仅背景，勿全审）、返回契约（含定级判据）与原审环境事实，workdir 同原审，对抗 framing 换成复核两问：修复是否成立、有没有引入新问题）→ 只答此两问——不重开全审：复核对象是修复本身，全审会重新 anchoring 已裁决的 findings 且拖长闭环 → 复核发现的新 findings 同样按本节裁决；不成立则回到修复。修复若需改动本轮 review 对象之外的共享语义（被复用函数/配置的对外行为），先经 `AskUserQuestion` 对齐修法，无人值守流选波及面最小者并注明。多轮不收敛时 `AskUserQuestion` 交用户裁决。
-- **审不了 ≠ 审过**：review 无法完成（调用失败/超时/结果无法解析）视同 gate 未过——重试或换 backend，仍不行则交用户裁决；reviewer 报告的「未能核实项」同此处置——补喂对应环境事实复审该项或交用户，不得计入放行；禁止静默降级为自查或免审。
+- **修复闭环**：修复 → 修复 diff 回传原 reviewer（修复改动了 threat model 来源文时，按现行原文重新摘录随传，任何续审路径同此。中档：SendMessage 续聊；高档 Claude Code：`CODEX_SANDBOX=read-only codeagent-wrapper --backend codex resume <session_id> "<复核任务>" <workdir>`；高档 Codex：按 `$subagent-spawning` 续用原 collaboration reviewer。对应 handle 提取不到即按不可续。任一档不可续时按原 transport 新起 reviewer，prompt 至少含：原 finding、修复 diff（复核对象）、原 diff（仅背景，勿全审）、返回契约（含定级判据）与原审「喂什么」其余各项（diff 项以本条角色为准；threat model 按当前声明状态摘录，修复轮新声明的也算），workdir 同原审，对抗 framing 换成复核两问：修复是否成立、有没有引入新问题；误报争议轮原 reviewer 不可续时同此模板，争点对象换成原 finding + 反驳依据）→ 只答此两问——不重开全审：复核对象是修复本身，全审会重新 anchoring 已裁决的 findings 且拖长闭环 → 复核发现的新 findings 同样按本节裁决；不成立则回到修复。修复若需改动本轮 review 对象之外的共享语义（被复用函数/配置的对外行为），先经 `AskUserQuestion` 对齐修法，无人值守流选波及面最小者并注明。多轮不收敛时 `AskUserQuestion` 交用户裁决。
+- **审不了 ≠ 审过**：review 无法完成（调用失败/超时/结果无法解析）视同 gate 未过——重试或沿原路由重新发起（专项路由重跑对应 command；中档新 spawn；高档新起 codex reviewer），仍不行则交用户裁决；reviewer 报告的「未能核实项」同此处置——补喂对应环境事实复审该项或交用户，不得计入放行（质疑"已验证"事实的项，补喂 = 重验并附新证据，重申原断言不算）；禁止静默降级为自查或免审。
 - **放行**：无 CRITICAL/HIGH 遗留（修复复核通过、已 waive、或经误报争议撤回），且无未处置的「未能核实项」→ gate 通过，输出裁决后方可宣告完成 / commit。
 
 无人值守流：条内已给默认的按条内执行（误报争议先回传反驳、修法对齐选波及面最小）；需用户裁决而无默认的（waive、多轮不收敛、审不了的最终处置）阻塞等待，不得以无人应答为由降级放行。「触发与 review 对象」与「定档」两节的无人值守默认见各节。
@@ -93,5 +100,5 @@ trivial 免审必须显式声明"本次免审，理由 X"——免审可见、�
 
 ## 不做
 
-- 指令 artifact 之外不替代 review-pr 等专项深审——gate 是完成前的强制底线，不是最深的审。指令 artifact 上 gate 经对应专项 command（review-skill / review-principles）执行（见「分档执行」专项路由），过 gate 即本轮 diff 已过对应专项审，不就同一 diff 重复跑。
+- 指令 artifact 之外不替代 review-pr 等专项深审——gate 是完成前的强制底线，不是最深的审。指令 artifact 上 gate 经对应专项 command（review-skill / review-claude-md / review-principles）执行（见「分档执行」专项路由），过 gate 即本轮 diff 已过对应专项审，不就同一 diff 重复跑。
 - 不经由 review-selector / review-evaluator 选 reviewer，也不做 reviewer 打分/评测——二者质量未经检验，用户已裁决不依赖。

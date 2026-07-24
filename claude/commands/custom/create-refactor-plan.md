@@ -129,8 +129,8 @@ origin: 2026-07-05
 
 对齐充分后（`--rescan` 从此处起，读 charter 跳过「需要对齐的点」的全量对齐）：
 
-1. **深度分析**（codex 或 inline，按 scope 定）：无论哪条路径，每条 finding 必须 file:line 接地、经 Claude 核验——否则 step 3 排序 / step 4 选批无从判真伪。scope 大 / 跨多组件 → 委派 codex 深度分析（借 execute-plan 的「启动 Codex / 等待与轮询 / 判定 Codex 输出并裁决」段 + `supervise.md` 的「启动 wrapped agent / 增量轮询」段的后台 spawn recipe）；codex 隔离于本命令上下文，spawn-prompt 是它唯一的任务通道，必须传够它推不出的信息（floor，非 cap，允许 codex 按 runtime 补充）：角色（重构结构分析者）+ 分析任务 + 本轮 scope 边界 + 已对齐的约束基线 + 真实扩展方向 + 本轮维度权重 + finding 格式（每条 file:line 接地 + codex 自己判 constraint vs defect），传法按模式（首轮内联对齐结论、`--rescan` 传 `refactor-charter.md` 路径自读）。scope 小 / 单模块 → Claude inline 分析。
-2. **charter 未覆盖的新决策裁决**：分析（codex 或 inline Claude）遇到 charter 没覆盖、又需用户拍的决策，不得静默默认——hold 住，`AskUserQuestion` 只问那一点 delta、写回 charter，再继续。最典型是"约束还是缺陷"（docs / ADR 未明确 settle）；此外任一已对齐 facet 在新 finding 上未 settle（未覆盖的扩展方向 / 维度权重 / scope·risk 边界）同样适用。首轮多数已被刚做的对齐覆盖；`--rescan` 时这是防 charter 过时、把新决策交回用户的 gate。
+1. **深度分析**（codex 或 inline，按 scope 定）：无论哪条路径，每条 finding 必须 file:line 接地、经 supervisor 核验——否则 step 3 排序 / step 4 选批无从判真伪。scope 大 / 跨多组件 → 委派 codex 深度分析（借 execute-plan 的「启动 Codex implementer（harness-aware transport）」、「等待、轮询与周期汇报」（transport-aware wait）、「判定 Codex 输出并裁决」（continuation handle 与异常处置）三节）；codex 隔离于本命令上下文，spawn-prompt 是它唯一的任务通道，必须传够它推不出的信息（floor，非 cap，允许 codex 按 runtime 补充）：角色（重构结构分析者）+ 分析任务 + 本轮 scope 边界 + 已对齐的约束基线 + 真实扩展方向 + 本轮维度权重 + finding 格式（每条 file:line 接地 + codex 自己判 constraint vs defect），传法按模式（首轮内联对齐结论、`--rescan` 传 `refactor-charter.md` 路径自读）。scope 小 / 单模块 → 主 session inline 分析。
+2. **charter 未覆盖的新决策裁决**：分析（codex 或主 session inline）遇到 charter 没覆盖、又需用户拍的决策，不得静默默认——hold 住，`AskUserQuestion` 只问那一点 delta、写回 charter，再继续。最典型是"约束还是缺陷"（docs / ADR 未明确 settle）；此外任一已对齐 facet 在新 finding 上未 settle（未覆盖的扩展方向 / 维度权重 / scope·risk 边界）同样适用。首轮多数已被刚做的对齐覆盖；`--rescan` 时这是防 charter 过时、把新决策交回用户的 gate。
 3. **按收益排序**：用 §核心 framing 的优先级 lens 给每条 finding 标（受益方 / 命中维度 / 是否命中扩展方向 / 成本·风险 / 对 agent 阻塞）。
 4. **选批**：排序清单 `AskUserQuestion` 交用户选这轮 fund 哪些——把取舍权留给用户的关键 gate，不替用户全做。funded / declined 结果记入 charter 台账（供 `--rescan` 区分新 vs declined）。
 

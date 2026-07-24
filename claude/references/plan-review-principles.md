@@ -6,13 +6,13 @@ Behavioral guidelines for reviewing implementation plans — plan files written 
 
 **These guidelines are working if:** plans describe the minimum work that achieves the goal; verification steps run as written; nothing the user needs (docs, root README updates) gets discovered post-ship.
 
-**Loop:** For each principle, check 1–15. Loop until no principle is violated.
+**Final gate:** check every applicable principle before declaring the plan clean. Re-review routing and termination are owned by `review-plan`; this file owns the review criteria.
 
 ---
 
 ## Priority and conflict resolution
 
-Principles are listed in **tiebreaker priority order** — when two give conflicting guidance, the lower-numbered principle wins. Principles 4, 13, 14, and 15 are conditional (apply only when their scope is matched); when they apply, their position in the order stands.
+Principles are listed in **tiebreaker priority order** — when two give conflicting guidance, the lower-numbered principle wins. Principles 4, 13, 14, 15, 16, and 17 are conditional (apply only when their scope is matched); when they apply, their position in the order stands.
 
 **Escape valve**: when applying this order would contradict your judgment of what serves the plan's goal, ask the user before applying.
 
@@ -28,6 +28,8 @@ The plan must answer three questions concretely:
 - **Verify**: the steps a reader can execute to confirm success, with the observable evidence each should produce.
 
 **Verify is from the consumer's perspective.** "Consumer" = whoever uses the deliverable: end user, downstream code, evaluator, deployment env. Internal correctness (types, lint, unit tests) is necessary but not sufficient — a plan that passes its own tests but doesn't satisfy the consumer is not done.
+
+An executable verify fixes the **verification interface** — inputs and prerequisites, invocation or responsible actor, observable evidence, and the pass/fail boundary — not non-load-bearing checker internals. An internal detail is load-bearing only when leaving it open could change an externally relevant outcome, such as observable acceptance, cross-implementation compatibility, or reliable and safe verification / delivery.
 
 When reviewing, flag:
 - "Before" stated as a quality ("unmaintainable", "hard to use") rather than a concrete state.
@@ -116,6 +118,8 @@ The handshake: user signs off on the user-facing surface; reviewer ensures every
 
 Sub-promise = any factual / quantitative / scope claim on the user-facing surface — including **preservation** claims ("don't touch X", "保留 X 不动") and **error / edge / failure path** claims (timeout handling, missing input, permission denied, etc.), not just success-path mutation claims. **Granularity**: take the smallest semantic unit the user recognized when aligning with the planner; a "clear tables X/Y/Z, preserve table W" locked decision contains four sub-promises (three mutations + one preservation), not one. Examples:
 
+Coverage mapping may be many-to-one when one shared assertion fails on any mapped violation. Evidence granularity follows the consumer acceptance boundary and the cost of acting on a failure; many-to-one does not require a bespoke mechanism per sub-promise.
+
 - User-perspective verify says "search button absent on all 4 tabs" → verify asserts DOM contains no `button#refresh` on each tab.
 
 When reviewing, flag:
@@ -196,13 +200,19 @@ Ask yourself: "After this ships, what does a collaborator look at first — and 
 
 **Minimum artifacts and minimum work that achieves the goal. Nothing speculative.**
 
+Judge verification machinery by the combined plan footprint serving one shared invariant. Include a mechanism only when leaving it open could make conforming implementations differ in externally relevant behavior or evidence; express repeated symptom-specific mechanisms as the shared invariant / interface instead. Calibrate safety and evidence machinery to actual consequences, reversibility, downstream use, and agreed assurance requirements — not deployment status alone (see `references/rigor-tiers.md` 的 proportionality invariant).
+
+This calibration is **bidirectional**: machinery below what the stakes warrant under-protects, machinery above it is over-rigor — both are P9 violations. It binds the reviewer's own demands too — demanding evidence heavier than the stakes warrant is itself over-rigor to flag, not a stronger review. Where a plan declares a rigor tier `(A,V)`, use it as the anchor **only after confirming the declared tier matches the actual stakes** — a mis- or under-declared tier is itself the defect, and must not be allowed to ratify under-protection or re-label a warranted demand as excess; where no tier is declared, calibrate to the real consequences and reversibility above. This ceiling governs only the **weight / intensity** of verification and authorization machinery; it does not speak to whether a coverage-existence or shortfall-discrimination assertion must exist — that floor is owned by P3–P5 and P14 — as is the existence of P17's operating contract where P17 applies — and P9 does not license striking it as over-rigor; P9 governs only the contract's granularity.
+
 When reviewing, flag:
 - Features, fields, or error-handling for scenarios the stated goal doesn't require.
 - Abstractions (helpers, templates, dispatch layers) introduced for single-use code.
 - Two or more artifacts where one works (example file + real file, template + generated output, config + flag-that-does-the-same-thing).
 - Divergence from a nearby peer's proven pattern without a reason in the requirements.
+- Transient verification harnesses whose own testing and review burden is disproportionate to the risk they cover.
+- Verification / authority machinery — planned **or demanded by the review itself** — whose weight exceeds what the stakes (or a confirmed declared `(A,V)`) warrant.
 
-Ask yourself: "Would a senior engineer reading this say the plan is overcomplicated?" If yes, push back.
+Ask yourself: "Given what is actually at risk if execution or verification is wrong, would a senior engineer say every planned artifact and gate is proportionate and necessary?" If no, push back.
 
 ---
 
@@ -231,6 +241,8 @@ Don't use this principle to justify scope expansion — Simplicity and Surgical 
 - **User-impact alternative** — changes or degrades the deliverable. Planner pre-surfaces options + tradeoffs via `AskUserQuestion` *during planning* and records the user's chosen ordering (1–2 fallbacks); implementer follows that order without re-asking. See Principle 6 for the decision packet shape.
 - **Stop-and-ask** — only when all pre-listed fallbacks fail and the implementer cannot locate a fresh no-impact alternative.
 
+A trigger response fixes the next safe action and its observable result. It need not define recovery-coordinator internals unless leaving them open could change that action, correctness, or the observable result; strict sequencing is one example.
+
 When reviewing, flag:
 - New components depending on a single instance / endpoint / process whose unavailability collapses the plan.
 - Tight coupling introduced to nearby modules that aren't part of the stated goal.
@@ -257,6 +269,7 @@ When reviewing, flag:
 - Verify steps that don't distinguish "agent can run alone" from "needs the user / external manual judgment" — implementer can't tell where to expect to be blocked.
 - Human-required steps with no upstream agent-autonomous coverage of the failure modes the gate could surface (UI logic only checked on real device when API / browser-automation could have exercised the same paths first).
 - Verify written as "manual test" when an API / CLI / browser-automation / DB query / mock-driven check could exercise the same path without the user.
+- A verify that backs a **costly or irreversible gate** with only a **fidelity-limited stand-in** for the real target (e.g. mock, dry-run, simulator, sampled data) — the branches that execute only against the real target (e.g. output parsing, readback, state compare) are never exercised before the gate, so defects surface serially across expensive live attempts. Common shape: an external-interface driver (CLI / API / SDK) validated per-touchpoint against mocks. Demand a real-target sweep (zero-write / dry-run harness exercising the whole path) before the gated action (see `references/rigor-tiers.md`「外部接口 driver 的 V2 落地」).
 
 Ask yourself: "If every human-gated verify failed once, how much of that failure could have been caught by a cheap autonomous check first?" If most, the plan is misallocating iteration cost.
 
@@ -309,3 +322,34 @@ When reviewing, flag:
 - The plan changes user-facing behavior but skips this principle **without the reviewer being able to confirm the skip is both intentional and that its stated reason actually holds** — e.g., the "无契约文件 → skip" note is missing, or it's present but a `ux-contract.md` actually exists / the change is in fact contract-covered.
 
 Ask yourself: "If this plan's user-facing change shipped, would `ux-contract.md` still describe the product accurately — e.g., is the affected section's change captured correctly, and is it L2-verified with the contract's acceptance lens, not just point-functional?"
+
+---
+
+## 16. Batch Execution Model (conditional)
+
+**Applies only when the plan's work includes a program iterating over independent, I/O-bound work items (e.g., eval runs against an LLM API, batch data processing, bulk API calls) at a scale where execution model materially affects wall-clock. Skip otherwise — including CPU-bound or shared-state loops, where concurrency is a different decision.**
+
+For I/O-bound batch workloads, the execution model (serial vs bounded-concurrent, concurrency cap, rate limits) dominates wall-clock cost, and the constraints that bound it — e.g., API rate limits, quota, cost tolerance — are user knowledge the implementer cannot derive. A plan silent on execution model leaves the implementer to default to serial (hours of avoidable wall-clock) or to guess a concurrency level that may burn quota. Bounded concurrency for independent I/O-bound items is part of meeting the requirement, not speculative complexity — wall-clock is a deliverable property.
+
+When reviewing, flag:
+- Plan contains a batch-processing / eval step over independent I/O-bound items but states no execution model — serial-by-omission.
+- Plan specifies concurrency against a rate-limited or metered external service (LLM APIs, paid endpoints) without stating the rate / quota / cost constraint it must respect — that constraint is user knowledge; if the plan doesn't carry it, it was defaulted, not aligned.
+- Serial execution chosen for independent I/O-bound items with no stated reason (e.g., ordering dependency, debuggability — a rate limit usually argues for a lower concurrency cap, not serial).
+
+Ask yourself: "If the implementer builds exactly what's written, will the batch step's wall-clock and quota behavior match what the user expects — and can I tell from the plan alone?" If no, flag.
+
+---
+
+## 17. Verification Machinery Operating Contract (conditional)
+
+**Applies only when the plan introduces verification / authorization machinery — verifiers, evidence ledgers, canonical gates, receipt or approval systems — that enters the iteration loop and whose cost against each legitimately recurring event is not already bounded by an existing mechanism. Skip otherwise.**
+
+Such machinery becomes part of every later fix's path to green, and itself becomes a review target. A plan that specifies what the machinery must reject, but not what each legitimate recurring event costs against it (e.g., a fix re-verifying, a human approving, a review round concluding, a configuration evolving — examples, not the set), converges on machinery that is provably strict and practically unaffordable. (Motivating case: a monitoring-delivery plan whose verification chain, approval receipts, and internal-tool reviews each charged unbounded cost to exactly these events.) The required contract's granularity scales with the stakes the plan's rigor is calibrated to — for lightweight machinery, "full re-run is cheap" is itself a valid bound.
+
+When reviewing, flag:
+- **No incremental re-verification semantics**: changes the plan classifies as carrying no verification authority (often tests, fixtures, docs — unless they define what green means) invalidate the same green lights as authority-bearing ones, and the plan does not bound what a legitimate fix costs to re-verify.
+- **Approval/receipt validity windows mismatched to the responder**: a human-approval step whose receipt expires on a machine timescale guarantees at least one expire-and-reprepare round per approval.
+- **Machinery review depth unbounded by the declared threat model**: the plan locks a trust boundary (e.g., same-UID attacker out of scope) but sets no rule for findings premised on excluded capabilities — so each review round can escalate out-of-scope attacks into blocking findings against internal tooling. (The boundary itself remains challengeable as a finding against the declaration; what's excluded is accepting the declaration while still blocking on capabilities it rules out.)
+- **Identity/anchor coupling without an evolution contract**: records or approvals bound to a hash of mutable configuration (task manifest, config file) with no stated rule for how the chain continues after that configuration legitimately evolves — first evolution deadlocks or orphans history.
+
+Ask yourself: "For any event the iteration loop legitimately repeats, does the plan bound what the machinery charges it?" If any is unbounded, flag.

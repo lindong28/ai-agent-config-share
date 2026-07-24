@@ -13,8 +13,8 @@ persistent_instructions = "Follow project AGENTS.md guidelines. Use available MC
 
 # ── Model ──
 # Adjust to your plan/subscription. Available reasoning efforts: low | medium | high | xhigh
-model = "gpt-5.5"
-model_reasoning_effort = "xhigh"
+model = "gpt-5.6-sol"
+model_reasoning_effort = "high"
 model_supports_reasoning_summaries = true
 plan_mode_reasoning_effort = "xhigh"
 
@@ -99,16 +99,6 @@ startup_timeout_sec = 30
 [mcp_servers.github.env]
 GITHUB_PERSONAL_ACCESS_TOKEN = "${GITHUB_PERSONAL_ACCESS_TOKEN}"
 
-[mcp_servers.memory]                    # npm install -g mcp-server-memory
-type = "stdio"
-command = "mcp-server-memory"
-startup_timeout_sec = 30
-
-[mcp_servers.sequential-thinking]       # npm install -g mcp-server-sequential-thinking
-type = "stdio"
-command = "mcp-server-sequential-thinking"
-description = "Chain-of-thought reasoning"
-
 # Claude-compatible AskUserQuestion via MCP elicitation (see ask-user-mcp/README.md).
 # install.sh symlinks the repo's ask-user-mcp into ~/.codex/ask-user-mcp so this
 # path resolves on any machine regardless of where the repo is cloned.
@@ -117,6 +107,9 @@ type = "stdio"
 command = "sh"
 args = [ "-c", "PATH=\"/opt/homebrew/bin:/usr/local/bin:$PATH\"; exec node \"$HOME/.codex/ask-user-mcp/server.mjs\"" ]
 startup_timeout_sec = 20
+
+[mcp_servers.ask-user.tools.AskUserQuestion]
+approval_mode = "approve"
 
 # ── Profiles (switch with: codex --profile <name>) ──
 
