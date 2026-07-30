@@ -32,6 +32,8 @@ description: >-
 
    判断不确定时用 `AskUserQuestion` 确认；无法 ask 时排除不确定的 untracked 文件，并在结果中列出未纳入项。
 
+   **粒度 = 一次任务执行，不按 artifact 类型拆**：一个任务目标下产出的代码、测试、文档、experiences、配置属于同一次执行，进同一个 commit（如一个 PR 不会把代码/测试/文档拆成多个）；多个模块的改动仍是一个 commit（用 message bullets 表达），不是拆 commit 的信号。若 working tree 混入了另一个无关任务的改动，先与用户确认，本次只 stage / commit 当前任务的改动。
+
 3. **文档同步 checkpoint**：staging 范围定后，判断本次改动是否产生**用户可感知变化 / 服务增删改 / 公共接口变化**（判据见 `~/.claude/references/docs-organization-protocol.md`）。是 → 对应 [User] 档（README / CHANGELOG / operations）必须一并同步进本次 staging，未同步则先补齐再继续；开发者档（architecture / adr / experiences）与 ux-contract 按协议各自路径、不在此强制。例外：本次 commit 由已声明会集中同步文档的 caller（execute-plan / execute-ux-contract 的完整 recipe）驱动时，尊重其编排、不在此重复要求。
 
 4. **生成 commit message**：格式见下方。
@@ -44,12 +46,15 @@ description: >-
 |------|---------|------|
 | 单改动，无 notable detail | `<type>(scope): <desc>` | 无 |
 | 单改动，有 notable detail | `<type>(scope): <desc>` | detail 作为 bullets |
-| 多改动 | 自由文本总结 | 每个改动一条 `<type>(scope): <desc>` bullet |
+| 多改动（性质不同的改动；一件事的多个侧面算单改动） | 自由文本总结 | 每个改动一条 `<type>(scope): <desc>` bullet |
 
-- Subject ≤72 chars；description 用英文
+- Subject ≤72 chars
+- 语言：整条 message（subject + body）默认英文；仅在用户明确要求、仓库近期 commit 多为中文、或某专有概念无准确英文对应时用中文（末者只该词保留中文）
 - Types: `feat` `fix` `refactor` `docs` `test` `chore` `perf` `ci` `style` `build` `revert`
 - Body 仅在 subject + diff 不足以让 reviewer 推出非显然设计决策时加
 - Per-bullet derivability test：每条候选 bullet 自问「reviewer 能从 subject + diff 推出来吗」，能 → drop
+  - **diff 含本次一并提交的注释与文档**——复述自己刚写下的注释即判定为可推导。注释在使用现场被读到，commit message 不会；留两份只会各自漂移
+  - 例外：**行为变更**即使可推导也留一条。扫 `git log` 找「什么时候变的」的人不会去读注释
 - 不附 Co-Authored-By
 - 用 heredoc 传递 body（`git commit -m "$(cat <<'EOF' ... EOF)"`）
 

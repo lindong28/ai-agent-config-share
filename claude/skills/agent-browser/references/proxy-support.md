@@ -2,7 +2,7 @@
 
 Proxy configuration for geo-testing, rate limiting avoidance, and corporate environments.
 
-**Related**: [commands.md](commands.md) for global options, [SKILL.md](../SKILL.md) for quick start.
+**Related**: [commands.md](commands.md) for global options, [Browser Mode Selection](../SKILL.md#browser-mode-selection).
 
 ## Contents
 

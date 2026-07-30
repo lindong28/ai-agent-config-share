@@ -1,3 +1,7 @@
 # Shared uv-managed Python venv created by install.sh (ip-check / tt-web deps).
 # Runtime artifact — recreated on install, never committed.
 .venv/
+
+# pytest lands this at the repo root, because tt-web/README.md documents running
+# the suite from here (`pytest tt-web/tests`) rather than from tt-web/.
+.pytest_cache/

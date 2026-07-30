@@ -2,7 +2,9 @@
 
 Capture browser automation as video for debugging, documentation, or verification.
 
-**Related**: [commands.md](commands.md) for full command reference, [SKILL.md](../SKILL.md) for quick start.
+**Related**: [commands.md](commands.md) for full command reference, [Essential Commands](../SKILL.md#essential-commands).
+
+The examples below use the default browser. When continuing a workflow already running on a CDP path, do not run them bare — follow [Browser Identity Continuity](../SKILL.md#browser-identity-continuity).
 
 ## Contents
 

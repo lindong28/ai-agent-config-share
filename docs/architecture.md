@@ -4,7 +4,7 @@
 
 ## Overview
 
-ai-agent-config-share 是一个 AI coding agent 的共享配置仓库，为 Claude Code 和 Codex CLI 两套工具链提供统一的行为指引、工作流命令、agent 定义、skill 和运行时可观测性。核心技术栈：Bash（安装 / 验证 / statusline）、Markdown（所有行为定义）、Python（可观测性工具链）、TOML + JSON（工具配置）。
+ai-agent-config-share 是一个 AI coding agent 的共享配置仓库，为 Claude Code 和 Codex CLI 两套工具链提供统一的行为指引、工作流命令、agent 定义、skill 和运行时可观测性。核心技术栈：Bash（安装 / 验证 / statusline 渲染）、Markdown（所有行为定义）、Python（statusline 解析 + 可观测性工具链）、Node（hooks 强制层）、TOML + JSON（工具配置）。
 
 仓库不是一个"应用"——它是一个**人机协作协议层**，核心产出是一组声明式行为定义，通过 symlink 注入到用户 home 目录的 `~/.claude/` 和 `~/.codex/` 中生效。
 
@@ -18,16 +18,18 @@ ai-agent-config-share 是一个 AI coding agent 的共享配置仓库，为 Clau
 |---|---|
 | `CLAUDE.md` | 用户级行为指引入口（手动 merge 到 `~/.claude/CLAUDE.md`，不 symlink） |
 | `settings.json` | 环境变量、权限白名单、MCP server 列表、模型选择（手动 merge 到 `~/.claude/settings.json`） |
-| `commands/custom/` | Slash command 定义（`/custom:create-plan`、`/custom:execute-plan`、`/custom:test-ux`、`/custom:create-ux-contract`、`/custom:execute-ux-contract` 等），是用户触发工作流的入口 |
+| `commands/custom/` | Slash command 定义（`/custom:create-plan`、`/custom:execute-plan`、`/custom:test-ux`、`/custom:create-ux-contract`、`/custom:execute-ux-contract`、`/custom:create-aigc-design`、`/custom:review-aigc-design` 等），是用户触发工作流的入口 |
 | `commands/routine/` | 日常运维命令（`/routine:session-export` / `/routine:session-import`） |
-| `references/` | 被 CLAUDE.md 和 commands 引用的协议文档（plan 执行原则、skill 创建原则、UX 测试 patterns、ux-contract 审查原则等），是行为规则的 source of truth。`domain-registry.md` 注册产品类型（功能型 / 游戏）并路由到 `references/game/` 下的 domain 专属验收原则；`service-operations-protocol.md` 定义仓库服务统一动词脚本约定 |
-| `agents/` | Claude sub-agent 定义（`doc-updater`：按 `docs-organization-protocol.md` 维护项目文档），被 `/custom:sync-docs` 及 execute 类命令的文档同步步骤 spawn |
-| `skills/agent-browser/` | 浏览器自动化 skill（agent-browser CLI 的用法、认证模式、模板脚本），被 `test-ux` / `execute-ux-contract` 等命令消费 |
+| `references/` | 被 CLAUDE.md 和 commands 引用的协议文档（plan 执行原则、skill 创建原则、UX 测试 patterns、ux-contract 审查原则等），是行为规则的 source of truth。`domain-registry.md` 注册产品类型（功能型 / 游戏）并路由到 `references/game/` 下的 domain 专属验收原则；`service-operations-protocol.md` 定义仓库服务统一动词脚本约定；`aigc-design-review.md` 是 AIGC 流水线的设计 / 评审共享底座（评审平面、硬纪律、rubric），被 `create-aigc-design` 与 `review-aigc-design` 两条命令共同引用 |
+| `agents/` | Claude sub-agent 定义：`doc-updater`（按 `docs-organization-protocol.md` 维护项目文档）被 `/custom:sync-docs` 及 execute 类命令的文档同步步骤 spawn；`general-purpose-readonly`（不带 persona、去掉 Edit/Write，契约全部由派发 prompt 承载）是 review-gate 中档 reviewer 的类型 |
+| `hooks/` | Node 写的 tool-call 拦截器：`ask-recommend-gate`（AskUserQuestion 缺推荐项则 exit 2）、`codeagent-stdin-guard`（codeagent-wrapper 派发无 stdin 来源时拦下，避免 wrapper 等不到 EOF 而静默挂起）、`desktop-notify`（Stop 事件桌面通知）。逐文件 symlink 到 `~/.claude/hooks/`（含各自的 `.test.js`，装后仍可 `node --test` 复验），激活靠 `settings.json` 的 hooks 段落手动 merge。上游经 hook-profile dispatcher 调各 hook 的 `run()`，本仓库不发那个 dispatcher、由 settings.json 直接调起脚本，所以每个 hook 都自带 `require.main === module` 直调入口（`codeagent-stdin-guard` 另有 `CODEAGENT_STDIN_GUARD=0` kill switch，免改 settings.json 即可停用） |
+| `skills/agent-browser/` | 浏览器自动化 skill（agent-browser CLI 的用法、认证模式、模板脚本，以及 iOS Simulator / 云浏览器 / 替代引擎等目标平台的选择），被 `test-ux` / `execute-ux-contract` 等命令消费；随附 `check-links.py` 自查 SKILL.md 与 `references/` 之间的锚点引用是否仍成立 |
 | `skills/create-commit/` | commit 工作流 skill（审查 working tree、生成 message、确认后 commit），被 `execute-plan` / `execute-ux-contract` 的 commit 步骤委托 |
 | `skills/deep-discuss/` + `skills/review-gate/` | deep-discuss：动手前一起想清 tradeoff（不产 plan.md）；review-gate：生成 / 修改 artifact 后、宣告完成或 commit 前的强制质量门，由 `claude/CLAUDE.md`「生成后 Review Gate」绑定、`execute-plan` §3.5 逐单元调用 |
+| `skills/tdd-workflow/` + `skills/game-release-loop/` | tdd-workflow：测试先行的实现流程与覆盖率要求；game-release-loop：浏览器游戏的发布门（每条 P0 旅程在发布目标矩阵上通过、且无遗留 Critical/High/Medium 才算过）。game-release-loop 不新增一层，而是把已有件组合起来——判据锚在 `claude/skills/game-release-loop/references/game-profile.md` 配置档，测试与修复路由到 `test-ux` / ux-contract 三件套，domain 验收原则取自 `references/domain-registry.md`，回归证据取自 tdd-workflow。它标了 `disable-model-invocation`，只在被显式点名时进入，非游戏项目零触发成本 |
 | `bin/codeagent-wrapper` | arm64 macOS 二进制，包装 Codex / Gemini CLI 为统一接口，被 `execute-plan` 和 `supervise` 命令调用 |
 | `bin/poll-progress.sh` | 增量读后台任务 `.output` 文件的轮询脚本，被 supervisor 三命令（`execute-plan` / `supervise` / `execute-ux-contract`）调用，替代原 TaskOutput 阻塞轮询 |
-| `statusline.sh` + `statusline-transcript.py` | Claude Code statusline 脚本：解析运行时 JSON 输入，渲染多行终端状态栏 + 持久化 `~/.claude/tt-status.json` 供 tt-web 消费 |
+| `statusline.sh` + `statusline-fields.py` + `statusline-transcript.py` | Claude Code statusline。`statusline-fields.py` 独占全部 JSON 处理：一次解析吐出 shell 赋值供 `statusline.sh` eval，并顺带完成同一份数据已能支撑的副作用——持久化 `~/.claude/tt-status.json`（供 tt-web 消费）、刷新按 session 分文件的 tok/s 速度缓存、转调 `statusline-transcript.py` 拿 session 级汇总。`statusline.sh` 只剩渲染多行状态栏。因此 jq 不再是 statusline 的运行时依赖，python3 是；解析失败时各字段退回脚本内的默认值，状态栏降级而非拖垮 session |
 
 ### codex/ — Codex CLI 行为层
 
@@ -35,7 +37,7 @@ ai-agent-config-share 是一个 AI coding agent 的共享配置仓库，为 Clau
 
 | 子模块 | 职责 |
 |---|---|
-| `AGENTS.md` | 用户级行为指引（手动 merge 到 `~/.codex/AGENTS.md`） |
+| `AGENTS.md` | symlink → `../claude/CLAUDE.md`：一份政策源同时服务两套 harness，结构上不可能分叉（此前是独立文件，实证会漂移——曾缺 4 个 BINDING 章节）。单一源的代价是政策文本里混着 Claude 专属入口，所以该文件顶部有一节「Harness 适配 (BINDING)」把能力名映射到两侧、并对 Codex 无对应物的项（`/custom:*`、hooks、多数 skill）给出明确处置——否则 Codex 会被 BINDING 要求调用不存在的东西。仍需手动 merge 到 `~/.codex/AGENTS.md`，只是与 Claude 侧 merge 的是同一份内容 |
 | `config.toml` | Codex CLI 配置（模型、MCP server、agent 定义、安全策略、profile），手动 merge |
 | `agents/` | Codex sub-agent 定义（explorer / reviewer / docs-researcher），每个 `.toml` 文件定义模型、sandbox 模式和 developer instructions |
 | `ask-user-mcp/`（仓库根） | MCP server（node），通过 MCP elicitation 给 Codex 提供 Claude 兼容的 `AskUserQuestion` 表单工具。由 `codex/config.toml` 的 `[mcp_servers.ask-user]` 注册 + `[approval_policy.granular] mcp_elicitations = true` 使表单浮现；install.sh 把它 symlink 到 `~/.codex/ask-user-mcp` 并装 node deps |
@@ -62,8 +64,8 @@ ai-agent-config-share 是一个 AI coding agent 的共享配置仓库，为 Clau
 
 | 文件 | 职责 |
 |---|---|
-| `install.sh` | 主安装脚本：symlink 创建 + npm 全局包安装 + 依赖检查 + settings.json statusLine 写入 + tt-web 子安装 + 共享 uv venv 创建（`brew install uv` → `.venv/`，供 ip-check / tt-web 使用）。交互式冲突解决（y/N/a/s） |
-| `verify.sh` | 只读验证脚本：检查所有 symlink 是否指向本 repo、依赖是否就位、settings.json 是否接好、手动 merge 文件是否含必要锚点。exit code = FAIL 数 |
+| `install.sh` | 主安装脚本：symlink 创建 + npm 全局包安装 + 依赖检查 + settings.json statusLine 写入 + tt-web 子安装 + 共享 uv venv 创建（`brew install uv` → `.venv/`，供 ip-check / tt-web 使用）。交互式冲突解决（y/N/a/s）。其中 jq 服务安装期的 settings.json merge（`verify.sh` 那项 settings.json 检查同样用它）——缺它只影响自动接线与该项检查，不影响 statusline 运行 |
+| `verify.sh` | 只读验证脚本：检查各 symlink 是否指向本 repo（含逐个 hook 脚本，以及 hook 是否真的接进 settings.json——只 link 不接线是静默 no-op；目标位置若是内容与 repo 一致的普通副本则记 PASS，内容不一致才 FAIL）、依赖是否就位（python3 缺失为 FAIL，jq 缺失只 WARN）、settings.json 是否接好、手动 merge 文件是否含必要锚点。exit code = FAIL 数 |
 | `requirements.txt` | 仓库根共享 Python 依赖（requests / colorama），由 install.sh 用 uv 安装到 `.venv/`（uv-managed CPython 3.13）。ip-check 和 tt-web 原 `pip install --user` 改由此 venv 提供 |
 
 ### docs/ — 项目文档
@@ -84,12 +86,16 @@ ai-agent-config-share 是一个 AI coding agent 的共享配置仓库，为 Clau
 │  commands/ + references/ + CLAUDE.md + AGENTS.md        │
 │  声明式的工作流、协议、规则——agent 在运行时读取并遵循              │
 ├─────────────────────────────────────────────────────────┤
+│  强制层（仅 Claude Code）                                 │
+│  hooks/ + settings.json 的 hooks 段落                    │
+│  tool call 前的机械拦截：BINDING 规则的 harness 侧兜底    │
+├─────────────────────────────────────────────────────────┤
 │  能力层                                                   │
 │  skills/ + agents/ + bin/codeagent-wrapper               │
 │  被行为定义层引用的具体能力——浏览器自动化、sub-agent、跨工具适配     │
 ├─────────────────────────────────────────────────────────┤
 │  可观测性层                                               │
-│  statusline.sh + statusline-transcript.py + tt-web/      │
+│  statusline.sh + statusline-*.py + tt-web/               │
 │  运行时数据采集 → 持久化 → 可视化                             │
 ├─────────────────────────────────────────────────────────┤
 │  配置层                                                   │
@@ -102,10 +108,11 @@ ai-agent-config-share 是一个 AI coding agent 的共享配置仓库，为 Clau
 
 - 行为定义层引用能力层（commands 调用 skills 和 codeagent-wrapper）
 - 行为定义层引用配置层（commands 依赖 MCP server 和权限设置）
+- 强制层不被引用、只被触发：hooks 挂在 harness 的 tool-call 生命周期上，不出现在任何 command 的调用链里，兜的是行为定义层里 agent 可能漏掉的 BINDING 项。因为它只存在于 Claude Code 一侧，两侧共同的 invariant 必须写在政策源或 reference 里，不能只靠 hook 实现承载
 - 可观测性层独立于行为定义层（statusline 和 tt-web 不依赖 commands / references）
 - 安装层横切所有层（install.sh 同时处理 symlink、npm 包、settings.json）
 
-**跨工具共享**：agent-browser skill 同时 symlink 到 `~/.claude/skills/` 和 `~/.codex/skills/`；create-commit skill 仅 Claude-only（symlink 到 `~/.claude/skills/`）。CLAUDE.md 和 AGENTS.md 虽然分属两个工具，但通过引用相同的 `references/` 文件（plan-execution-principles.md、long-task-protocol.md 等）保持行为一致性。
+**跨工具共享**：agent-browser skill 同时 symlink 到 `~/.claude/skills/` 和 `~/.codex/skills/`；create-commit / review-gate / tdd-workflow / game-release-loop 等 skill 仅 Claude-only（symlink 到 `~/.claude/skills/`）。政策层不再靠"两份文件引用同一批 references"维持一致——`codex/AGENTS.md` 直接是 `claude/CLAUDE.md` 的 symlink，一份文件同时服务两套 harness，共享的 `references/`（plan-execution-principles.md、long-task-protocol.md 等）由这一份政策源统一引用。单一源的代价由该文件顶部的「Harness 适配 (BINDING)」表消化：它把能力名映射到两侧，并对 Codex 无对应物的项（`/custom:*`、`hooks/`、除 agent-browser 外的 skill）写明处置——读那份 command / SKILL.md 自己执行，做不到就告知用户该步依赖 Claude Code，不得臆造完成。
 
 ## Key Abstractions
 
@@ -125,9 +132,15 @@ ai-agent-config-share 是一个 AI coding agent 的共享配置仓库，为 Clau
 
 - **create-ux-contract**：从已部署产品出发访谈用户，写出 ux-contract（L1 产品全貌 + L2 用户视角 verify + 验收侧重），内部串 review-ux-contract 循环至收敛
 - **review-ux-contract**：按 `ux-contract-review-principles.md` 审查契约完整性
-- **execute-ux-contract**：supervisor 把已审过的 ux-contract 翻译为 test plan，驱动 Codex 跑端到端 UX 测试 + 修复闭环，直到 Critical/High issue 清零
+- **execute-ux-contract**：supervisor 把已审过的 ux-contract 翻译为 test plan，驱动 Codex 跑端到端 UX 测试 + 修复闭环，直到**可即时修复的** Critical/High/Medium issue 清零（需显式设计 / 产品决策的不建 Fix Task，经 AskUserQuestion 交用户裁定）
 
 ux-contract 是契约的锚点——execute 阶段不可自行修改它（发现矛盾时 AskUserQuestion 上升给用户），与 spec → plan → execute 中 verify 贯穿不变是同一设计立场。它与 `test-ux` 是两条独立入口：`test-ux` 从自由文本 / PRD 做一次性 ad-hoc 模拟测试；`execute-ux-contract` 以已审契约为基准做带修复闭环的系统性验收。
+
+### 设计先行 gate（create-aigc-design / review-aigc-design）
+
+第三条 verify 驱动的命令对，针对失败模式在视觉感知层的生成 / 合成流水线：`create-aigc-design` 在实现前写 L1/L2/L3 设计，`review-aigc-design` 按 `aigc-design-review.md` 的 rubric 审查，循环到 blocker 清零才允许实现。与 spec → plan → execute 的分工是评审平面不同——软件可维护性走 create-plan，视觉工程痕迹（断层 / 鬼影 / 孔洞 / 可见重复 / 漂移）走这一对。
+
+触发判据挂在改动的性质而非规模上（由 `claude/CLAUDE.md` 的 BINDING 章节强制），因为这类失败模式最常从"看着像小 tweak"的改动里溜进去。
 
 ### Supervisor 模式
 
@@ -136,12 +149,12 @@ ux-contract 是契约的锚点——execute 阶段不可自行修改它（发现
 - Claude（主 session）通过 `codeagent-wrapper` 在后台启动 Codex / Gemini / Claude 实例
 - 后台 agent 执行任务，主 session 通过 `poll-progress.sh` 增量读 `.output` 文件轮询进度（全量兜底），替代原 TaskOutput 阻塞轮询
 - 主 session 按 Stop Gate 判定后台 agent 是否真正完成，未完成则 resume 同一 session
-- `execute-plan` 额外支持 UX 验收闭环：完成后自动 `test-ux`，将 Critical/High issue 回灌给同一 Codex session
-- `execute-ux-contract` 把已审过的 ux-contract 翻译成 test plan，再用独立的 test session + fix session（各自独立 Codex session）跑测试-修复循环，直到 Critical/High issue 清零；commit 步骤委托 create-commit skill
+- `execute-plan` 额外支持 UX 验收闭环：完成后按 plan 声明做 UX 验收，把 Critical/High/Medium issue 回灌给**实现该改动所在工作单元的那个 implementer handle**——按 issue 定位到对应单元，未必是最新 handle，因为 session 以工作单元为界轮换
+- `execute-ux-contract` 把已审过的 ux-contract 翻译成 test plan，再用独立的 test session + fix session（各自独立 Codex session）跑测试-修复循环，直到可即时修复的 Critical/High/Medium issue 清零；commit 步骤委托 create-commit skill
 
 ### Stop Gate
 
-贯穿整个执行体系的收敛机制。任何 agent 想要停止执行都必须通过五项检查：必要性已证明、归因已分层、替代路径已尝试、verify 已拆分、交接可执行。这个机制同时约束 Codex（被监督的 agent）、Claude（supervisor）、以及 UX 修复循环。
+贯穿整个执行体系的收敛机制。任何 agent 想要停止执行都必须通过六项检查：必要性已证明、归因已分层、替代路径已尝试、verify 已拆分、交接可执行、文档同步已处理。这个机制同时约束 Codex（被监督的 agent）、Claude（supervisor）、以及 UX 修复循环。最后一项把文档同步纳入"完成"的定义——只交付代码、不交付文档同步的完成不算 done。
 
 ### Reference 文件 vs Command 文件
 
@@ -158,18 +171,18 @@ commands 引用 references，但 references 不引用 commands。这种分离让
 
 - `git pull` 即升级——所有 symlinked 文件实时生效
 - 仓库路径不能移动或删除（symlink 会断）
-- CLAUDE.md / AGENTS.md / config.toml 三个文件例外——因为用户有自定义内容，只能手动 merge
+- CLAUDE.md / AGENTS.md / config.toml 三个文件例外——因为用户有自定义内容，只能手动 merge（其中 AGENTS.md 在仓库内已是 CLAUDE.md 的 symlink，两侧 merge 的是同一份内容）
 
 ### 可观测性数据流
 
 ```
 Claude Code 运行时
-    ↓ JSON（stdin of statusline.sh）
-statusline.sh
-    ├→ 终端渲染（stdout，5 行状态栏）
+    ↓ JSON（stdin of statusline.sh，原样 pipe 给下一步）
+statusline-fields.py（唯一解析口：一次 pass，输出 shell 赋值）
+    ├→ statusline.sh eval 后渲染（stdout，5 行状态栏）
+    ├→ statusline-transcript.py（解析 transcript JSONL，提供 session 级汇总）
+    ├→ ~/.claude/statusline-cache/.speed-<session>.json（tok/s 缓存）
     └→ ~/.claude/tt-status.json（原子写入）
-          ↓
-    statusline-transcript.py（解析 transcript JSONL，提供 session 级汇总）
           ↓
     tt-web server.py
         ├→ parsers/（解析 ~/.claude/projects/ 和 ~/.codex/sessions/ 的 JSONL）

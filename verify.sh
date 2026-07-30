@@ -147,10 +147,22 @@ check_symlink      "agent-browser/codex"  "$SRC_ROOT/skills/agent-browser" "$HOM
 check_symlink      "create-commit"        "$SRC_ROOT/skills/create-commit" "$HOME/.claude/skills/create-commit"
 check_symlink      "review-gate"          "$SRC_ROOT/skills/review-gate"   "$HOME/.claude/skills/review-gate"
 check_symlink      "tdd-workflow"         "$SRC_ROOT/skills/tdd-workflow"  "$HOME/.claude/skills/tdd-workflow"
+check_symlink      "game-release-loop"    "$SRC_ROOT/skills/game-release-loop" "$HOME/.claude/skills/game-release-loop"
 check_symlink      "ask-user-mcp"         "$SCRIPT_DIR/ask-user-mcp"       "$HOME/.codex/ask-user-mcp"
 check_symlink      "codeagent-wrapper"    "$SRC_ROOT/bin/codeagent-wrapper" "$HOME/.claude/bin/codeagent-wrapper"
 check_symlink      "statusline.sh"        "$SRC_ROOT/statusline.sh"         "$HOME/.claude/statusline.sh"
+check_symlink      "statusline-fields.py" "$SRC_ROOT/statusline-fields.py"  "$HOME/.claude/statusline-fields.py"
 check_symlink      "statusline-transcript.py" "$SRC_ROOT/statusline-transcript.py" "$HOME/.claude/statusline-transcript.py"
+# Hook scripts are linked per-file by install.sh; without these checks a hook could be
+# wired in settings.json while its script was never linked (a silent no-op hook).
+for hook_rel in ask-recommend-gate.js desktop-notify.js desktop-notify.test.js \
+                codeagent-stdin-guard.js codeagent-stdin-guard.test.js \
+                lib/llm-judge.js lib/utils.js; do
+    check_symlink  "hooks/$hook_rel"      "$SRC_ROOT/hooks/$hook_rel"       "$HOME/.claude/hooks/$hook_rel"
+done
+# Previously uncovered despite install.sh linking them.
+check_symlink      "deep-discuss"         "$SRC_ROOT/skills/deep-discuss"   "$HOME/.claude/skills/deep-discuss"
+check_symlink      "poll-progress.sh"     "$SRC_ROOT/bin/poll-progress.sh"  "$HOME/.claude/bin/poll-progress.sh"
 
 # ---------- Dependency / PATH checks ----------
 
@@ -160,7 +172,18 @@ echo "=== Dependencies ==="
 if command -v jq >/dev/null 2>&1; then
     emit PASS "jq" "$(command -v jq)"
 else
-    emit FAIL "jq" "not on PATH (statusline.sh needs it to write tt-status.json)"
+    # Not a FAIL any more: statusline.sh does its JSON work in statusline-fields.py.
+    # jq is still used to READ/WRITE settings.json — by install.sh to merge the statusLine
+    # field, and by this script's own settings.json check below, which degrades to a WARN
+    # without it. So its absence costs install-time wiring and one verify check, not the
+    # statusline itself.
+    emit WARN "jq" "not on PATH (install.sh can't auto-wire settings.json statusLine, and the settings.json check below degrades; statusline itself is fine)"
+fi
+
+if command -v python3 >/dev/null 2>&1; then
+    emit PASS "python3" "$(command -v python3)"
+else
+    emit FAIL "python3" "not on PATH (statusline.sh parses its payload via statusline-fields.py)"
 fi
 
 if command -v codex >/dev/null 2>&1; then
@@ -224,6 +247,51 @@ else
     else
         emit WARN "settings.json/statusLine" "points to $existing, not $TARGET_CMD (manual override; remove if unintentional)"
     fi
+
+    # Hook WIRING, not just linkage. install.sh links the scripts but cannot merge
+    # settings.json for you (the README prompt does that), so a hook can be linked
+    # and still be completely inert — and a symlink check reports green either way.
+    # id + event + matcher together. Matching the id alone accepts a stanza that was
+    # merged under the wrong event (e.g. the Bash guard landing in Stop) — it would
+    # report "wired" while the hook never fires, which is the exact failure this
+    # check exists to catch.
+    # Also assert the handler command names the expected script. Checking only that
+    # *some* command handler exists accepts a stanza whose command is stale or wrong
+    # (`"command": "true"` would pass), which fires nothing while reporting green.
+    while IFS='|' read -r hook_event hook_matcher hook_id hook_script; do
+        if jq -e --arg ev "$hook_event" --arg m "$hook_matcher" --arg id "$hook_id" --arg sc "$hook_script" \
+            '[.hooks[$ev]? // [] | .[]? | select(.id == $id and .matcher == $m)
+              | select([.hooks[]? | select(.type == "command") | select(.command | contains($sc))] | length > 0)] | length > 0' \
+            "$SETTINGS" >/dev/null 2>&1; then
+            emit PASS "settings.json/hook" "$hook_id wired under $hook_event/$hook_matcher → $hook_script"
+        elif jq -e --arg id "$hook_id" \
+            '[.hooks // {} | .[]? | .[]? | select(.id == $id)] | length > 0' \
+            "$SETTINGS" >/dev/null 2>&1; then
+            emit FAIL "settings.json/hook" "$hook_id present but not as $hook_event/$hook_matcher running $hook_script — it will never fire (wrong event, matcher, or command)"
+        else
+            emit WARN "settings.json/hook" "$hook_id NOT wired — its script is linked but never fires (see README 安装 prompt step 3)"
+        fi
+    done <<'HOOK_WIRING'
+PreToolUse|AskUserQuestion|pre:ask-user-question:recommend-gate|hooks/ask-recommend-gate.js
+PreToolUse|Bash|pre:bash:codeagent-stdin-guard|hooks/codeagent-stdin-guard.js
+Stop|*|stop:desktop-notify-local|hooks/desktop-notify.js
+HOOK_WIRING
+
+    # desktop-notify-local only takes over if the ECC plugin's own stop hook is off;
+    # otherwise both fire and the user gets duplicate notifications.
+    # Exact token compare, not a substring: `stop:desktop-notify-old` contains
+    # `stop:desktop-notify` but disables a different hook, so a substring test would
+    # report green while both notifiers still fire.
+    ecc_disabled="$(jq -r '.env.ECC_DISABLED_HOOKS // empty' "$SETTINGS" 2>/dev/null)"
+    if [ -z "$ecc_disabled" ]; then
+        emit WARN "settings.json/env" "ECC_DISABLED_HOOKS unset — the ECC plugin's stop:desktop-notify may double up with this repo's"
+    elif printf '%s' "$ecc_disabled" | tr ',: ' '\n\n\n' >/dev/null 2>&1 &&
+         printf '%s' "$ecc_disabled" | tr ',' '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' \
+           | grep -qxF 'stop:desktop-notify'; then
+        emit PASS "settings.json/env" "ECC_DISABLED_HOOKS disables the plugin's stop:desktop-notify"
+    else
+        emit WARN "settings.json/env" "ECC_DISABLED_HOOKS='$ecc_disabled' has no exact stop:desktop-notify token (possible duplicate notifications)"
+    fi
 fi
 
 # ---------- Top-level config files (manually merged) ----------
@@ -253,9 +321,12 @@ check_anchor "CLAUDE.md"          "$HOME/.claude/CLAUDE.md" "Long-Task Protocol 
 check_anchor "CLAUDE.md"          "$HOME/.claude/CLAUDE.md" "Plan Execution Principles section" "Plan Execution Principles" || true
 check_anchor "CLAUDE.md"          "$HOME/.claude/CLAUDE.md" "plan-execution-principles.md reference" "plan-execution-principles.md" || true
 
-# AGENTS.md anchors
+# AGENTS.md anchors. In-repo codex/AGENTS.md is a symlink to claude/CLAUDE.md, so the
+# anchors mirror the CLAUDE.md ones — a divergence here means the Codex-side merge
+# target drifted from the shared policy source, which is exactly what we want flagged.
 check_anchor "AGENTS.md"          "$HOME/.codex/AGENTS.md"  "Long-Task Protocol section"      "Long-Task Protocol" || true
-check_anchor "AGENTS.md"          "$HOME/.codex/AGENTS.md"  "Stop Gate enumeration"            "Stop Gate" || true
+check_anchor "AGENTS.md"          "$HOME/.codex/AGENTS.md"  "Plan Execution Principles section" "Plan Execution Principles" || true
+check_anchor "AGENTS.md"          "$HOME/.codex/AGENTS.md"  "plan-execution-principles.md reference" "plan-execution-principles.md" || true
 
 # config.toml anchors — verify each MCP server entry is present.
 TOML="$HOME/.codex/config.toml"

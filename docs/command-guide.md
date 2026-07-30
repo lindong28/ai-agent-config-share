@@ -7,21 +7,21 @@
 | Command | 作用 | 自动循环？ |
 |---|---|---|
 | `/custom:create-spec <task>` | 写 spec.md（L1 产物 + L2 用户视角 verify + 横切取舍偏好的交付契约） | 内部自动调 `/custom:review-spec` 循环至无新发现 |
-| `/custom:create-plan <task>` | 写 plan.md（含 L3 设计 + 内部 verify；可读 spec 为输入） | 内部自动调 `/custom:review-plan` 循环至无新发现 |
+| `/custom:create-plan <task>` | 写 plan.md（含 L3 设计 + 内部 verify；可读 spec 为输入） | 内部自动调 `/custom:review-plan` 循环至其 severity gate 收敛（非"零发现"） |
 | `/custom:review-spec <path>` | 按 `spec-review-principles.md` 审查 spec | 三阶段循环（审查→决策→落地），改动后回到第 1 步重审 |
 | `/custom:review-plan <path>` | 按 `plan-review-principles.md` 审查 plan | 同上 |
 | `/custom:review-skill <path> [optimize]` | 按 `skill-review-principles.md` 审查 skill/command；`optimize` 叠加体积优化维度 | 同上 |
 | `/custom:create-skill-from-workflow` | 把刚执行的工作流提取为可复用 skill / command | 内部自动调 `/custom:review-skill` 循环 |
 | `/custom:fix-skill-from-session [问题]` | 扫 session 中 skill / command 的错行为，定位 source-level 修复 | 内部自动调 `/custom:review-skill` 循环 |
-| `/custom:execute-plan <plan.md>` | Claude 作为 supervisor 启动 Codex 实施 plan.md：按 Stop Gate 收敛；§4 UX gate 按 plan 声明分流——有「UX 契约影响」则 apply 契约 + 契约驱动验证（4a/4b），有 UX 入口则跑探索式 `/custom:test-ux`（4c），issue 回灌 Codex 直到清 | 是（Stop Gate + UX 验收双循环） |
+| `/custom:execute-plan <plan.md>` | Claude 作为 supervisor 启动 Codex 实施 plan.md：按 Stop Gate 收敛；随后按 plan 声明分流 UX 验收——声明了「UX 契约影响」就应用契约并按契约验证，只有 UX 入口就跑一遍探索式 `/custom:test-ux`，发现的 issue 回灌给 Codex 直到清零 | 是（Stop Gate + UX 验收双循环） |
 | `/custom:supervise [--backend codex\|gemini\|claude] [--autopilot] <task>` | Claude 作为 supervisor 用 codeagent-wrapper 跑**开放式任务（无 plan.md）**：spawn 前锁定 success criteria + backend，过程中代答简单决策 / 升级复杂决策（`--autopilot` 则全程不打扰），agent 早停则 resume 续命，结束把 agent 行为问题沉淀到 `docs/issues/general.md` | 是（按 success criteria + Stop Gate resume 收敛） |
 | `/custom:resolve-issues [--source <path>] <目标>` | 围绕一个目标批量解决项目 issue：按目标 triage（核实存在性 + consumer scope，回写陈旧项），用户批准后按依赖顺序委派 agent 逐个解决并闭环回灌新 issue | 是（逐 issue 委派 + 回灌循环） |
 | `/custom:test-ux <产品/PRD>` | 从自由文本 / PRD 做一次性 ad-hoc 模拟测试：模拟用户测试**已部署**的产品（web / desktop / mobile），输出 issue 清单 | 否（codeagent-wrapper 启动 codex session 执行，可 resume 续跑） |
 | `/custom:create-ux-contract [产品上下文]` | 访谈用户写 ux-contract.md（L1 产品全貌 + L2 用户视角 verify + 验收侧重），作为 UX 验收基准 | 内部自动调 `/custom:review-ux-contract` 循环至收敛 |
 | `/custom:review-ux-contract <path>` | 按 `ux-contract-review-principles.md` 审查 ux-contract | 三阶段循环（审查→决策→落地），改动后回到第 1 步重审 |
-| `/custom:execute-ux-contract <contract-path>` | Claude 作为 supervisor 把已审契约翻译为 test plan，驱动 Codex 跑端到端 UX 测试 + 修复闭环，直到 Critical/High 清零 | 是（test session + fix session 测-修循环） |
+| `/custom:execute-ux-contract <contract-path>` | Claude 作为 supervisor 把已审契约翻译为 test plan，驱动 Codex 跑端到端 UX 测试 + 修复闭环，直到可即时修复的 Critical/High/Medium 清零 | 是（test session + fix session 测-修循环） |
 | `/custom:create-handoff` | 把 session 关键 context 落到 markdown 给新 session 接力 | 否（单次执行） |
-| `/custom:sync-docs [改了什么]` | 按 `docs-organization-protocol.md` 同步项目文档（docs/ + 根目录 README/CHANGELOG）：给出改动描述则补该改动的文档，空参数则审查并修全部现有文档；为每类并行 spawn `doc-updater` agent，并对 docs / README 审查腿加载 `docs-review-principles.md` / `readme-review-principles.md` | 否（并行 subagent 单次执行） |
+| `/custom:sync-docs [改了什么]` | 按 `docs-organization-protocol.md` 同步项目文档（docs/ + 根目录 README/CHANGELOG）：给出改动描述则补该改动的文档，空参数则审查并修全部现有文档 | 否（单次执行） |
 | `/custom:create-refactor-plan <scope> [--rescan]` | 为周期性还技术债写系统化重构 plan.md（提升可维护性 / 可扩展性 / 易读性），`--rescan` 续下一轮 | 内部自动调 `/custom:review-plan` 循环 |
 | `/custom:absorb-skill <外部 skill>` | 把外部 skill / command 中有用的内容合并进已有本地 skill / command | 内部按落点分派 `/custom:review-skill` 等收敛 |
 | `/custom:borrow-design <target> <reference>` | 对比两份 anatomy / design 文档，产出 consumer-aware、ROI 排序的 borrow checklist（不落地合并） | 否（单次执行，user-only） |
@@ -32,10 +32,16 @@
 | `/custom:review-session-skills` | 审当前 session 触发过的 skill / command 行为是否合规 | 同上 |
 | `/custom:review-memory` | 审跨 session 记忆（当前 harness 范围）是否准确 / 值得留存 | 同上 |
 | `/custom:review-alerting <项目>` | 按 `alerting-review-principles.md` 审服务故障告警设计质量（值不值得 page、多严重、说什么、要不要合并）并修复 | 同上 |
+| `/custom:create-aigc-design <效果>` | 为合成 / 编辑 / 后处理 / 多来源接合 / 多步生成类效果写 L1/L2/L3 设计（深度随复杂度伸缩），聚焦算法-视觉-效果层 | 配合 `/custom:review-aigc-design` 循环至过 blocker gate |
+| `/custom:review-aigc-design <path>` | 按 `aigc-design-review.md` 在实现前独立评审 AIGC 流水线设计文档 | 三阶段循环（审查→决策→落地） |
+| `/routine:session-export` | 把当前 session 导出为可移植归档 | 否（单次执行） |
+| `/routine:session-import` | 把导出的 session 归档导入到本机 | 否（单次执行） |
 
-注：所有 `create-*` / `fix-*` 命令**已经在内部 invoke 对应的 review 循环**. 但有时候内置的循环还是不够，需要额外手动多次触发review。
+注：多数 `create-*` / `fix-*` 命令**已经在内部 invoke 对应的 review 循环**（见上表「自动循环？」列——`create-handoff` / `create-eval-harness` 等标「否」的没有）。内置循环不够时，可对同一份产物额外手动多次触发 review。
 
 注：`deep-discuss` skill（`/deep-discuss` 或自动触发）——任务 tradeoff 重、想先一起把方案想清再动手、但还不值得产出 plan.md 时用；产出共识而非 plan，谈拢后可衔接 `/custom:create-plan`。
+
+注：`game-release-loop` skill（显式点名才触发）——把一款浏览器游戏推到可发布：能力门（源码 / 仅构建 / 未知）→ 授权门（只诊断 / 可修复）→ 旅程×目标覆盖账本 → `READY` / `PARTIALLY VERIFIED` / `NOT READY`。它编排的是已有件（`test-ux` / `create-ux-contract` / `review-ux-contract` / `execute-ux-contract` / `tdd-workflow`），所以适用于"要对发布下结论"而非单次探索式测试；后者直接用 `/custom:test-ux`。首次用先按 `claude/skills/game-release-loop/references/game-profile.md` 模板为该游戏填一份配置档。
 
 ---
 
@@ -50,16 +56,16 @@
 
 2. Claude Code 中**循环**执行：/custom:review-spec plans/<date>-<name>/spec.md
    - 人工验证点: 读 spec.md，确认其中的'用户视角verify'对得上你的真实意图
-   - 复杂场景: 手动多次触发 review，直到人工判断 Claude Code 基本查不出问题
+   - 复杂场景: review 命令自带收敛判据（`review-spec` 跑到无新发现；`review-plan` 按 severity gate + 轮次预算，残余项经 AskUserQuestion 交你裁决），到它自己说收敛为止。额外手动再跑的价值是换一轮注意力——你觉得还有在意却没被提到的风险时再跑，不是靠"跑到不出新发现"来判停
 
 3. Claude Code 新 session 中执行：/custom:create-plan 把这份 spec 转成 plan: plans/<date>-<name>/spec.md
 
 4. Claude Code 中**循环**执行：/custom:review-plan plans/<date>-<name>/plan.md
    - 人工验证点: 读 plan.md，重点看 L3 中的 verify 步骤
-   - 复杂场景: 手动多次触发 review，直到人工判断 Claude Code 基本查不出问题
+   - 复杂场景: review 命令自带收敛判据（`review-spec` 跑到无新发现；`review-plan` 按 severity gate + 轮次预算，残余项经 AskUserQuestion 交你裁决），到它自己说收敛为止。额外手动再跑的价值是换一轮注意力——你觉得还有在意却没被提到的风险时再跑，不是靠"跑到不出新发现"来判停
 
 5. Claude Code 中执行：/custom:execute-plan plans/<date>-<name>/plan.md
-   - Claude supervise Codex 实施，按 Stop Gate 收敛；§4 UX gate：有「UX 契约影响」则 apply 契约 + 契约驱动验证，有 UX 入口则跑探索式 test-ux，issue 回灌直到清
+   - Claude supervise Codex 实施，按 Stop Gate 收敛；随后按 plan 声明做 UX 验收（有契约影响则应用契约并按契约验证，只有 UX 入口则跑探索式 test-ux），issue 回灌直到清零
 ```
 
 ### B. 不需要 spec 的快速 plan
@@ -71,10 +77,10 @@
 
 2. Claude Code 中**循环**执行：/custom:review-plan plans/<date>-<name>
    - 人工验证点: 读 plan.md，重点看 L3 中的 verify 步骤
-   - 复杂场景: 手动多次触发 review，直到人工判断 Claude Code 基本查不出问题
+   - 复杂场景: review 命令自带收敛判据（`review-spec` 跑到无新发现；`review-plan` 按 severity gate + 轮次预算，残余项经 AskUserQuestion 交你裁决），到它自己说收敛为止。额外手动再跑的价值是换一轮注意力——你觉得还有在意却没被提到的风险时再跑，不是靠"跑到不出新发现"来判停
 
 3. Claude Code 中执行：/custom:execute-plan plans/<date>-<name>/plan.md
-   - Claude supervise Codex 实施，按 Stop Gate 收敛；§4 UX gate 按 plan 声明分流（契约影响 → apply + 契约验证；UX 入口 → 探索式 test-ux）
+   - Claude supervise Codex 实施，按 Stop Gate 收敛；随后按 plan 声明做 UX 验收（有契约影响 → 应用契约并按契约验证；只有 UX 入口 → 探索式 test-ux）
 ```
 
 ### C. 产品上线前 UX 测试（ad-hoc）
@@ -87,7 +93,7 @@
 
 ### D. 契约驱动的 UX 验收：create → review → execute
 
-适用：产品需要建立**系统性、可复用**的 user-observable 验收规格，且希望测试发现的 Critical/High issue 自动进入修复闭环。相比 C 的一次性 ad-hoc 测试，这条沉淀出一份可反复执行的 ux-contract，并由 supervisor 驱动 Codex 测+修直到收敛。
+适用：产品需要建立**系统性、可复用**的 user-observable 验收规格，且希望测试发现的、可即时修复的 Critical/High/Medium issue 自动进入修复闭环。相比 C 的一次性 ad-hoc 测试，这条沉淀出一份可反复执行的 ux-contract，并由 supervisor 驱动 Codex 测+修直到收敛。
 
 ```
 1. Claude Code 中执行：/custom:create-ux-contract [产品描述/入口/文档]
@@ -96,11 +102,11 @@
    - 产出 docs/contracts/ux-contract.md
 
 2. 人工验证点：读 ux-contract.md，确认 L2 验收规格覆盖你真实的上线诉求
-   - 复杂场景：手动多次触发 /custom:review-ux-contract <contract path> 直到查不出问题
+   - 复杂场景：手动多次触发 /custom:review-ux-contract <contract path>；该命令自己循环至无新发现，额外再跑是为了换一轮注意力
 
 3. Claude Code 新 session 中执行：/custom:execute-ux-contract docs/contracts/ux-contract.md
    - supervisor 把契约翻译为 test plan，用独立 test session + fix session 跑测-修循环
-   - 按 Stop Gate 收敛，Critical/High issue 清零后 commit（委托 create-commit skill）+ handoff
+   - 按 Stop Gate 收敛，可即时修复的 Critical/High/Medium issue 清零后 commit（委托 create-commit skill）+ handoff
 ```
 
 > C vs D：`test-ux` 是从自由文本 / PRD 临时拉起的一次性测试，无沉淀、无修复闭环；ux-contract 三件套沉淀可复用的验收规格，且 `execute-ux-contract` 自带测-修闭环。需要反复验收或想要自动修复时选 D。

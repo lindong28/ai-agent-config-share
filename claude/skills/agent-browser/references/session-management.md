@@ -2,7 +2,9 @@
 
 Multiple isolated browser sessions with state persistence and concurrent browsing.
 
-**Related**: [authentication.md](authentication.md) for login patterns, [SKILL.md](../SKILL.md) for quick start.
+**Related**: [authentication.md](authentication.md) for login patterns, [Core Workflow](../SKILL.md#core-workflow).
+
+The examples below use the default browser unless they explicitly choose a session. When continuing a workflow already running on a CDP path, do not run them bare — follow [Browser Identity Continuity](../SKILL.md#browser-identity-continuity).
 
 ## Contents
 
@@ -133,6 +135,19 @@ agent-browser --session variant-a screenshot /tmp/variant-a.png
 agent-browser --session variant-b screenshot /tmp/variant-b.png
 ```
 
+### Managing Saved State Files
+
+```bash
+agent-browser state list                      # List saved states
+agent-browser state show myapp-default.json   # Inspect one
+agent-browser state clear myapp               # Drop the saved state for one --session-name
+agent-browser state clean --older-than 7      # Prune states older than N days
+```
+
+Set `AGENT_BROWSER_ENCRYPTION_KEY` (e.g. `openssl rand -hex 32`) to encrypt saved state at rest.
+
+These commands act on the automatic state keyed by `--session-name`, not on the daemon-backed browser instance that `--session` selects, and not on the pages `close` acts on.
+
 ## Default Session
 
 When `--session` is omitted, commands use the default session:
@@ -141,18 +156,22 @@ When `--session` is omitted, commands use the default session:
 # These use the same default session
 agent-browser open https://example.com
 agent-browser snapshot -i
-agent-browser close  # Closes default session
+agent-browser close  # Closes the pages held by the default session
 ```
 
 ## Session Cleanup
 
+Two lifetimes, cleaned up differently: `close` ends the browser pages a daemon is holding, while the daemon process itself keeps running per `--session` name.
+
 ```bash
-# Close specific session
+# Close the pages held for one session
 agent-browser --session auth close
 
-# List active sessions
+# List active sessions — names only, no pids
 agent-browser session list
 ```
+
+Normal cleanup stops at `close`. A daemon that is stale or wedged needs the reset in "Troubleshooting: Stale Daemon" in [SKILL.md](../SKILL.md): `agent-browser doctor` both to clear the leftovers of a dead daemon and to read the live `Session <name> (pid <N>)` line when one must be terminated.
 
 ## Best Practices
 
@@ -170,7 +189,7 @@ agent-browser --session s1 open https://github.com
 ### 2. Always Clean Up
 
 ```bash
-# Close sessions when done
+# Close the pages held by each session when done
 agent-browser --session auth close
 agent-browser --session scrape close
 ```

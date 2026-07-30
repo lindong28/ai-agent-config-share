@@ -1,6 +1,6 @@
 ---
 name: review-agent-rules
-description: 审计并按需修复目标项目实际生效的 CLAUDE.md / AGENTS.md 规则栈，包括跨文件冲突 / 遮蔽、死引用 / 漂移、可机械验证的 workspace 合规，以及无独立风险保证的重复 context / gate / model work。单文件写作质量走 review-claude-md，session 行为复盘走 review-session-skills。
+description: 审计并按需修复目标项目实际生效的 CLAUDE.md / AGENTS.md 规则栈，包括冲突、遮蔽、死引用、workspace 合规、over-rigor、capability/least-privilege 与无独立风险保证的重复工作。单文件写作质量走 review-claude-md，session 行为复盘走 review-session-skills。
 argument-hint: "[project-root | 空=当前项目]"
 disable-model-invocation: true
 ---
@@ -18,10 +18,16 @@ disable-model-invocation: true
 
 审计 I/O 流：
 
+`owning workflow` 指修复落点对应的后续审核流程；`recovery point` 指流程非终态时供原审计恢复所需的状态与证据；`实际落地 diff` 指 edit 经 `owning workflow` 后实际产生的文本 diff 或等价 before/after 证据；`regression` 指拟议 fix 让既有任务质量、覆盖、风险保证、可靠性或效率恶化，不含它新制造的问题，“风险检查”同时检查新问题和 `regression`。
+
 | 事实 / 产物 | Producer / source | Consumer | Status |
 |---|---|---|---|
 | harness 加载 / 遮蔽权威 | `~/.claude/CLAUDE.md`「Harness 适配」 | 阶段 1 | 必需 |
 | 实际生效规则栈与行为引用 | 阶段 1 还原并跟随引用 | 阶段 2–3 | 必需；无法确认记 `unresolved` |
+| 修复基线 | 本命令在 edit 前冻结修复基线 | 「决策、修复与复验」的 edit 前风险检查与实际落地 diff 重建 | 条件；进入 edit 路径时必需；`owning workflow` 非终态时把 locator / digest 写入 `recovery point` |
+| edit 前风险检查结论 | 本命令完成风险检查 | 「决策、修复与复验」的实际落地 diff 复查 | 条件；进入 edit 路径时必需；`owning workflow` 非终态时写入 `recovery point` |
+| 用户授权边界 | 用户通过 `AskUserQuestion` 接受具名风险修法 | 「决策、修复与复验」的实际落地 diff 复查与免重复提问判断 | 条件；用户接受风险修法时必需；`owning workflow` 非终态时写入 `recovery point` |
+| 实际落地 diff（非文本改动为等价 before/after 证据） | `owning workflow` 每次结果 / 状态回传后，由本命令基于同一修复基线重建 | 「决策、修复与复验」的实际落地 diff 复查 | 条件；本次路径有 edit 落地且相对上次已检查证据发生变化时必需，不以 `owning workflow` 是否成功为条件；未变化则复用检查结论与授权边界；流程非终态时把已检查证据的 digest 写入 `recovery point`；无法重建则按证据不足处理 |
 | 可机械验证的 workspace 事实 | 阶段 2 验证动作 | 阶段 3 | 条件；存在可机械验证主张时必需，无则 `N/A`，应有但证据不足记 `unresolved` |
 | 本次执行证据 | 当前 session | 行为规则的合规判断 | 条件；缺失时不建立该类合规主张 |
 | caller / gate 路径 | 阶段 1 还原 | 效率候选记录 | 条件；按“效率候选记录”状态门 |
@@ -88,7 +94,18 @@ finding 必须给出规则原文位置、验证动作/事实和影响。没有 f
 
 ### 4. 决策、修复与复验
 
-修法唯一或近唯一、可逆且不改变规则语义的机械修复直接执行并汇报；finding 是否成立存在合理分歧、修法多路各有代价、会改变规则语义 / source of truth / scope，或有破坏性 / 外部影响时，集中呈现为 `finding | 证据 | 推荐修复 | 影响面`，通过 `AskUserQuestion` 让用户选择。修复归属由 source of truth 决定：实践错则修实践；规则错则修 owning rule；遮蔽/同源问题则修加载结构。`token / workflow inefficiency` 修复须保留独立风险保证：保留唯一 owner，删除无独立风险保证的重复摄入 / 调用，或合并 contract 兼容的工作。不得复制规则制造第二真相。
+控制骨架：edit 前风险检查 → 决策；`retain` / 未授权则停止，允许 edit 才进入 `owning workflow`；该流程每次结果 / 状态回传后先对本次路径新增或变化的实际落地 diff 复查，再按结果分支——非成功终态或 `unresolved / stale / blocked` 以 `unresolved` 停止，其他等待中 / 非终态保存 `recovery point` 并暂停，成功终态继续原验证 → 终态。
+
+任何 edit 前，先将拟议 fix 与修复基线对照，检查它在完整生效规则栈及其消费者中是否制造新问题或造成 `regression`。修掉当前 finding 或整体净收益为正都不能抵消任一 `regression`；当前问题可以保留，而新问题会被未来调用重复放大。
+
+| 风险检查结果 | 动作 |
+|---|---|
+| 基于当前证据未发现合理的新问题或 `regression` 风险 | 进入后续决策与修复 |
+| 存在合理风险，且收益不足以支持该取舍 | `retain`，不编辑 |
+| 存在合理风险，但 agent 判断收益可能大于风险 | 通过 `AskUserQuestion` 把 `retain` 与一个或多个具名风险修法作为明确动作选项；逐项呈现收益、新问题 / `regression` 风险、证据与不确定性，并标出推荐及理由；用户明确接受前不得编辑 |
+| 证据不足以排除合理风险 | 按存在风险处理；不能提出值得用户承担的收益依据时 `retain` |
+
+完成 edit 前风险检查并取得必要授权后，修法唯一或近唯一、可逆且不改变规则语义的机械修复直接执行并汇报；finding 是否成立存在合理分歧、修法多路各有代价、会改变规则语义 / source of truth / scope，或有破坏性 / 外部影响时，集中呈现为 `finding | 证据 | 推荐修复 | 影响面`；尚未在上述 `AskUserQuestion` 中裁决的选择再通过 `AskUserQuestion` 让用户选择，不重复询问同一决定。修复归属由 source of truth 决定：实践错则修实践；规则错则修 owning rule；遮蔽/同源问题则修加载结构。`token / workflow inefficiency` 修复须保留独立风险保证：保留唯一 owner，删除无独立风险保证的重复摄入 / 调用，或合并 contract 兼容的工作。不得复制规则制造第二真相。
 
 **finding 的 scope（项目 vs user）不改变可动作性**：user-scope / 跨项目共享的载体（user CLAUDE.md 及其 references、user-level skill / command、被规则栈 route 进的共享 wrapper / transport）与项目载体一样，成立即按下方落点修——**不得**因「是 user-level / 共享 / 会波及别的项目」把它排除、延到「另一次 user-scope review」或降格为只观察；共享载体 blast-radius 更大（波及所有项目），更该修。
 
@@ -97,19 +114,21 @@ finding 必须给出规则原文位置、验证动作/事实和影响。没有 f
 | 落点 | Owning workflow |
 |---|---|
 | CLAUDE.md / AGENTS.md（symlink 审其实际 source） | `/custom:review-claude-md` |
-| principles 文件 | `/custom:review-principles` |
+| principles 文件 | `/custom:review-skill` |
 | skill、command、其他 reference | `/custom:review-skill` |
 | 项目 README / CHANGELOG / docs/ | 以目标项目为 `target_repo`，将 finding、规则来源、修复 diff 与原验证证据作为改动语境 / 源证据，按 `sync-docs.md`「被 supervisor 编排复用」执行完整 recipe |
 | script、hook、配置或其他文件 | 相关测试 + 生成后 review gate |
 | symlink / 目录结构等 filesystem 状态 | 重新运行原验证 |
 
+`owning workflow` 每次结果 / 状态回传后，只要本次路径的实际落地 diff 相对上次已检查证据发生变化，就对修复基线重做上述风险检查；未变化时复用已有检查结论与授权边界。若发现新问题或新增 / 扩大 `regression` 风险，不得进入终态或把已落地风险 diff 当作 `retain`：能与其他改动安全分离时先撤销本命令改动、恢复修复基线，再把重新应用视为新的拟议 fix 按本节“风险检查结果”表裁决；无法安全恢复时以 `unresolved` 停止并回传实际落地 diff 与阻碍，不自行追加 edit。
+
 | Owning workflow 结果 | 原审计动作 |
 |---|---|
-| owner 定义的成功终态 | 重新运行每项原验证，再判断是否完成 |
-| 等待中 / 非终态 | 保留 owner 状态与 recovery point；不恢复原验证 |
-| 非成功终态，或 `unresolved / stale / blocked` | 停止原审计，以 `unresolved` 回传缺失证据与 recovery point；owner 后续达到成功终态后才能恢复 |
+| `owning workflow` 定义的成功终态 | 重新运行每项原验证，再判断是否完成 |
+| 非成功终态，或 `unresolved / stale / blocked` | 停止原审计，以 `unresolved` 回传缺失证据与 recovery point；`owning workflow` 后续达到成功终态后才能恢复 |
+| 其他等待中 / 非终态 | 保留 `owning workflow` 状态与 recovery point；不恢复原验证 |
 
-各 owner 保有自己的状态词汇与成功判据；例如 docs recipe 只有其「输出」定义的 `recipe status = converged` 才是成功终态。恢复后确认实践与规则一致且未制造新冲突。
+各 `owning workflow` 保有自己的状态词汇与成功判据；例如 docs recipe 只有其「输出」定义的 `recipe status = converged` 才是成功终态。成功终态的原验证完成后，确认实践与规则一致且未制造新冲突。
 
 ## 输出
 

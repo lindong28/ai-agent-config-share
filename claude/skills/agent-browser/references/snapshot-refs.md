@@ -2,7 +2,7 @@
 
 Compact element references that reduce context usage dramatically for AI agents.
 
-**Related**: [commands.md](commands.md) for full command reference, [SKILL.md](../SKILL.md) for quick start.
+**Related**: [commands.md](commands.md) for full command reference, [Core Workflow](../SKILL.md#core-workflow).
 
 ## Contents
 
@@ -13,6 +13,8 @@ Compact element references that reduce context usage dramatically for AI agents.
 - [Best Practices](#best-practices)
 - [Ref Notation Details](#ref-notation-details)
 - [Troubleshooting](#troubleshooting)
+- [Annotated Screenshots (Vision Mode)](#annotated-screenshots-vision-mode)
+- [Semantic Locators](#semantic-locators-alternative-to-refs)
 
 ## How Refs Work
 
@@ -216,4 +218,36 @@ agent-browser snapshot @e5
 
 # Or use get text for content-only extraction
 agent-browser get text @e5
+```
+
+## Annotated Screenshots (Vision Mode)
+
+Use `--annotate` to take a screenshot with numbered labels overlaid on interactive elements. Each label `[N]` maps to ref `@eN`. This also caches refs, so you can interact with elements immediately without a separate snapshot.
+
+```bash
+agent-browser screenshot --annotate
+# Output includes the image path and a legend:
+#   [1] @e1 button "Submit"
+#   [2] @e2 link "Home"
+#   [3] @e3 textbox "Email"
+agent-browser click @e2              # Click using ref from annotated screenshot
+```
+
+Use annotated screenshots when:
+
+- The page has unlabeled icon buttons or visual-only elements
+- You need to verify visual layout or styling
+- Canvas or chart elements are present (invisible to text snapshots)
+- You need spatial reasoning about element positions
+
+## Semantic Locators (Alternative to Refs)
+
+When refs are unavailable or unreliable, use semantic locators:
+
+```bash
+agent-browser find text "Sign In" click
+agent-browser find label "Email" fill "user@test.com"
+agent-browser find role button click --name "Submit"
+agent-browser find placeholder "Search" type "query"
+agent-browser find testid "submit-btn" click
 ```

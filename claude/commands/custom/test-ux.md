@@ -129,7 +129,7 @@ Web 产品默认要覆盖：
 
 ```
 Bash({
-  command: "CODEX_TIMEOUT=21600000 ~/.claude/bin/codeagent-wrapper --progress --backend codex - <WORKDIR> <<'EOF'\n<test-prompt>\nEOF",
+  command: "CODEAGENT_OPEN_BROWSER=false CODEX_TIMEOUT=21600000 ~/.claude/bin/codeagent-wrapper --progress --backend codex - <WORKDIR> <<'EOF'\n<test-prompt>\nEOF",
   run_in_background: true,
   timeout: 21900000,
 })
@@ -181,7 +181,7 @@ Bash({
 据此分三种结局：
 
 - **过关**（两项都满足）→ 进 Handoff。
-- **未覆盖完 / 早停 / 核心路径未真实跑通**（session 仍可信）→ **resume 同一 session**（前缀改为 `resume <SESSION_ID>`，其余 flag / 后台 / timeout 同启动）续跑，**不为这种正常早停启新 session 重测**（丢上下文、双倍 token）；指出缺哪几项 + 已观察到的线索，回到本段重新裁决。
+- **未覆盖完 / 早停 / 核心路径未真实跑通**（session 仍可信）→ **resume 同一 session**（前缀改为 `resume <SESSION_ID>`，其余环境变量 / flag / 后台 / timeout 同启动）续跑，**不为这种正常早停启新 session 重测**（丢上下文、双倍 token）；指出缺哪几项 + 已观察到的线索，回到本段重新裁决。
 - **session 异常退出 / `.output` 截断 / resume 后不可信**（进程残缺，非「正常早停」）→ 先排查 stderr / 退出码 + `git status`，再把诊断 + 候选 [resume 同 session / 重启新 session / 放弃交还用户] 经 `AskUserQuestion` 让用户拍板——反转成本高（重启丢全部上下文 / resume 损坏 session 不可信），主 session 不 silent decide。
 
 读完最终输出后若想核对执行中段细节（证据真实性、覆盖是否真做），可再 `Read` 同一 `<output-file>`（含完整执行过程）——可选，不强制。

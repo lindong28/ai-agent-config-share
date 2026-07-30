@@ -27,9 +27,11 @@
  * isGhostty() can't be trusted remotely — the ssh pty path is the reliable
  * signal. (Requires macOS notification permission for the *local* terminal.)
  *
- * Inside tmux the escape is wrapped in tmux's passthrough DCS and written to the
- * pane tty, so the server unwraps it and forwards it to the outer terminal
- * (which may itself be SSH-forwarded home). Requires `allow-passthrough on`.
+ * Inside tmux the escape goes straight to the attached clients' ttys, which are
+ * the outer terminals' own streams (SSH-forwarded home when remote) and so need
+ * no cooperation from tmux. Routing it through tmux's passthrough DCS instead
+ * would subject it to pane-visibility gating and drop exactly the notifications
+ * that matter — the ones for a pane you are not watching. See tmuxClientTTYs().
  *
  * Tab title and bell are intentionally NOT handled here — ghostty-tab-title.sh
  * owns the tab indicator. This hook only emits the desktop notification.
@@ -95,25 +97,42 @@ function isTmux() {
   return process.env.TMUX != null;
 }
 
+const DEVICE_FLAGS = fs.constants.O_WRONLY | fs.constants.O_NOCTTY;
+
+function isCharDevice(devPath) {
+  try {
+    return fs.statSync(devPath).isCharacterDevice();
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Locate the terminal's tty. Hook subprocesses are invoked with stdin as a
  * pipe and have no controlling terminal, so /dev/tty is unavailable — but
  * fs.accessSync('/dev/tty') still PASSES (it only checks the device node's
  * permission bits), while the actual openSync throws ENXIO. So probe by
  * opening, not accessSync. On failure, walk up the process tree to the
- * ancestor that owns the real PTY (hook → tool-bash(??) → node(ttysNNN)) —
+ * ancestor that owns the real PTY (hook → sh -c(no tty) → claude(pty)) —
  * the same approach ghostty-tab-title.sh uses.
+ *
+ * An ancestor counts only when /dev/<tty> is a real character device. Matching
+ * against "no tty" marker strings instead is what broke this: `ps -o tty=`
+ * spells it "??" on macOS but "?" on Linux, so a guard written against "??"
+ * alone made the walk return the bogus path "/dev/?" and silently drop every
+ * notification on Linux. Opening with O_WRONLY (not 'w', which adds O_CREAT)
+ * keeps a future bad path from *creating* the file it names.
  */
 function findTTY() {
   try {
-    fs.closeSync(fs.openSync('/dev/tty', 'w'));
+    fs.closeSync(fs.openSync('/dev/tty', DEVICE_FLAGS));
     return '/dev/tty';
   } catch {}
 
   let pid = process.ppid;
   for (let i = 0; i < 12 && pid > 1; i++) {
     const tty = (spawnSync('ps', ['-o', 'tty=', '-p', String(pid)], { encoding: 'utf8', timeout: 2000 }).stdout || '').trim();
-    if (tty && tty !== '??') return `/dev/${tty}`;
+    if (tty && isCharDevice(`/dev/${tty}`)) return `/dev/${tty}`;
     const ppid = (spawnSync('ps', ['-o', 'ppid=', '-p', String(pid)], { encoding: 'utf8', timeout: 2000 }).stdout || '').trim();
     pid = parseInt(ppid, 10) || 0;
   }
@@ -121,25 +140,92 @@ function findTTY() {
 }
 
 /**
- * Build the OSC 9 sequence. Inside tmux, wrap it in the passthrough DCS
- * (ESC P tmux; … ESC \) with every inner ESC doubled, so the tmux server
- * unwraps it and forwards the original to the outer terminal. Needs
- * `allow-passthrough on`.
+ * Build the OSC 9 sequence, optionally wrapped in tmux's passthrough DCS
+ * (ESC P tmux; … ESC \) with every inner ESC doubled, which asks the tmux
+ * server to unwrap it and forward the original to the outer terminal.
  */
-function osc9(body) {
+function osc9(body, viaPassthrough) {
   const seq = `\x1b]9;${body}\x1b\\`;
-  if (!isTmux()) return seq;
+  if (!viaPassthrough) return seq;
   return `\x1bPtmux;${seq.replace(/\x1b/g, '\x1b\x1b')}\x1b\\`;
+}
+
+/**
+ * The ttys of every tmux client attached to THIS pane's session. Each is the
+ * outer terminal's own stream (the ssh channel home, when remote), so an escape
+ * written there reaches the terminal without tmux's involvement.
+ *
+ * Preferred over passthrough because passthrough is gated on pane visibility:
+ * tmux renders a pane's output only to clients currently displaying it, so a
+ * turn that ends while you are looking at another window is silently dropped —
+ * precisely the notification you most wanted. (tmux 3.4 added
+ * `allow-passthrough = all` to lift exactly this restriction.) Writing to the
+ * client tty is unconditional. OSC 9 draws nothing and moves no cursor, so
+ * bypassing tmux's screen model cannot desync the display — but keep each
+ * escape a SINGLE writeSync: one small write to a pty is atomic, whereas
+ * splitting it could interleave with tmux's own rendering and corrupt both.
+ *
+ * Scoped by session id rather than `display -p -t <pane> '#{client_tty}'`:
+ * that form falls back to some OTHER session's client when this pane's session
+ * is detached, which would deliver the notification — project name and message
+ * summary — to an unrelated terminal. It also names just one client when
+ * several are attached. `list-clients -t <session>` has neither flaw and is
+ * empty exactly when the session is truly detached.
+ *
+ * Twin of tmux_client_ttys() in ghostty-tab-title.sh: same algorithm, same
+ * load-bearing guard, both on the Stop path. Change one, change the other.
+ */
+function tmuxClientTTYs() {
+  const pane = process.env.TMUX_PANE;
+  if (!pane) return [];
+  const tmuxOut = args => (spawnSync('tmux', args, { encoding: 'utf8', timeout: 2000 }).stdout || '');
+
+  // Load-bearing, despite looking like a routine null check: `list-clients -t ''`
+  // neither fails nor returns empty — it resolves to tmux's *current* session and
+  // happily lists a different session's clients. Letting an empty id through
+  // silently reinstates the cross-session leak this function exists to prevent.
+  const session = tmuxOut(['display', '-p', '-t', pane, '#{session_id}']).trim();
+  if (!session) return [];
+
+  return tmuxOut(['list-clients', '-t', session, '-F', '#{client_tty}'])
+    .split('\n')
+    .map(line => line.trim())
+    .filter(tty => tty && isCharDevice(tty));
+}
+
+/**
+ * Pick where to write, and whether those targets need the DCS wrapper.
+ *
+ * SSH_TTY is only trustworthy outside tmux: inside a long-lived pane it names
+ * whichever ssh session happened to create the pane, which may be attached to
+ * a different session entirely (observed: SSH_TTY=/dev/pts/3 while this pane's
+ * live client was /dev/pts/1).
+ *
+ * The pane-tty + passthrough branch is a fallback for tmuxClientTTYs() coming
+ * up empty for a *mechanical* reason — tmux not on PATH, TMUX_PANE unset, the
+ * query timing out. It cannot rescue a genuinely detached session: with no
+ * client attached there is no terminal to render to, on any tmux version.
+ */
+function pickTargets() {
+  if (isTmux()) {
+    const clients = tmuxClientTTYs();
+    if (clients.length) return { ttys: clients, viaPassthrough: false };
+    const pane = findTTY();
+    return pane ? { ttys: [pane], viaPassthrough: true } : null;
+  }
+  const ssh = process.env.SSH_TTY;
+  const tty = ssh && isCharDevice(ssh) ? ssh : findTTY();
+  return tty ? { ttys: [tty], viaPassthrough: false } : null;
 }
 
 /**
  * Ghostty-native notification via OSC 9. Clicking it focuses the originating
  * surface. Returns true on success so the caller can fall back on failure.
  */
-function notifyGhostty(tty, body) {
+function notifyGhostty(tty, body, viaPassthrough = false) {
   try {
-    const fd = fs.openSync(tty, 'w');
-    fs.writeSync(fd, osc9(body));
+    const fd = fs.openSync(tty, DEVICE_FLAGS);
+    fs.writeSync(fd, osc9(body, viaPassthrough));
     fs.closeSync(fd);
     return true;
   } catch (err) {
@@ -164,6 +250,31 @@ function notifyTerminalNotifier(project, body) {
 
   if (result.error || result.status !== 0) {
     log(`[DesktopNotify] terminal-notifier failed: ${result.error ? result.error.message : `exit ${result.status}`}`);
+  }
+}
+
+/**
+ * Mosh is not a byte-transparent transport and drops OSC 9. Hand the original
+ * Stop payload to the agent-desktop-notify relay (installed by this repo's
+ * agent-desktop-notify/; the SSH trust fabric stays in system-config), which
+ * independently proves that the active tmux client descends from mosh-server
+ * before contacting the MacBook.
+ */
+function notifyMoshRelay(raw) {
+  const executable = path.join(process.env.HOME || '', '.local', 'bin', 'agent-desktop-notify');
+  try {
+    fs.accessSync(executable, fs.constants.X_OK);
+  } catch {
+    return;
+  }
+  const result = spawnSync(executable, ['--claude'], {
+    input: raw,
+    encoding: 'utf8',
+    stdio: ['pipe', 'ignore', 'pipe'],
+    timeout: 8000,
+  });
+  if (result.error || result.status !== 0) {
+    log(`[DesktopNotify] Mosh relay failed: ${result.error ? result.error.message : `exit ${result.status}`}`);
   }
 }
 
@@ -220,18 +331,20 @@ function run(raw) {
     if (body == null) return isStop ? raw : '';
 
     // OSC 9 is the only backend that reaches the user's *local* terminal when
-    // the session isn't purely local: over SSH (terminal-notifier would fire on
-    // the remote host) or inside tmux (notifyGhostty wraps the escape for
-    // passthrough). In tmux, write to the pane tty so the server can unwrap and
-    // forward — SSH_TTY is stale inside long-lived panes. Plain SSH: SSH_TTY.
-    // No terminal-notifier fallback here; on the remote it's worse than nothing.
+    // the session isn't purely local: over SSH terminal-notifier would fire on
+    // the remote host, invisible to whoever is sitting at the terminal. So no
+    // terminal-notifier fallback here — on the remote it's worse than nothing.
+    // pickTargets() decides which ttys carry the escape home.
     if (isSSH() || isTmux()) {
-      const tty = isTmux() ? findTTY() : (process.env.SSH_TTY || findTTY());
-      if (tty) notifyGhostty(tty, body);
+      const target = pickTargets();
+      if (target) {
+        for (const tty of target.ttys) notifyGhostty(tty, body, target.viaPassthrough);
+      }
     } else {
       const tty = isGhostty() ? findTTY() : null;
       if (!tty || !notifyGhostty(tty, body)) notifyTerminalNotifier(project, body);
     }
+    if (isStop && (isSSH() || isTmux())) notifyMoshRelay(raw);
   } catch (err) {
     log(`[DesktopNotify] Error: ${err.message}`);
   }

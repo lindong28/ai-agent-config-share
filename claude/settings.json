@@ -18,7 +18,9 @@
     "ECC_DISABLED_HOOKS": "stop:desktop-notify",
     "ECC_HOOK_PROFILE": "standard",
     "COGFS_SELF": "agent_lindong",
-    "COGFS_NAMESPACE": "default"
+    "COGFS_NAMESPACE": "default",
+    "CODEAGENT_LITE_MODE": "true",
+    "CODEAGENT_OPEN_BROWSER": "true"
   },
   "permissions": {
     "allow": [
@@ -41,13 +43,11 @@
       "mcp__zai-mcp-server__*",
       "mcp__zread__*",
       "mcp__feishu-mcp__*",
-      "mcp__github__*",
       "mcp__sequential-thinking__*",
       "mcp__context7__*",
       "mcp__devfleet__*",
       "mcp__playwright__*",
       "mcp__chrome-devtools__*",
-      "mcp__memory__*",
       "mcp__prompts.chat__*",
       "mcp__plugin_claude-mem_mcp-search__*",
       "mcp__plugin_prompts_chat_prompts_chat__*",
@@ -75,6 +75,18 @@
         ],
         "description": "Gate AskUserQuestion: block (exit 2) when options lack a clearly-marked recommendation + reason; agent must re-issue with both. Tiered LLM judge (GLM → Anthropic API → claude -p subscription; see hooks/lib/llm-judge.js) reads tool_input.questions directly; fail-open on no-backend/error/timeout. Enforces CLAUDE.md 'Surface Choices (Real Ones), Recommend One'.",
         "id": "pre:ask-user-question:recommend-gate"
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$HOME/.claude/hooks/codeagent-stdin-guard.js\"",
+            "timeout": 5
+          }
+        ],
+        "description": "Block (exit 2) a codeagent-wrapper dispatch with no stdin source: the wrapper reads its own stdin before launching the backend, so with no EOF it hangs silently for ~20 minutes with zero output and no completion callback. Fix is `</dev/null` (prompt is an argument) or a heredoc / pipe / `-` form. Allow-biased: any `<` anywhere, any help/version flag, and every ambiguous shell form fail open. Set CODEAGENT_STDIN_GUARD=0 to disable. Enforces references/background-agent-monitoring.md '派发前自限'.",
+        "id": "pre:bash:codeagent-stdin-guard"
       }
     ],
     "Stop": [

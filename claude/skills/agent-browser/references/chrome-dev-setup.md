@@ -1,20 +1,24 @@
 # Chrome Dev Setup
 
-A dedicated Chrome instance with remote debugging always enabled — the prerequisite for reliable browser automation on macOS.
+An optional dedicated Chrome instance for persistent authenticated browsing
+over CDP on macOS. Normal browser automation remains headless by default; see
+[Browser Mode Selection](../SKILL.md#browser-mode-selection).
 
-**Related**: [SKILL.md](../SKILL.md) for the quick connect guide, [authentication.md](authentication.md) for login state handling.
+**Related**: [Control an Existing CDP Browser](../SKILL.md#control-an-existing-cdp-browser), [authentication.md](authentication.md) for login state handling.
+
+Commands below control Chrome Dev over CDP — hold its identity per [Browser Identity Continuity](../SKILL.md#browser-identity-continuity).
 
 ## Contents
 
-- [Why Chrome Dev Is Needed](#why-chrome-dev-is-needed)
+- [When Chrome Dev Is Useful](#when-chrome-dev-is-useful)
 - [How to Create Chrome Dev](#how-to-create-chrome-dev)
 - [How It Works](#how-it-works)
-- [Verification](#verification)
+- [Verification](#step-5-verify)
 - [Maintenance](#maintenance)
 
 ---
 
-## Why Chrome Dev Is Needed
+## When Chrome Dev Is Useful
 
 ### The Problem: Chrome 147+ Blocks Remote Debugging on the Default Profile
 
@@ -31,15 +35,18 @@ Chrome silently refuses to open the debugging port when `--user-data-dir` points
 
 ### Why Not Just Pass a Different --user-data-dir?
 
-Specifying a fresh temp directory works for the port restriction, but loses all login sessions — the user is signed out of every site. Browser automation tasks almost always require the user's existing sessions (LinkedIn, GitHub, YouTube, etc.), so a blank profile is useless.
+Specifying a fresh temp directory works for the port restriction, but it starts
+without the user's existing login sessions. That is valid for generic GUI/CDP
+automation, but it does not satisfy tasks that specifically require persistent
+authenticated state from the user's browser.
 
-### Why Not --auto-connect or --cdp Against Regular Chrome?
+### Why Not Attach to the Default Chrome Profile?
 
-`--auto-connect` and `--cdp <port>` both rely on Chrome's HTTP discovery endpoint (`/json/version`). This endpoint was removed in Chrome 144. On Chrome 147+:
-
-- `--auto-connect` → times out
-- `--cdp 9222` → 404 / connection refused (port never opened)
-- `--remote-allow-origins` not set → 403 Forbidden on WebSocket handshake
+Controlling an existing browser through agent-browser requires that browser to
+already expose a CDP endpoint. Chrome 147+ refuses to enable remote debugging
+on its default user-data directory, and omitting `--remote-allow-origins=*` can
+reject the WebSocket handshake. Use a separate profile or the dedicated Chrome
+Dev setup below rather than retrying an unconfigured main Chrome profile.
 
 ### The Solution: A Dedicated "Chrome Dev" App
 
@@ -72,7 +79,9 @@ profile files always migrate forward (stable → dev), which Chrome supports nat
 
 ## How to Create Chrome Dev
 
-Run the following steps in order. The agent can execute all of these automatically.
+Run these steps only after Browser Mode Selection chooses this optional setup
+and the user authorizes its persistent machine changes. Explain first that the
+flow installs an app, creates a visible browser launcher, and changes the Dock.
 
 ### Step 0: Install the Dev Channel App
 
@@ -221,6 +230,9 @@ echo "✅ Dock updated"
 
 ### Step 5: Verify
 
+This launches and may focus a visible Chrome Dev window. Explain that desktop
+impact before running it.
+
 ```bash
 # Launch Chrome Dev
 open "/Applications/Chrome Dev.app"
@@ -230,8 +242,8 @@ sleep 6
 curl -s http://localhost:9222/json/version \
   | python3 -c "import sys,json; d=json.load(sys.stdin); print('✅ Connected:', d['Browser'])"
 
-# Confirm agent-browser can connect
-/opt/homebrew/bin/agent-browser --cdp 9222 get url
+# Confirm agent-browser can control this endpoint without using the default daemon
+/opt/homebrew/bin/agent-browser --session chrome-dev-verify --cdp 9222 get url
 ```
 
 Expected output:
@@ -267,7 +279,7 @@ Launches Google Chrome Dev (official Dev channel — own Cmd+Tab icon/name) with
   --remote-allow-origins = *                                         ← WebSocket allowed
         │
         ▼
-Agent connects via:  agent-browser --cdp 9222 <command>
+Agent controls via:  agent-browser --session <task-id> --cdp 9222 <command>
 ```
 
 ### Why Cookie Sync Instead of Full Profile Sharing?
@@ -280,7 +292,9 @@ Chrome locks its SQLite databases (Cookies, Login Data) while running. The real 
 
 ### Updating Login State
 
-If Chrome Dev shows logged-out sites (e.g. after a long gap since last use):
+If Chrome Dev shows logged-out sites (e.g. after a long gap since last use),
+explain that this relaunch can open or focus its visible desktop window before
+running:
 
 ```bash
 # Close Chrome Dev (only the automation instance — leaves regular Chrome alone),
@@ -317,7 +331,9 @@ du -sh "$HOME/Library/Application Support/Chrome-Dev"
 
 ### If Chrome Dev Stops Working After a Chrome Update
 
-Chrome updates can change the profile format. If Chrome Dev fails to launch or the debug port doesn't open after an update:
+Chrome updates can change the profile format. If Chrome Dev fails to launch or
+the debug port doesn't open after an update, explain that the final relaunch can
+open or focus its visible desktop window before running:
 
 ```bash
 # Re-sync the full profile

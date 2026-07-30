@@ -42,6 +42,8 @@ origin: 2026-05-19
 
 此外，plan「UX 契约影响」段非 skip 时，`docs/contracts/ux-contract.md`（来自 create-ux-contract、非上游 create-plan 的产物）是 §4a 读写的条件依赖——见 §4a。
 
+**工作单元一致性 gate（baseline / spawn 前）**：把 plan 的 phase / verify 结构及其显式写出的 review / commit 时序，同本命令「工作单元边界」及 §3.5 对照。plan 若把多个可独立验收的 phase 延后到一次最终 review / commit，或以其他方式与本命令的单元收口契约冲突，不得静默选择其一：先按 user-scope `Surface Choices (Real Ones), Recommend One` policy 让用户决定采用本命令的逐单元边界、保留 plan 的聚合边界，或先回修 plan；说明聚合会扩大 diff、review 与返工失效域。强耦合 phase 已由 plan 明确作为一个工作单元时不构成冲突。把决定作为后续单元划分的权威输入。
+
 首次 spawn 前记录 working-tree baseline：把 `git status --porcelain` 脏文件清单与 `git diff HEAD`（含 staged + unstaged）内容快照写入 plan 同目录 `baseline.patch`。它是 audit trail，不进入单元 review / commit；后续撞车处置见 §3.5。
 
 **并发隔离（开工前）**：其它 agent session 可能并发在同一 repo 执行 plan。开工前按 `~/.claude/references/concurrent-plan-isolation.md` 检测并发、按三层结构隔离在独立 worktree 落地；plan 显式声明"单 session 独占"时可免。
@@ -148,6 +150,8 @@ supervisor 在 `plan-execution-principles.md`「Trajectory Gate」规定的触�
 | Codex 停止但 Stop Gate 任一项不满足 | 先过「Trajectory Gate」；当前执行方案仍成立才续用原 handle，指出哪几项 Stop Gate fail + 各自的 supervisor 证据并回到 §2。执行方案已被否定则按 Trajectory Gate 裁决分流，不以 Stop Gate 为由强迫同方案 resume |
 | Codex implementer 异常 / handle 丢失 / 输出截断 | 按当前 transport / 适配层问题处理（不转嫁外部失败）：检查 agent 状态或 stderr / 退出码，看 `git status` 判断是否已部分完成，再决定续用 / 重启路径 |
 
+**真实数据接地（verify 证据的地基）**：plan verify 针对的行为若依赖真实生产输入 / 数据流（监控能否上膛、部署里前提基线是否真产出、用户实际能看到多少），且**该真实输入可取得**——则合成 / 历史回放 / 臆想输入的 PASS **不算通过**：MUST 用真实数据验证（非 advisory），合成只作 smoke。这是静默失效的收口——对合成输入验通过、生产真实数据流从没接地，坑直达用户。真实输入**确实不可取得**时（如需部署后才有）**DEFER 不 CLOSE**：记为部署后强制 live 补验义务，未过前该能力不算激活、plan 不算最终交付；live 补验失败按不 ship / 升级用户裁决，不静默当已交付。
+
 Claude Code resume 调用形如（spawn 同一套 flag 组 + 后台 + timeout，仅 path prefix 改为 `resume <SESSION_ID>`）：
 
 ```
@@ -169,7 +173,7 @@ Codex harness 对原 collaboration agent 发 follow-up task，语义与上面 re
   2. 先保留 plan 与后续用户决定要求的 reviewer multiplicity。
   3. 每个 retained charter 启动前都冻结 closure contract。尚未启动的 charters 只有在 reviewer mechanism / expertise、独立性拓扑、scope、evidence、return schema 与 closure 全部兼容时才合并，并分别返回 verdict；任一不兼容则保持独立。已完成 review 只覆盖其原 prompt 与证据实际满足的 contract，不事后扩张。原 handle 不可续用时按该 contract 的 replacement semantics；只有 contract 允许定向 closure 时，才按原 transport 新起 reviewer，传原 charter / finding、修复 diff 与原返回契约，只做 closure。
   4. 产品语义 judge、LLM report gate、UX 测试与代码 gate 验证不同风险，不互相替代。实施前参与设计或修法的 reviewer 不算生成后独立 gate。
-- 指令 artifact 单元走专项路由：单元 diff 为指令 artifact（skill / command / reference / principles / CLAUDE.md·AGENTS.md——类型集以 review-gate「专项路由」定义为准）时按 review-gate 专项路由接管（走其映射的对应专项 command，无 backend 选择）；findings 修复随该专项 command 自身的主-session 交互修复闭环施加，不经下面「修复路由」、不 resume implementer——专项 command（review-skill / review-claude-md / review-principles）是主-session 交互工作流、无法在 Codex resume 里跑，构成对「不接管」不变量的显式例外（见关键不变量）。下面「修复路由」只适用其余代码单元。
+- 指令 artifact 单元走专项路由：单元 diff 为指令 artifact（skill / command / reference / principles / CLAUDE.md·AGENTS.md——类型集以 review-gate「专项路由」定义为准）时按 review-gate 专项路由接管（走其映射的对应专项 command，无 backend 选择）；findings 修复随该专项 command 自身的主-session 交互修复闭环施加，不经下面「修复路由」、不 resume implementer——专项 command（review-skill / review-claude-md）是主-session 交互工作流、无法在 Codex resume 里跑，构成对「不接管」不变量的显式例外（见关键不变量）。下面「修复路由」只适用其余代码单元。
 - review 对象：working tree 中本单元改动（含 untracked；剔除输入 gate 后冻结的 `baseline.patch`、plan.md 同目录的规划 audit trail，以及 §4b/4c 测试证据文件；staging 判据同 §5 Scope）。implementer 不自行 commit（§1）+ 上一单元已 commit ⇒ 未提交部分即本单元。implementer 改动与 baseline 撞同一文件时立即 `AskUserQuestion`：有可用 pre-image diff 则拆出 baseline hunk 后 commit / stash，或授权整文件并入本单元一起 review + commit；无可用 pre-image 的 untracked / binary 文件只能整文件并入或整文件留给用户。用户保留的文件不作为已 review 内容，§6 注明。
 - 修复路由：CRITICAL/HIGH findings 视同单元验收 fail。进入新的 closure 修复轮前先过「Trajectory Gate」：review 证明的是 artifact 当前有缺陷，不证明保存它仍是最小充分方案；简化、替换或删除 artifact 也可以是正确修复。当前执行方案仍成立时再路由回该切片的作者：implementer 切片续用该单元 handle；supervisor 切片（§4.5 品味工件等）supervisor 自修。修复后先按证据失效范围恢复 plan verify，再让每个被失效的 retained charter 沿自身 continuation handle / closure contract 复核；单元 gate 沿 review-gate closure，合并调用中的各 verdict 也分别闭合。closure 修复若再改 artifact，则重新做失效分析与 verify。任一适用 gate 未过不 commit、不进下一单元。
 - 定档照常生效：trivial 单元显式免审声明后直接 commit——不为低风险单元付固定 review 成本。
@@ -306,4 +310,4 @@ execute-plan 专属 delta：
 - 生成后 review 只有一个 inventory owner（§3.5）：supervisor 统一识别风险类别、合并兼容 charter、续用原 reviewer 做 closure；implementer 不另起重叠 generic/final review。去重不跨风险 contract——产品语义、UX、代码正确性仍分别有证据。
 - 验证按依赖失效，不按修改次数清零：最终 gate 的有效证据必须覆盖最终状态；无相关变化的本次执行证据继续有效，相关变化后只重跑被失效的最小验证与必要的最终 gate。
 - Long-task 模式下 state.md / journal.md 是交付证据：Codex 声称完成但两份文件没更新 → 视同 verify 缺项，续用原 handle 让 Codex 补。
-- 不接管 plan 范围内的代码改动：supervisor 修 transport / 适配层允许；替 Codex 写 plan 范围内的代码不允许——绕过 supervisor 定位。限定：prompt / rubric / 评分协议等品味工件不算"代码"，§4.5 触发时其设计权本就归 supervisor。另一例外：指令 artifact 单元走专项路由时（§3.5），findings 修复随专项 command 的主-session 交互闭环施加、不续用 implementer——非绕过 supervisor 定位，而是 review-skill / review-claude-md / review-principles 只能主-session 跑。
+- 不接管 plan 范围内的代码改动：supervisor 修 transport / 适配层允许；替 Codex 写 plan 范围内的代码不允许——绕过 supervisor 定位。限定：prompt / rubric / 评分协议等品味工件不算"代码"，§4.5 触发时其设计权本就归 supervisor。另一例外：指令 artifact 单元走专项路由时（§3.5），findings 修复随专项 command 的主-session 交互闭环施加、不续用 implementer——非绕过 supervisor 定位，而是 review-skill / review-claude-md 只能主-session 跑。

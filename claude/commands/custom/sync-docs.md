@@ -83,6 +83,8 @@ Caller 可以为自己已拥有的领域声明 delta，但不得削弱完整 rec
 - supporting artifact 可作为联动修复候选；
 - 会改变产品行为或公共接口的改动不由本命令实施——留 issue / handoff，交给正常实现流程。
 
+上面的分类判据落在每个候选修复上、不落在 finding 上——同一条 finding 常有多支候选修复触及不同东西，如「文档说 X、实现没做 X」既可改实现让文档成真，也可判定文档写错了改文档。逐支分类；某支无法确定时，同 §0.1 上交 §2.2 决策而不自行归类。
+
 任何已授权的 supporting artifact 改动都不由 §2 的文档审查代替专项审查；交付前按 §3.1 路由。
 
 ---
@@ -168,6 +170,7 @@ finding 裁决必须等 coverage complete；此前只处理让 coverage 能继�
 | 稳定缺口 | 请求解决 authority / scope；本轮不能解决则标记 coverage blocked | 已解决 → 恢复对应单元；未解 → §3.1 后 §4 blocked 返回 |
 | coverage complete + 机械 findings | 核实后直接落地 | §2.3 |
 | coverage complete + 真取舍 / ask-gate | 汇总为 `AskUserQuestion` | 用户决策后 §2.3 |
+| coverage complete + 一条 finding 有多支候选修复、各支处置不同 | 逐支定处置，把「选哪一支」当作一项真取舍汇总为 `AskUserQuestion`；不得拿留在审查范围内那一支的处置替整条 finding 收口 | 用户决策后 §2.3 |
 | coverage complete + 原则缺口 | 记录，不在本节重复询问 | 文档收敛后 §3.2 |
 | coverage complete + clean report | 不制造用户选择 | 文档收敛 |
 
@@ -218,7 +221,7 @@ gate 产生修复后按 changed files + semantic effect 重新判断：正常路
 
 1. 审查暴露 `docs-review-principles.md` 或 `readme-review-principles.md` 未覆盖的问题时，先定位原则文件及其 owning repo，并记录该 repo 的 dirty baseline。
 2. 用 `AskUserQuestion` 询问是否改进原则，并说明将编辑、专项审查、独立提交的具体动作，以及当前脏状态与同文件撞车。有撞车时一并裁定：拆分支路 diff（推荐）、明确授权整文件纳入（披露扩大后的 commit scope），或延期。
-3. 用户拒绝或延期 → 不编辑原则，记录 rejected / deferred 后进入 §4。获准 → 编辑原则，执行 `/custom:review-principles <原则文件>` 直到收敛，再按 `~/.claude/skills/create-commit/SKILL.md` 在 owning repo 独立提交。默认 staging scope 只包含本支路产生的 diff、不带入 dirty baseline；只有用户明确授权「整文件纳入」时例外，并在 commit 及输出 scope 中披露。
+3. 用户拒绝或延期 → 不编辑原则，记录 rejected / deferred 后进入 §4。获准 → 编辑原则，执行 `/custom:review-skill <原则文件>` 直到收敛，再按 `~/.claude/skills/create-commit/SKILL.md` 在 owning repo 独立提交。默认 staging scope 只包含本支路产生的 diff、不带入 dirty baseline；只有用户明确授权「整文件纳入」时例外，并在 commit 及输出 scope 中披露。
 4. 原则独立 commit 完成后，恢复并核验 CWD = `target_repo`，按新原则进入失效分析与受影响审查单元重跑；重新收敛后再评估 §3。
 
 ---

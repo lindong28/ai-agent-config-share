@@ -47,7 +47,7 @@ description: 审查并修复单个项目级或 user-level CLAUDE.md / AGENTS.md 
 
 按第 2 阶段的分流结果落地：执行机械修复队列，真取舍按用户选择 Edit。
 
-若审查发现现有原则未覆盖某类问题，用 AskUserQuestion 把「是否改进 `~/.claude/references/claude-md-review-principles.md`」作为一项决策交用户拍板——principles 缺口是高杠杆发现，只在 prose 里附带提及会被略过、用户遗忘后同类坑复发。获批并改完后执行 `/custom:review-principles claude-md-review-principles.md` 循环审查改动。
+若审查发现现有原则未覆盖某类问题，用 AskUserQuestion 把「是否改进 `~/.claude/references/claude-md-review-principles.md`」作为一项决策交用户拍板——principles 缺口是高杠杆发现，只在 prose 里附带提及会被略过、用户遗忘后同类坑复发。获批并改完后执行 `/custom:review-skill claude-md-review-principles.md` 循环审查改动。
 
 普通修复与 principles-gap 分支都处理完后统一判断：均无 edit 则循环终止。有 edit 则复审，收敛判据不变——直到一轮复审无需修。复审分两种：
 

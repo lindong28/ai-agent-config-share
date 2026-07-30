@@ -36,6 +36,7 @@ skill_approval = false
 multi_agent = true
 shell_tool = true
 goals = true
+respect_system_proxy = true
 
 # ── Agent orchestration ──
 

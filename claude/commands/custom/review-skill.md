@@ -1,6 +1,6 @@
 ---
 argument-hint: <skill-or-command-or-non-principles-reference-path> [optimize] [principle-prune-mode=disable/moderate/aggressive] [max-principle-per-subagent=3]
-description: 用于用户明确要求审查并按需修复单个 SKILL.md、command 或非原则类 reference 时；也覆盖这类 artifact 自身封装外部 program 的职责边界。原则文件改用 /custom:review-principles。
+description: 用于用户明确要求审查并按需修复单个 SKILL.md、command 或 reference（含 principles 文件）时；也覆盖这类 artifact 自身封装外部 program 的职责边界。
 ---
 
 # review-skill
@@ -29,7 +29,7 @@ description: 用于用户明确要求审查并按需修复单个 SKILL.md、comm
 
 | 参数 | 必需 | 类型 | 默认 | 说明 |
 |---|---|---|---|---|
-| artifact-path | ✓ | 字符串 | — | 待审 SKILL.md、command 或非原则类 reference 路径；原则文件转交 `/custom:review-principles` |
+| artifact-path | ✓ | 字符串 | — | 待审 SKILL.md、command 或 reference 路径。principles 文件（`*-principles.md`）也走这里——见下方类型 gate 的能力说明 |
 | optimize | ✗ | boolean | false | 显式强制叠加 optimize 审查（默认判定见「模式」） |
 | principle-prune-mode | ✗ | 字符串 | moderate | 原则裁剪强度：`disable / moderate / aggressive`；判据见「裁剪原则集」 |
 | max-principle-per-subagent | ✗ | 正整数（≥1） | 3 | 常规原则组的分组上限；行为保持型压缩原则组为保持联合判断固定覆盖 3 条原则 |
@@ -50,7 +50,7 @@ root 直接拥有调度、核实和决策，不引入 coordinator；out-of-scope
 | 节点 | 前进条件 | 阻断 / 回边 |
 |---|---|---|
 | 最小冻结 | 用户输入与目标的 `snapshot packet` 可读 | digest 不匹配则重建 |
-| 类型 gate | 目标是 SKILL.md、command 或非原则类 reference | 原则文件转交 `/custom:review-principles` 并停止本流程 |
+| 类型 gate | 目标是 SKILL.md、command 或 reference | principles 文件按 reference 审查；**但本仓未收录专审 meta-原则的 `/custom:review-principles`**，所以「这套原则本身是否立得住」这一维度不被覆盖——在报告中明确声明该维度未审，不要当作已审过 |
 | 模式判定 | 确定 review-only 或 review + optimize | 需要用户权衡时先 AskUserQuestion |
 | 扩展冻结与裁剪 | 其余 required 输入已冻结，原则集已定 | `aggressive` 裁剪先经用户确认 |
 | 契约预检 | 契约结果允许继续 | `blocked` 停止；来源漂移则重开 |
@@ -130,4 +130,4 @@ root 以当前 `snapshot packet` 的完整 finding set 为单位核实、去重�
 
 按上述分流一次性落地本轮 fix set。若有改动，待整批落地完成后才以新 `snapshot packet` 重审：范围至少包含本轮已修 finding 的 originating `review_dimensions`（原则或已触发追加 lens），再用完整原则索引与已触发 lens 清单对 fix diff 做一次 fresh impact scan，补入其语义可能受影响的 dimensions，并完整运行该 lens。description、控制骨架或外部接口改动是高风险提示；只有改变控制拓扑 / 接口契约、语义影响无法可靠界定或 impact scan 拿不准时才升级全量。不得因全文具有某种结构就自动重审未受影响的全部原则。无待处理 finding 则终止，并列出用户明确保留或延期的 finding。
 
-若审查发现现有原则未覆盖某类问题，用 AskUserQuestion 把「是否改进对应原则文件」作为一项决策交用户拍板。改完后执行 `/custom:review-principles <principles-file>`；原则文件本身也要过 meta-原则。
+若审查发现现有原则未覆盖某类问题，用 AskUserQuestion 把「是否改进对应原则文件」作为一项决策交用户拍板。改完后对该 principles 文件再跑一次本 command（按上方类型 gate 的能力说明，meta-原则维度不覆盖）。

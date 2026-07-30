@@ -94,7 +94,7 @@ description: 审查一份实现 plan.md，逐条对照 plan-review principle 修
 - 触及上述任一项、跨多个 root cluster，或做过 abstraction reset → 直接进入 final full review。
 - 无论中间如何路由，宣告 clean 前必须通过 final full review；通过后才进入完整目标反证。
 
-若成立的发现无法映射现有 principle（即 principle coverage gap），用 AskUserQuestion 把「是否改进 `~/.claude/references/plan-review-principles.md`」作为一项决策交用户拍板——principle coverage gap 是高杠杆发现，只在 prose 里附带提及会被略过、用户遗忘后同类坑复发。改完后执行 `/custom:review-principles plan-review-principles.md` 循环审查改动——principles 文件本身也要过 meta-principle。
+若成立的发现无法映射现有 principle（即 principle coverage gap），用 AskUserQuestion 把「是否改进 `~/.claude/references/plan-review-principles.md`」作为一项决策交用户拍板——principle coverage gap 是高杠杆发现，只在 prose 里附带提及会被略过、用户遗忘后同类坑复发。改完后对该 principles 文件跑一次 `/custom:review-skill` 循环审查改动。注意本仓未收录专审 meta-原则的 `/custom:review-principles`，所以「这套原则本身立不立得住」这一维度**不被覆盖**——按 review-skill 类型 gate 的要求在报告中声明该维度未审，别当作已过 meta-原则。
 
 ### 目标反证
 

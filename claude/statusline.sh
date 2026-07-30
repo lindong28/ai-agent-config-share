@@ -9,55 +9,35 @@
 
 input=$(cat)
 
-# ── Persist to tt-status.json (atomic write, add _received_at) ──
+# ── Parse everything in one pass ──
+# statusline-fields.py owns all JSON handling: this repo does not require jq, and
+# on a host without it the old one-jq-per-field approach silently emptied every
+# field. It also persists tt-status.json and refreshes the speed cache, since the
+# same parse already has that data. The defaults below stand if it fails, so a
+# parse error degrades the statusline rather than breaking the session.
+CLAUDE_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 STATUS_FILE="$HOME/.claude/tt-status.json"
-if [ -n "$input" ]; then
-  tmp=$(mktemp "${STATUS_FILE}.XXXXXX" 2>/dev/null)
-  if [ -n "$tmp" ]; then
-    previous_rate_limits="null"
-    if [ -f "$STATUS_FILE" ]; then
-      previous_rate_limits=$(jq -c 'if (.rate_limits | type) == "object" then .rate_limits else null end' "$STATUS_FILE" 2>/dev/null || printf 'null')
-    fi
-    echo "$input" | jq --arg ts "$(date -u +%Y-%m-%dT%H:%M:%S+00:00)" \
-      --argjson previous_rate_limits "$previous_rate_limits" \
-      'if ((.rate_limits // null) == null) and (($previous_rate_limits | type) == "object")
-       then . + {rate_limits: $previous_rate_limits}
-       else .
-       end
-       | . + {_received_at: $ts}' > "$tmp" 2>/dev/null && mv "$tmp" "$STATUS_FILE" 2>/dev/null
-  fi
-fi
+SPEED_CACHE="$HOME/.claude/statusline-cache/.speed.json"
+# The helper ships beside this script, so resolve it from here rather than from
+# $HOME/.claude — that path only happens to work because of the install symlink,
+# and it makes the script unusable when run straight from a checkout.
+SELF_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# ── Parse core fields ──
-PROJECT_DIR=$(echo "$input" | jq -r '.workspace.project_dir // .workspace.current_dir // .cwd // ""')
+PROJECT_DIR=""; MODEL="?"; EFFORT=""; COST=0; DURATION_MS=0; TRANSCRIPT=""
+CTX_PCT=0; CTX_SIZE=0; TOTAL_IN=0; TOTAL_OUT=0
+CUR_IN=0; CUR_OUT_FIELD=0; CACHE_READ=0; CACHE_CREATE=0
+USAGE_5H=""; RESET_5H=""; USAGE_7D=""; RESET_7D=""
+SPEED=""; HAS_TDATA=0
+ST_IN=0; ST_OUT=0; ST_CACHE=0; ST_TOTAL=0; SST=""
+TOOLS_RUNNING_LINES=""; TOOLS_DONE_LINES=""; AGENT_LINES=""; SKILL_LINES=""
+TODO_CONTENT=""; TODO_COMPLETED=""; TODO_TOTAL=""
+MCP_COUNT=0; HOOKS_COUNT=0
+
+eval "$(printf '%s' "$input" \
+  | STATUS_FILE="$STATUS_FILE" SPEED_CACHE="$SPEED_CACHE" CLAUDE_DIR="$CLAUDE_DIR" \
+    python3 "$SELF_DIR/statusline-fields.py" 2>/dev/null)"
+
 PROJECT_NAME=$(basename "$PROJECT_DIR" 2>/dev/null)
-MODEL=$(echo "$input" | jq -r '.model.display_name // "?"')
-EFFORT=$(echo "$input" | jq -r '.effort.level // empty')
-COST=$(echo "$input" | jq -r '.cost.total_cost_usd // 0')
-
-# Context window
-CTX_PCT=$(echo "$input" | jq -r '.context_window.used_percentage // 0' | cut -d. -f1)
-CTX_SIZE=$(echo "$input" | jq -r '.context_window.context_window_size // 0')
-
-# Rate limits
-USAGE_5H=$(echo "$input" | jq -r '.rate_limits.five_hour.used_percentage // empty')
-RESET_5H=$(echo "$input" | jq -r '.rate_limits.five_hour.resets_at // empty')
-USAGE_7D=$(echo "$input" | jq -r '.rate_limits.seven_day.used_percentage // empty')
-RESET_7D=$(echo "$input" | jq -r '.rate_limits.seven_day.resets_at // empty')
-
-# Tokens (cumulative session)
-TOTAL_IN=$(echo "$input" | jq -r '.context_window.total_input_tokens // 0')
-TOTAL_OUT=$(echo "$input" | jq -r '.context_window.total_output_tokens // 0')
-CACHE_READ=$(echo "$input" | jq -r '.context_window.current_usage.cache_read_input_tokens // 0')
-CACHE_CREATE=$(echo "$input" | jq -r '.context_window.current_usage.cache_creation_input_tokens // 0')
-
-# Tokens (current round)
-CUR_IN=$(echo "$input" | jq -r '.context_window.current_usage.input_tokens // 0')
-CUR_OUT_FIELD=$(echo "$input" | jq -r '.context_window.current_usage.output_tokens // 0')
-
-# Duration / transcript
-DURATION_MS=$(echo "$input" | jq -r '.cost.total_duration_ms // 0')
-TRANSCRIPT=$(echo "$input" | jq -r '.transcript_path // empty')
 
 # Git branch
 BRANCH=""
@@ -154,30 +134,8 @@ join_seg() {
   else echo "$2"; fi
 }
 
-# ── Transcript parse (shared by Line 3 duration + Line 5 observability) ──
-TDATA=""
-if [ -n "$TRANSCRIPT" ] && [ -f "$TRANSCRIPT" ]; then
-  TDATA=$(python3 "$HOME/.claude/statusline-transcript.py" "$TRANSCRIPT" 2>/dev/null)
-fi
-
-# ── Output speed tracking (tok/s) ──
-SPEED=""
-SPEED_CACHE="$HOME/.claude/statusline-cache/.speed.json"
+# Transcript observability and tok/s already came back from statusline-fields.py.
 CUR_OUT="$CUR_OUT_FIELD"
-NOW_MS=$(python3 -c 'import time; print(int(time.time()*1000))' 2>/dev/null || echo 0)
-if [ "$NOW_MS" -gt 0 ] && [ -f "$SPEED_CACHE" ]; then
-  PREV_OUT=$(jq -r '.out // 0' "$SPEED_CACHE" 2>/dev/null || echo 0)
-  PREV_MS=$(jq -r '.ts // 0' "$SPEED_CACHE" 2>/dev/null || echo 0)
-  DT=$((NOW_MS - PREV_MS))
-  DOT=$((CUR_OUT - PREV_OUT))
-  if [ "$DT" -gt 0 ] && [ "$DT" -le 2000 ] && [ "$DOT" -gt 0 ]; then
-    SPEED=$(awk -v dt="$DT" -v dtok="$DOT" 'BEGIN { printf "%.1f", dtok/(dt/1000) }')
-  fi
-fi
-if [ "$NOW_MS" -gt 0 ]; then
-  mkdir -p "$(dirname "$SPEED_CACHE")" 2>/dev/null
-  printf '{"out":%d,"ts":%d}\n' "$CUR_OUT" "$NOW_MS" > "$SPEED_CACHE" 2>/dev/null
-fi
 
 # ══════════════════════════════════════════════════════════════
 # LINE 1: project | 5h bar | 7d bar | context bar
@@ -241,16 +199,8 @@ if [ -n "$CTX_PCT" ] && [ "$CTX_PCT" != "0" ]; then
 fi
 
 session_seg=""
-if [ -n "$TDATA" ] && [ "$TDATA" != "{}" ]; then
-  STI=$(echo "$TDATA" | jq -r '.session_tokens.in // 0' 2>/dev/null)
-  STO=$(echo "$TDATA" | jq -r '.session_tokens.out // 0' 2>/dev/null)
-  STCC=$(echo "$TDATA" | jq -r '.session_tokens.cache_creation // 0' 2>/dev/null)
-  STCR=$(echo "$TDATA" | jq -r '.session_tokens.cache_read // 0' 2>/dev/null)
-  STCACHE=$((STCC + STCR))
-  STTOTAL=$((STI + STO + STCACHE))
-  if [ "$STTOTAL" -gt 0 ] 2>/dev/null; then
-    session_seg="${C_CYAN}Session: $(fmt_tok "$STTOTAL")${C_RESET} ${C_DIM}(in: $(fmt_tok "$STI"), out: $(fmt_tok "$STO"), cache: $(fmt_tok "$STCACHE"))${C_RESET}"
-  fi
+if [ "$ST_TOTAL" -gt 0 ] 2>/dev/null; then
+  session_seg="${C_CYAN}Session: $(fmt_tok "$ST_TOTAL")${C_RESET} ${C_DIM}(in: $(fmt_tok "$ST_IN"), out: $(fmt_tok "$ST_OUT"), cache: $(fmt_tok "$ST_CACHE"))${C_RESET}"
 fi
 
 ctx_session_line=""
@@ -264,7 +214,6 @@ ctx_session_line=""
 line3=""
 
 # Duration: prefer wall-clock from transcript
-SST=$(echo "$TDATA" | jq -r '.session_start_ts // empty' 2>/dev/null)
 if [ -n "$SST" ] && [ "$SST" != "null" ]; then
   NOW_SEC=$(date +%s)
   WC_TOTAL=$(awk -v a="$NOW_SEC" -v b="$SST" 'BEGIN { print int(a - b) }')
@@ -298,7 +247,6 @@ printf '%b\n' "$line3"
 # ══════════════════════════════════════════════════════════════
 # LINE 4: environment metadata
 # ══════════════════════════════════════════════════════════════
-CLAUDE_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 CWD="$PROJECT_DIR"
 env_parts=""
 
@@ -317,16 +265,8 @@ if [ -n "$CWD" ] && [ -d "$CWD/.claude/rules" ]; then
 fi
 [ "$RULES_COUNT" -gt 0 ] && env_parts="${env_parts:+${env_parts} ${C_DIM}|${C_RESET} }${RULES_COUNT} rules"
 
-MCP_COUNT=0
-[ -f "$CLAUDE_DIR/settings.json" ] && MCP_COUNT=$(jq '.mcpServers // {} | length' "$CLAUDE_DIR/settings.json" 2>/dev/null || echo 0)
-if [ -n "$CWD" ] && [ -f "$CWD/.mcp.json" ]; then
-  PROJECT_MCP=$(jq '.mcpServers // {} | length' "$CWD/.mcp.json" 2>/dev/null || echo 0)
-  MCP_COUNT=$((MCP_COUNT + PROJECT_MCP))
-fi
+# MCP_COUNT / HOOKS_COUNT were counted during the single parse pass above.
 [ "$MCP_COUNT" -gt 0 ] && env_parts="${env_parts:+${env_parts} ${C_DIM}|${C_RESET} }${MCP_COUNT} MCPs"
-
-HOOKS_COUNT=0
-[ -f "$CLAUDE_DIR/settings.json" ] && HOOKS_COUNT=$(jq '.hooks // {} | length' "$CLAUDE_DIR/settings.json" 2>/dev/null || echo 0)
 [ "$HOOKS_COUNT" -gt 0 ] && env_parts="${env_parts:+${env_parts} ${C_DIM}|${C_RESET} }${HOOKS_COUNT} hooks"
 
 [ -n "$env_parts" ] && printf '%b\n' "${env_parts}"
@@ -334,17 +274,17 @@ HOOKS_COUNT=0
 # ══════════════════════════════════════════════════════════════
 # LINE 5+: transcript-based (tools / agents / skills / todos)
 # ══════════════════════════════════════════════════════════════
-if [ -n "$TDATA" ] && [ "$TDATA" != "{}" ]; then
+if [ "$HAS_TDATA" = "1" ]; then
   # Tools: running ◐ + completed ✓ (top-4)
   tool_parts=""
   while IFS= read -r t; do
     [ -z "$t" ] && continue
     tool_parts="${tool_parts:+${tool_parts} ${C_DIM}|${C_RESET} }${C_YELLOW}◐${C_RESET} ${C_CYAN}${t}${C_RESET}"
-  done < <(echo "$TDATA" | jq -r '.tools_running[]? | "\(.name)\(if .target then ": \(.target)" else "" end)"' 2>/dev/null)
+  done <<< "$TOOLS_RUNNING_LINES"
   while IFS= read -r t; do
     [ -z "$t" ] && continue
     tool_parts="${tool_parts:+${tool_parts} ${C_DIM}|${C_RESET} }${C_GREEN}✓${C_RESET} ${C_DIM}${t}${C_RESET}"
-  done < <(echo "$TDATA" | jq -r '.tools_completed | to_entries | sort_by(-.value)[:4][] | "\(.key) ×\(.value)"' 2>/dev/null)
+  done <<< "$TOOLS_DONE_LINES"
   [ -n "$tool_parts" ] && printf '%b\n' "$tool_parts"
 
   # Agents: ◐ running | ✓ done
@@ -353,15 +293,7 @@ if [ -n "$TDATA" ] && [ "$TDATA" != "{}" ]; then
     icon="${line:0:1}"; rest="${line:2}"
     if [ "$icon" = "R" ]; then IC="${C_YELLOW}◐${C_RESET}"; else IC="${C_GREEN}✓${C_RESET}"; fi
     printf '%b\n' "${IC} ${C_MAGENTA}${rest}${C_RESET}"
-  done < <(echo "$TDATA" | jq -r '
-    [(.agents[]? | select(.status == "running"))] + [(.agents[]? | select(.status != "running"))]
-    | .[-3:][]
-    | (if .status == "running" then "R" else "D" end) + " "
-      + .type
-      + (if .model then " [2m[\(.model)][0m" else "" end)
-      + (if .desc != "" then "[2m: \(.desc)[0m" else "" end)
-      + " [2m(" + (if .elapsed_s < 0 then "0s" elif .elapsed_s < 60 then "\(.elapsed_s)s" else "\(.elapsed_s / 60 | floor)m \(.elapsed_s % 60)s" end) + ")[0m"
-  ' 2>/dev/null)
+  done <<< "$AGENT_LINES"
 
   # Skills: running ◐, completed with ×count, churn alert (≥3 yellow, ≥5 red)
   skill_parts=""
@@ -378,13 +310,10 @@ if [ -n "$TDATA" ] && [ "$TDATA" != "{}" ]; then
       suffix=""; [ "$count" -gt 1 ] 2>/dev/null && suffix=" ${C_DIM}×${count}${C_RESET}"
       skill_parts="${skill_parts:+${skill_parts} ${C_DIM}|${C_RESET} }${C_GREEN}✓${C_RESET} ${C_DIM}${name}${C_RESET}${suffix}"
     fi
-  done < <(echo "$TDATA" | jq -r '.skills[]? | (if .status == "running" then "R" else "D" end) + "|" + .name + "|" + ((.count // 1) | tostring)' 2>/dev/null)
+  done <<< "$SKILL_LINES"
   [ -n "$skill_parts" ] && printf '%b\n' "${C_DIM}skill:${C_RESET} ${skill_parts}"
 
   # Todos: ▸ in-progress | ✓ all complete
-  TODO_CONTENT=$(echo "$TDATA" | jq -r '.todos.content // empty' 2>/dev/null)
-  TODO_COMPLETED=$(echo "$TDATA" | jq -r '.todos.completed // empty' 2>/dev/null)
-  TODO_TOTAL=$(echo "$TDATA" | jq -r '.todos.total // empty' 2>/dev/null)
   if [ -n "$TODO_TOTAL" ]; then
     if [ -z "$TODO_CONTENT" ] || [ "$TODO_CONTENT" = "null" ]; then
       printf '%b\n' "${C_GREEN}✓${C_RESET} All complete ${C_DIM}(${TODO_COMPLETED}/${TODO_TOTAL})${C_RESET}"

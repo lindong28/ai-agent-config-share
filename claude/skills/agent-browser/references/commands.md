@@ -1,6 +1,12 @@
-# Command Reference
+# Selected Command Reference
 
-Complete reference for all agent-browser commands. For quick start and common patterns, see SKILL.md.
+Frequently used agent-browser commands and options. For the complete
+version-matched surface, use `agent-browser --help`, `<command> --help`, or
+`agent-browser skills get core --full`. For the core loop see [Core Workflow](../SKILL.md#core-workflow); for
+worked recipes see [Common Patterns](../SKILL.md#common-patterns). Generated help describes command syntax but may show
+default-daemon connection examples; for any workflow already running on a CDP
+path, [Browser Identity Continuity](../SKILL.md#browser-identity-continuity) is
+authoritative.
 
 ## Navigation
 
@@ -12,7 +18,6 @@ agent-browser back            # Go back
 agent-browser forward         # Go forward
 agent-browser reload          # Reload page
 agent-browser close           # Close browser (aliases: quit, exit)
-agent-browser connect 9222    # Connect to browser via CDP port
 ```
 
 ## Snapshot (page analysis)
@@ -168,7 +173,8 @@ agent-browser network requests --filter api    # Filter requests
 ```bash
 agent-browser tab                 # List tabs
 agent-browser tab new [url]       # New tab
-agent-browser tab 2               # Switch to tab by index
+agent-browser tab t2              # Switch by stable tab id (t1, t2, ... — never reused in a session)
+agent-browser tab docs            # Or by a label assigned with `tab new --label docs`
 agent-browser tab close           # Close current tab
 agent-browser tab close 2         # Close tab by index
 agent-browser window new          # New window
@@ -248,11 +254,11 @@ agent-browser state load auth.json    # Restore saved state
 ## Global Options
 
 ```bash
-agent-browser --session <name> ...    # Isolated browser session
+agent-browser --session <name> ...    # Task-specific --session name: the browser and daemon you control
 agent-browser --json ...              # JSON output for parsing
-agent-browser --headed ...            # Show browser window (not headless)
+agent-browser --headed ...            # Request a visible window; requires a GUI session
 agent-browser --full ...              # Full page screenshot (-f)
-agent-browser --cdp <port> ...        # Connect via Chrome DevTools Protocol
+agent-browser --cdp <port-or-url> ... # Connect via Chrome DevTools Protocol
 agent-browser -p <provider> ...       # Cloud browser provider (--provider)
 agent-browser --proxy <url> ...       # Use proxy server
 agent-browser --proxy-bypass <hosts>  # Hosts to bypass proxy
@@ -265,22 +271,41 @@ agent-browser --version               # Show version (-V)
 agent-browser <command> --help        # Show detailed help for a command
 ```
 
-## Debugging
+## Headless Debugging
 
 ```bash
-agent-browser --headed open example.com   # Show browser window
-agent-browser --cdp 9222 snapshot         # Connect via CDP port
-agent-browser connect 9222                # Alternative: connect command
 agent-browser console                     # View console messages
 agent-browser console --clear             # Clear console
 agent-browser errors                      # View page errors
 agent-browser errors --clear              # Clear errors
 agent-browser highlight @e1               # Highlight element
-agent-browser inspect                     # Open Chrome DevTools for this session
 agent-browser trace start                 # Start recording trace
 agent-browser trace stop trace.zip        # Stop and save trace
 agent-browser profiler start              # Start Chrome DevTools profiling
 agent-browser profiler stop trace.json    # Stop and save profile
+```
+
+These commands work headlessly; debugging does not by itself require a visible
+browser.
+
+## Visual and Existing-CDP-Browser Debugging
+
+Use these only when
+[Browser Mode Selection](../SKILL.md#browser-mode-selection) requires a visible
+or existing browser. `inspect` opens visible DevTools in the user's default
+browser; explain that desktop impact before running it. Hold the browser's identity per [Browser Identity Continuity](../SKILL.md#browser-identity-continuity) on every command that controls it.
+
+```bash
+# Automation-launched headed browser
+agent-browser --headed open example.com   # GUI session only; Background may fall back headless
+agent-browser inspect                     # Open visible DevTools for the active page
+
+# Local CDP port
+agent-browser --session existing-cdp-<task-id> --cdp 9222 inspect
+
+# CDP URL or remote service
+agent-browser --session existing-cdp-<task-id> --cdp "<cdp-url>" snapshot
+agent-browser --session existing-cdp-<task-id> --cdp "<cdp-url>" console
 ```
 
 ## Environment Variables
@@ -293,3 +318,54 @@ AGENT_BROWSER_PROVIDER="browserbase"         # Cloud browser provider
 AGENT_BROWSER_STREAM_PORT="9223"             # Override WebSocket streaming port (default: OS-assigned)
 AGENT_BROWSER_HOME="/path/to/agent-browser"  # Custom install location
 ```
+
+## Observability Dashboard
+
+The dashboard is a standalone background server that shows live browser viewports, command activity, and console output for all sessions.
+
+```bash
+# Start the dashboard server (background, port 4848)
+agent-browser dashboard start
+
+# All sessions are automatically visible in the dashboard
+agent-browser open example.com
+
+# Stop the dashboard
+agent-browser dashboard stop
+```
+
+The dashboard runs independently of browser sessions on port 4848 (configurable with `--port`). All sessions automatically stream to the dashboard. Sessions can also be created from the dashboard UI with local engines or cloud providers.
+
+### Dashboard AI Chat
+
+The dashboard has an optional AI chat tab powered by the Vercel AI Gateway. Enable it by setting:
+
+```bash
+export AI_GATEWAY_API_KEY=gw_your_key_here
+export AI_GATEWAY_MODEL=anthropic/claude-sonnet-4.6           # optional default
+export AI_GATEWAY_URL=https://ai-gateway.vercel.sh           # optional default
+```
+
+The Chat tab is always visible in the dashboard. Set `AI_GATEWAY_API_KEY` to enable AI responses.
+
+## Configuration File
+
+Create `agent-browser.json` in the project root for persistent settings:
+
+```json
+{
+  "headed": false,
+  "proxy": "http://localhost:8080",
+  "profile": "./browser-data"
+}
+```
+
+Keep shared and project defaults headless. Select a visible mode per task through
+[Browser Mode Selection](../SKILL.md#browser-mode-selection), not by persisting
+`"headed": true`. Priority (lowest to highest):
+`~/.agent-browser/config.json` < `./agent-browser.json` < env vars < CLI flags.
+Use `--config <path>` or `AGENT_BROWSER_CONFIG` env var for a custom config file
+(exits with error if missing/invalid). All CLI options map to camelCase keys
+(e.g., `--executable-path` -> `"executablePath"`). Boolean flags accept
+`true`/`false` values (e.g., `--headed false` overrides config). Extensions from
+user and project configs are merged, not replaced.

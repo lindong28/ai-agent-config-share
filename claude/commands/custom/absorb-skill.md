@@ -57,7 +57,7 @@ origin: 2026-07-03
 例外规则（子情形命中时优先于表行）：
 
 - **可执行资源**：bundled resource 中的可执行部分（scripts/ 等）不进判定表——默认不采纳；明显无收益 → 随 reject 一行带过；存在真实采纳候选 → `AskUserQuestion` 拍板（维护 / 供应链风险由用户承担）
-- **反原则建议**：与本地原则相反的外部建议默认按判定表 reject（不是"新洞见"），一行理由附注「可作为修订本地原则的输入——修改后由用户执行 `/custom:review-principles`（该入口仅限用户调用）」；本 command 内不为合并该建议而修改 principles 文件（非该类建议的 reference 落点走「落点越界」条）
+- **反原则建议**：与本地原则相反的外部建议默认按判定表 reject（不是"新洞见"），一行理由附注「可作为修订本地原则的输入——修改后由用户执行 `/custom:review-skill`（该入口仅限用户调用）」；本 command 内不为合并该建议而修改 principles 文件（非该类建议的 reference 落点走「落点越界」条）
 - **落点越界**：落点超出 target 文件本体（如落到它引用的 reference 文件——常被多个 skill 共享）→ `AskUserQuestion` 单独拍板，不自主编辑
 
 ---
@@ -65,7 +65,7 @@ origin: 2026-07-03
 ## 3. 集中呈现与拍板 → 执行 → 验证 → summary
 
 1. 全部候选项处置先集中呈现——拟合并清单、reject 表、待拍板项表格（项 / 收益 / 风险 / 推荐；涵盖判定表的不确定项与例外规则的 ask 项）一次给出，用户对自主项有 veto 窗口；呈现完成、待拍板项（如有）拍板后再动手，逐项落到实际落点——否则后拍板的决策可能推翻先落的 edit
-2. 有实际改动时收尾验证，按落点分派——外部内容即使 transform 过也常残留原则违反：target 本体 + 经拍板编辑的 reference 文件（reference 是 skill 的自然延伸，同受 skill-review-principles 约束、属 review-skill 主审范围）交 `/custom:review-skill`，instruction 里点明只审本次 diff（如"重点审核 <文件> 的 git diff 改动"），收敛循环由它自身负责；落点是 principles 文件（由 meta-原则治理、非 skill 写作原则）时改由交给 `/custom:review-principles`
+2. 有实际改动时收尾验证，按落点分派——外部内容即使 transform 过也常残留原则违反：target 本体 + 经拍板编辑的 reference 文件（reference 是 skill 的自然延伸，同受 skill-review-principles 约束、属 review-skill 主审范围）交 `/custom:review-skill`，instruction 里点明只审本次 diff（如"重点审核 <文件> 的 git diff 改动"），收敛循环由它自身负责；落点是 principles 文件（由 meta-原则治理、非 skill 写作原则）时改由交给 `/custom:review-skill`
 3. 最终 summary，首行给出 target 绝对路径，非空 bucket 各一表（空 bucket 略；全 reject 时如实说明"无内容合并 + 一行理由"）：
    - 合并表（项 / 落点 / 填补的缺口）
    - reject 表（项 / 一行理由；任务域外有价值项附「建议归属」）

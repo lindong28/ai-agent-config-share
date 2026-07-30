@@ -40,7 +40,7 @@ description: 审查一份 ux-contract.md（通常在 docs/contracts/ 下）是�
 
 按用户选择 Edit。若有改动，回到第 1 阶段，按完整流程重跑；无改动则循环终止。
 
-若审查发现现有原则未覆盖某类问题，用 AskUserQuestion 把「是否改进 `~/.claude/references/ux-contract-review-principles.md`」作为一项决策交用户拍板——principles 缺口是高杠杆发现，只在 prose 里附带提及会被略过、用户遗忘后同类坑复发。改完后执行 `/custom:review-principles ux-contract-review-principles.md` 循环审查改动——principles 文件本身也要过 meta-原则。
+若审查发现现有原则未覆盖某类问题，用 AskUserQuestion 把「是否改进 `~/.claude/references/ux-contract-review-principles.md`」作为一项决策交用户拍板——principles 缺口是高杠杆发现，只在 prose 里附带提及会被略过、用户遗忘后同类坑复发。改完后对该 principles 文件跑一次 `/custom:review-skill` 循环审查改动。注意本仓未收录专审 meta-原则的 `/custom:review-principles`，所以「这套原则本身立不立得住」这一维度**不被覆盖**——按 review-skill 类型 gate 的要求在报告中声明该维度未审，别当作已过 meta-原则。
 
 ---
 

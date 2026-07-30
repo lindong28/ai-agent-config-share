@@ -1,105 +1,175 @@
 ---
 name: agent-browser
-description: Browser automation CLI for AI agents. Use when the user needs to interact with websites, including navigating pages, filling forms, clicking buttons, taking screenshots, extracting data, testing web apps, or automating any browser task. Triggers include requests to "open a website", "fill out a form", "click a button", "take a screenshot", "scrape data from a page", "test this web app", "login to a site", "automate browser actions", or any task requiring programmatic web interaction.
-allowed-tools: Bash(npx agent-browser:*), Bash(agent-browser:*)
+description: Drive a real browser to act on web pages — navigate, read page structure, fill and submit forms, click through a multi-step flow, capture page screenshots, extract data, exercise a web app, or sign in to a site. Use when the task needs a real browser to operate on or inspect a rendered page or its browser state. Not when a plain HTTP fetch of the content would do, and not for system-level capture of the desktop, an application window, or the browser's own chrome — this skill captures rendered page content only.
+allowed-tools: Bash(npx agent-browser:*), Bash(agent-browser:*), Bash(mktemp:*), Bash(open:*)
 ---
 
 # Browser Automation with agent-browser
 
-## Default Path (zero-config, works everywhere)
+## Browser Mode Selection
 
-**Default to headed (visible) mode — always pass `--headed`** unless headless is explicitly required (e.g. a pure-CI screenshot job with no human watching and no bot-protected target). Headless is the CLI default, but it is the wrong default here: a headless, automation-launched browser (1) cannot be seen by the user, so any human-in-the-loop step (login, 2FA, CAPTCHA) is impossible, and (2) sets `navigator.webdriver=true` with a `HeadlessChrome` user-agent, which bot-protection (Cloudflare Turnstile, etc.) detects and blocks on sight.
+Choose the least intrusive mode that satisfies the required browser capability.
+Visual evidence alone does not require a visible browser because screenshots
+work headlessly. A mode a user is meant to see also passes the Visible Browser
+Evidence Gate defined below — observed evidence that the browser in front of
+them is the one under control.
+
+| Situation | Action | Boundary |
+|---|---|---|
+| Navigation, DOM/network inspection, screenshots, or emulated viewport/device testing | Headless (default) | Does not open or focus a desktop window |
+| Visible debugging, or a test that exercises real window behavior, where the user does not need to watch or take control | `--headed` | Opens a GUI window, remains automation-identified, and does not satisfy the Visible Browser Evidence Gate. Requires a GUI session — from a `Background` context it falls back to headless, so a real-window result must use the row below |
+| The user must watch or operate the page, or human handoff is required | Visible GUI browser over CDP | Requires a verified CDP endpoint and the Visible Browser Evidence Gate below |
+| A target demands the installed Chrome build, or a profile with real browsing history | Visible GUI browser over CDP for the build; the Chrome Dev row for profile history | Neither removes automation identification, and nothing here establishes that CDP defeats bot detection. Verify against the target itself; if you cannot, report `Blocked` when it gates the task, otherwise mark that behavior `uncovered` |
+| A dedicated persistent-auth browser is desired and Chrome Dev is available | Chrome Dev over CDP | Optional implementation of the CDP path, with a profile that carries real history |
+| A required visible or CDP capability is unavailable | Report `Blocked` when it gates the task; otherwise mark that behavior `uncovered` | Do not silently downgrade to headless emulation |
 
 ```bash
-agent-browser --headed open <url>      # navigate in a VISIBLE window (auto-launches a browser if none)
-agent-browser --headed snapshot -i     # get @e1 / @e2 refs
-agent-browser --headed eval "<js>"     # read DOM / verify state
+agent-browser open <url>
+agent-browser snapshot -i
+agent-browser eval "<js>"
 ```
 
-This path needs **no** `--cdp`, **no** Chrome Dev setup, and **no** prerequisite check. Use it for ad-hoc DOM verification, plan L2 checks, and any task that doesn't require reusing the user's logged-in Chrome profile.
+If a visible browser was not already requested, declare the desktop impact
+*before* launching `--headed` or a GUI browser — why headless is insufficient,
+and what window activity to expect. It has to reach whoever requested this run
+while they can still stop it: the user's turn when the session is attended, or a
+channel back to the dispatcher when it is not. A final task report does not
+count, because it arrives after the window has already opened. If no
+before-the-fact channel exists, do not launch — hand the decision back to the
+dispatcher.
+Headless runs can still persist their own authentication through a saved state
+file or `--session-name` when no human handoff is required.
 
-> **`--headed` needs a GUI session, and launched browsers are still flagged as automation.** If the CLI runs from a non-GUI context (`launchctl managername` prints `Background` — true for SSH shells, background daemons, and spawned sub-agents), even `--headed` cannot draw a window: it silently falls back to headless and the user (often on remote desktop) sees nothing. For any site that needs a human step or blocks automation, do NOT let agent-browser launch its own browser. Instead launch the user's **real** browser into the GUI session and attach over CDP: `open -na "Google Chrome" --args --remote-debugging-port=9222 --user-data-dir=/tmp/ab-profile "<url>"`, then `agent-browser close` (closes the session; if a stale daemon persists, see "Troubleshooting: Stale Daemon") and `agent-browser --cdp 9222 ...`. A browser launched this way keeps `navigator.webdriver=false`, so it is not flagged — and the user can see and interact with it.
+> If the CLI runs from a non-GUI context (`launchctl managername` prints
+> `Background` — true for SSH shells, background daemons, and spawned
+> sub-agents), `--headed` cannot draw a window and silently falls back to
+> headless. When a visible or real-window result is required, use Visible GUI
+> Browser over CDP; otherwise mark that behavior `uncovered` rather than
+> accepting headless emulation as equivalent.
 
-**Use the Chrome Dev opt-in path below only when you need persistent login state from the user's main Chrome profile** (e.g., LinkedIn / GitHub / authenticated SaaS). Trying `--cdp` without first verifying Chrome Dev runs is the #1 cause of false failures.
+### Visible Browser Evidence Gate
+
+Visibility is an observed runtime state — not a launch flag, an exit-0 command,
+or a captured artifact. Rows 1–2 apply to every situation entering the Visible
+GUI Browser over CDP path; rows 3–4 apply only when a user will watch or operate
+the page. Pass rows 1–3 before the first page action that user is meant to see
+and before handing control over. Row 4 falls due once they hand control back.
+
+| # | Evidence | Required state | Requires |
+|---|---|---|---|
+| 1 | Browser build is headed | `eval "navigator.userAgent"` on the controlled page returns a UA without `HeadlessChrome` — a headless build reports it even under `--headless=new` | — |
+| 2 | Controlled target | The active controlled tab is the one you selected as target and shows the target URL. Select it from `tab list`, switch by its `t<N>` id or label, and record the pair that identifies what you are driving: `get cdp-url` plus that tab id | 1 |
+| 3 | User confirmation | Bring that window and target tab to the foreground through the OS or host UI, then ask through this harness's user-question mechanism and wait for an affirmative answer. Presence, a prior browser request, or a one-way notification is not an answer | 1, 2 |
+| 4 | Post-handoff | `get cdp-url` and the active tab id still match what row 2 recorded, through the same `--session` and `--cdp`; then verify the task-relevant result | 3 |
+
+Rows 1–2 establish *which* browser is under control. Only row 3 establishes that
+a human can see it — a headed build proves the browser can draw a window, never
+that one is on screen in front of anybody. So rows 1–2 alone never clear this
+gate for a watching user, and a successful `--headed` command, a screenshot, or a
+DOM snapshot satisfies no row at all. Activity in another browser or profile does
+not satisfy the handoff. When a required row's evidence cannot be obtained — no
+connectable GUI browser, or no reachable user where rows 3–4 apply — take the
+unavailable-capability row of Browser Mode Selection: report `Blocked` when it
+gates the task, otherwise mark that behavior `uncovered`.
+
+### Visible GUI Browser over CDP
+
+This path has two entry conditions, and they differ in what they require first:
+
+| Entry | Requires first | Procedure |
+|---|---|---|
+| Launch a fresh GUI browser with its own `--user-data-dir` | Nothing beyond the desktop-impact declaration above | The recipe below |
+| Take over a browser the user already has open | The user's explicit authorization, obtained through this harness's user-question mechanism **before** you attach, select a tab, or foreground anything — attaching to someone's live browser is the act that needs permission, not the handoff that follows | Only possible if that browser already exposes a CDP port. Regular Chrome does not on its default profile — see *Why NOT --auto-connect or --cdp with Regular Chrome* — so in practice this is Chrome Dev. If nothing exposed is available, this entry is unavailable: do not substitute a fresh launch for it |
+
+For the fresh-launch entry, start the browser in the GUI session with remote
+debugging enabled and a separate user-data directory, then control it. Choose one
+task-specific `--session` name before the first command and reuse it with the
+same explicit `--cdp` endpoint on every command that must control this browser.
+
+```bash
+AB_GUI_PROFILE_DIR="$(mktemp -d)"
+open -na "Google Chrome" --args \
+  --remote-debugging-port=9222 \
+  --remote-allow-origins=* \
+  --user-data-dir="$AB_GUI_PROFILE_DIR" "<url>"
+agent-browser --session human-handoff-<task-id> --cdp 9222 snapshot -i
+```
+
+If no connectable GUI browser is available, report `Blocked` when that
+capability gates the task; otherwise mark the specific behavior `uncovered`.
+Never treat headless emulation as equivalent.
+
+Satisfy the [Visible Browser Evidence Gate](#visible-browser-evidence-gate) in
+row order before acting. Recording each identity and comparing it again after
+handoff is what prevents a stale default daemon or another visible profile from
+silently receiving part of the workflow.
+
+Use [Opt-in: Chrome Dev Setup (when a persistently signed-in browser is
+needed)](#opt-in-chrome-dev-setup-when-a-persistently-signed-in-browser-is-needed) only
+for its row in the mode table. Trying to connect to Chrome Dev without first
+verifying that it runs is the #1 cause of false failures.
 
 ---
 
-## Opt-in: Chrome Dev Setup (when persistent auth profile is needed)
+## Opt-in: Chrome Dev Setup (when a persistently signed-in browser is needed)
 
-> **Prerequisite check — run this before any `--cdp` command:**
-> ```bash
-> ls -d "/Applications/Chrome Dev.app" >/dev/null 2>&1 && command -v chrome-dev >/dev/null 2>&1 \
->   && curl -fsS http://localhost:9222/json/version >/dev/null \
->   && echo "Chrome Dev ready" || echo "Chrome Dev NOT available — use Default Path above"
-> ```
-> If the check prints "NOT available", fall back to the Default Path. **Do not retry `--cdp` flags.** Chrome Dev is a per-machine opt-in setup, not a universal default.
+This user may have a dedicated Chrome Dev app that always launches with remote debugging on port `9222`, giving persistent auth state without fighting Chrome's security restrictions. It is a per-machine opt-in, not a universal default — full setup, profile/cookie-sync mechanics, and maintenance live in [chrome-dev-setup.md](references/chrome-dev-setup.md).
 
-This user *may* have a dedicated **Chrome Dev** app (`/Applications/Chrome Dev.app`) that always launches with remote debugging enabled. When present, it provides persistent auth state without fighting Chrome's security restrictions.
+Check before connecting:
 
-### Setup Details (when Chrome Dev is installed)
+```bash
+ls -d "/Applications/Chrome Dev.app" >/dev/null 2>&1 && command -v chrome-dev >/dev/null 2>&1 \
+  && curl -fsS http://localhost:9222/json/version >/dev/null \
+  && echo "Chrome Dev ready" || echo "Chrome Dev NOT available"
+```
 
-| Item | Value |
-|------|-------|
-| App | `/Applications/Chrome Dev.app` |
-| Launch script | `/opt/homebrew/bin/chrome-dev` |
-| Debug port | `9222` |
-| Profile dir | `~/Library/Application Support/Chrome-Dev` |
-| Flags baked in | `--remote-debugging-port=9222 --remote-allow-origins=* --user-data-dir=<profile>` |
+`curl` here is a port probe only — it must not be replaced by an `agent-browser --cdp` call, because those attach, and attaching is the act that needs prior authorization (see the Visible Browser Evidence Gate). If the check prints "NOT available", return to Browser Mode Selection; use another mode only if it satisfies the required capability, otherwise report the prerequisite as blocked — do not retry `--cdp` flags.
 
 ### Standard Connection Workflow
 
 ```bash
-# 1. Verify Chrome Dev is running and connectable
-curl -s http://localhost:9222/json/version | python3 -c "import sys,json; d=json.load(sys.stdin); print('Connected:', d['Browser'])"
-
-# 2. Close any existing session first (does not kill a stale daemon — see Troubleshooting: Stale Daemon)
-agent-browser close 2>/dev/null; sleep 1
-
-# 3. Connect and use
-/opt/homebrew/bin/agent-browser --cdp 9222 open "https://example.com"
-/opt/homebrew/bin/agent-browser --cdp 9222 snapshot -i
+# Control the visible CDP browser through one task-specific --session name.
+agent-browser --session human-handoff-<task-id> --cdp 9222 open "https://example.com"
+agent-browser --session human-handoff-<task-id> --cdp 9222 snapshot -i
 ```
 
-### If Chrome Dev Is Not Running
-
-```bash
-# Launch it
-open "/Applications/Chrome Dev.app"
-sleep 6
-
-# Verify
-curl -s http://localhost:9222/json/version | python3 -c "import sys,json; print(json.load(sys.stdin)['Browser'])"
-```
+If Chrome Dev is not running, launching it can open or focus a desktop window — declare that impact before running `open "/Applications/Chrome Dev.app"`, wait a few seconds, then verify with the snapshot above.
 
 ### Troubleshooting: Stale Daemon (EAGAIN / about:blank / healthy-page timeouts)
 
-The browser persists via a background **daemon**. When it goes stale — a previous session closed Chrome, the browser restarted, or the socket died — commands hit a dead socket: `Resource temporarily unavailable (os error 35)`, commands landing on `about:blank`, or timeouts on a page that is actually healthy.
+The browser persists via a background daemon, one per `--session` name. When it goes stale, commands hit a dead socket: `os error 35`, commands landing on `about:blank`, or timeouts on a page that is actually healthy. `close` / `close --all` act on the pages a daemon holds and leave the daemon process running (verified), so they do not fix this — which is why `session list` is not a list of things `close` can reset.
 
-**`close` / `close --all` do NOT fix this** — they close browser *sessions* but leave the daemon process running (verified). Reset the daemon by killing its process, scoped so you don't nuke sibling agents' daemons:
+Reset takes two steps because no single command does both:
 
 ```bash
-# Multiple parallel agents (--namespace): kill only your namespace's daemon.
-# The namespace token appears in the daemon's argv — pick a distinctive one.
-pkill -f "<your-namespace>" 2>/dev/null; sleep 1
-# Single default daemon (no namespaces in play): kill it outright
-pkill -f agent-browser 2>/dev/null; sleep 1
+agent-browser doctor                                  # diagnose + clean the sidecars of daemons that already died,
+                                                      # and read the live `Session <name> (pid <N>)` line for your session
+kill <N>                                              # terminate that pid — a daemon that is alive but wedged
 ```
 
-Then start fresh (e.g. `agent-browser --cdp 9222 open "https://example.com"`). Don't retry repeatedly against a stale daemon — kill it after the first unexplained stall rather than burning wall-clock.
+`doctor`'s own `Session <name> (pid <N>)` line is what binds a pid to a session name; take the pid from there rather than from `~/.agent-browser/<session>.pid`, because a pid file can outlive its daemon and the pid can be recycled, so killing it blind can hit an unrelated process. If `doctor` reports no live pid for your session, the daemon was already dead and `doctor` has cleared its leftovers — reconnect via the Standard Connection Workflow and confirm the stall is gone. Only report `Blocked` if it persists; never guess at a pid. Never broad-match `agent-browser` across processes either: every daemon presents the same argv with no session name in it, so a pattern kill takes out every parallel agent's daemon too.
+
+Once the daemon is gone, reconnect via the Standard Connection Workflow above. Do not keep retrying commands against a stale daemon after the first unexplained stall — finish the reset first.
+
+The termination step is the one place this skill steps outside its own `allowed-tools`: it needs `kill`. Where that is unavailable the reset stops at `doctor`, and an unresolved stall is `Blocked` — do not guess at a process.
 
 ### Why NOT --auto-connect or --cdp with Regular Chrome
 
-Regular Chrome (Google Chrome.app) does **not** have remote debugging enabled. Chrome 147+ also blocks remote debugging on the default user-data-dir. `--auto-connect` will timeout, `--cdp` will 404. **If Chrome Dev is not installed, use the Default Path above — bare `agent-browser open` launches its own browser and does not need `--cdp`.** `--cdp` is exclusively for the Chrome Dev opt-in setup.
-
-### Login State
-
-Chrome Dev syncs cookies and login data from the main Chrome profile on each launch (via the launch script). The user's LinkedIn, YouTube, GitHub sessions etc. are available automatically. No manual auth steps needed for sites the user is already logged into.
+Regular Chrome does not expose remote debugging on its default user-data directory, and Chrome 147+ blocks attempts to enable it there. Use Visible GUI Browser over CDP with a separate user-data directory, or return to Browser Mode Selection — do not retry the default profile.
 
 ---
 
 The CLI uses Chrome/Chromium via CDP directly. Install via `npm i -g agent-browser`, `brew install agent-browser`, or `cargo install agent-browser`. Run `agent-browser install` to download Chrome. Existing Chrome, Brave, Playwright, and Puppeteer installations are detected automatically. Run `agent-browser upgrade` to update to the latest version.
 
 ## Core Workflow
+
+### Browser Identity Continuity
+
+Once a workflow is running on a CDP path — whether it launched that browser or
+attached to one already exposed — reuse that workflow's task-specific `--session`
+name and the same explicit `--cdp` endpoint on every later command that controls
+it. The endpoint may be a local port or a CDP URL. Omitting either value can
+select a different session's daemon or launch a different browser.
 
 Every browser automation follows this pattern:
 
@@ -127,11 +197,11 @@ agent-browser state load ~/.agent-browser/auth/<site>-auth.json
 agent-browser open https://example.com/protected-page
 ```
 
-If redirected to login, auth has expired — see [Handling Authentication](#handling-authentication) > Option 1 to re-extract cookies.
+If redirected to login, that state has expired — re-run whichever approach in [Handling Authentication](#handling-authentication) produced it.
 
 ## Command Chaining
 
-Commands can be chained with `&&` in a single shell invocation. The browser persists between commands via a background daemon, so chaining is safe and more efficient than separate calls.
+Commands can be chained with `&&` in a single shell invocation, under the same stop condition as `batch` — see [Batch Execution](#batch-execution). The browser persists between commands via a background daemon.
 
 ```bash
 # Chain open + snapshot in one call (open already waits for page load)
@@ -144,137 +214,56 @@ agent-browser fill @e1 "user@example.com" && agent-browser fill @e2 "password123
 agent-browser open https://example.com && agent-browser screenshot
 ```
 
-**When to chain:** Use `&&` when you don't need to read the output of an intermediate command before proceeding (e.g., open + wait + screenshot). Run commands separately when you need to parse the output first (e.g., snapshot to discover refs, then interact using those refs).
+**When to chain:** the stop condition is the same as for `batch` — see [Batch Execution](#batch-execution). Chain uninterrupted steps whose next action is already known (e.g., open + wait + screenshot); run commands separately when you need to inspect output or pass a row of the Visible Browser Evidence Gate.
 
 ## Handling Authentication
 
-When automating a site that requires login, choose the approach that fits.
+**Selection rule:** rows are ordered by preference, so take the first row whose precondition holds — several can be true at once (Chrome Dev is itself an existing CDP browser, and anything with stored credentials can also be driven as a one-off login flow). Full recipes, plus OAuth, 2FA, HTTP basic, cookie-based auth and token refresh: [Authentication Patterns](references/authentication.md).
 
-### Option 1: CDP Cookie Extraction (RECOMMENDED for Chrome 144+)
-
-**Use when:** The user is already logged in to the target site and you need to reuse that auth. Most reliable approach for sites using session cookies.
-
-Relies on the **Chrome Dev** setup documented in [Quick Connect](#quick-connect-dongs-chrome-dev-setup) — remote debugging is always enabled, no kill/restart dance needed.
-
-**Step 1:** Ensure Chrome Dev is running:
-
-```bash
-open "/Applications/Chrome Dev.app" && sleep 3
-curl -s http://localhost:9222/json/version | python3 -c "import sys,json; print('Connected:', json.load(sys.stdin)['Browser'])"
-```
-
-**Step 2:** If the user isn't logged in to the target site, they log in via the Chrome Dev window (profile persists across launches).
-
-**Step 3:** Extract cookies from the Chrome Dev profile:
+| You have | Approach | Note |
+|---|---|---|
+| The user already logged in via Chrome Dev | [Reuse Chrome Dev Authentication via CDP Cookies](references/authentication.md#reuse-chrome-dev-authentication-via-cdp-cookies) | **Preferred when available** — carries session cookies out of Chrome Dev, which named-profile copying does not. Requires Chrome Dev selected and its prerequisite check passed |
+| Credentials you may store | `agent-browser auth save` / `auth login` | Encrypted vault; the model never sees the password. `auth login` waits for the form selectors, which is more reliable on delayed SPA logins |
+| A login flow you can run once per site | `--session-name <name>` | Cookies + localStorage auto-save on close and auto-restore next launch |
+| A login flow and you want an explicit artifact | `state save` / `state load` | Same as above but you control the file and when it is reused |
+| Another CDP browser already authenticated | [Import Auth from an Existing CDP Browser](references/authentication.md#import-auth-from-an-existing-cdp-browser) | Needs a separate `--session` for the source and the consuming browser — see the linked section |
+| Only the user's regular Chrome profile | `--profile Default` | **Caveat:** a named system profile is copied to a temp dir. Persistent cookies survive; session cookies have been observed not to, so verify against the target before relying on it. An explicit profile *path* persists instead — see [Persistent Profiles](references/authentication.md#persistent-profiles) |
 
 ```bash
-python3 {baseDir}/templates/extract-chrome-cookies.py <domain-filter> <output.json> \
-  --user-data-dir "$HOME/Library/Application Support/Chrome-Dev"
-# Example:
-python3 {baseDir}/templates/extract-chrome-cookies.py bigmodel ./bigmodel-cookies.json \
-  --user-data-dir "$HOME/Library/Application Support/Chrome-Dev"
-```
-
-Requires `pip install websockets`. The script reads `DevToolsActivePort` from the given `--user-data-dir`, connects via WebSocket, and exports cookies in Playwright-compatible JSON format.
-
-**Step 4:** Inject cookies via CDP and navigate (ORDER MATTERS):
-
-```bash
-# 1. Open any page on the domain FIRST (establishes browser session)
-agent-browser open https://www.bigmodel.cn
-
-# 2. Inject cookies via CDP (handles secure + SameSite=None cookies reliably)
-python3 {baseDir}/templates/inject-cookies-cdp.py "$(agent-browser get cdp-url)" /tmp/bigmodel-cookies.json
-
-# 3. Navigate to the authenticated page
-agent-browser open https://www.bigmodel.cn/finance-center/bill/expensebill/list
-
-# 4. Save state to standard location for future reuse
-agent-browser state save ~/.agent-browser/auth/bigmodel-auth.json
-```
-
-**CRITICAL ORDER:** `open` (any page) → inject cookies → `open` (target). If you inject before `open`, the cookies are lost when `open` starts a new browser.
-
-> **Why CDP instead of `cookies import`?** `cookies import` silently drops `secure=true, sameSite=None` cookies (common in modern auth systems like cross-domain SSO). CDP `Storage.setCookies` bypasses this limitation.
-
-**Auth state files are stored in `~/.agent-browser/auth/`** — named `<site>-auth.json` (e.g., `github-auth.json`, `bigmodel-auth.json`).
-
-**Step 5:** Subsequent runs — just load the saved state:
-
-```bash
-agent-browser state load ~/.agent-browser/auth/bigmodel-auth.json
-agent-browser open https://www.bigmodel.cn/finance-center/bill/expensebill/list
-```
-
-If the token has expired (redirected to login page), repeat from Step 1.
-
-### Option 2: Auth vault (credentials stored encrypted)
-
-```bash
+# vault
 echo "$PASSWORD" | agent-browser auth save myapp --url https://app.example.com/login --username user --password-stdin
 agent-browser auth login myapp
-```
 
-`auth login` navigates with `load` and then waits for login form selectors to appear before filling/clicking, which is more reliable on delayed SPA login screens.
-
-### Option 3: Session name (auto-save/restore cookies + localStorage)
-
-```bash
+# session name (auto): state is saved on close and restored on the next launch
 agent-browser --session-name myapp open https://app.example.com/login
-# ... login flow ...
-agent-browser close  # State auto-saved
 
-# Next time: state auto-restored
-agent-browser --session-name myapp open https://app.example.com/dashboard
+# state file (explicit): save after logging in, load in a later run before navigating
+agent-browser state save ./auth.json      # after the login flow completes
+agent-browser state load ./auth.json      # in a future run, before `open`
+
+# import from an already-authenticated CDP browser
+agent-browser --session auth-import-<task-id> --cdp "<port-or-url>" state save ./auth.json
+agent-browser --session auth-use-<task-id> --state ./auth.json open https://app.example.com/dashboard
 ```
-
-### Option 4: State file (manual save/load)
-
-```bash
-# After logging in:
-agent-browser state save ./auth.json
-# In a future session:
-agent-browser state load ./auth.json
-agent-browser open https://app.example.com/dashboard
-```
-
-### Option 5: Chrome profile reuse (persistent cookies ONLY)
-
-```bash
-agent-browser profiles                    # List available profiles
-agent-browser --profile Default open https://gmail.com
-```
-
-> **Limitation:** `--profile` copies the profile to a temp directory. **Session cookies (no expiry) are NOT preserved** — only persistent cookies survive. Most modern auth systems (including bigmodel.cn, many SaaS platforms) use session cookies, so this approach often fails for authenticated access.
-
-### Option 6: Import auth from running Chrome (Chrome <144 only)
-
-```bash
-# DEPRECATED for Chrome 144+: --auto-connect fails due to removed HTTP endpoints
-agent-browser --auto-connect state save ./auth.json
-agent-browser --state ./auth.json open https://app.example.com/dashboard
-```
-
-See [references/authentication.md](references/authentication.md) for OAuth, 2FA, cookie-based auth, and token refresh patterns.
 
 ## Chrome 147+ Compatibility
 
-Chrome 144+ removed the HTTP `/json/version` and `/json/list` discovery endpoints that agent-browser's `--cdp` and `--auto-connect` relied on. The WebSocket endpoint still works but must be discovered via the `DevToolsActivePort` file.
+Modern Chrome requires a separate user-data directory and
+`--remote-allow-origins=*` when remote debugging is enabled.
 
-| Feature | Chrome <144 | Chrome 144+ |
-|---|---|---|
-| `--auto-connect` | Works | **Broken** (timeout) |
-| `--cdp <port>` | Works | **Broken** (404 on /json/version) |
-| `--remote-allow-origins=*` | Optional | **Required** (403 without it) |
-| `DevToolsActivePort` file | Exists | Exists (primary discovery method) |
-| WebSocket CDP | Works | Works (use Python extraction script) |
-
-**Workaround:** Use `extract-chrome-cookies.py` (in `templates/`) to connect via WebSocket, extract cookies, and inject them with `cookies import`. See [Option 1](#option-1-cdp-cookie-extraction-recommended-for-chrome-144) above.
+| Need | Current path |
+|---|---|
+| Control an existing local GUI browser | [Visible GUI Browser over CDP](#visible-gui-browser-over-cdp) |
+| Control another existing CDP browser or remote service | [Control an Existing CDP Browser](#control-an-existing-cdp-browser) |
+| Reuse auth outside the existing CDP browser | `state save`, then load the saved state only when headless satisfies the remaining task |
+| Continue human handoff, bot-sensitive, or real-window work | Keep controlling the GUI browser |
+| Extract auth without controlling that browser | [Reuse Chrome Dev Authentication via CDP Cookies](references/authentication.md#reuse-chrome-dev-authentication-via-cdp-cookies) |
+| Control an unconfigured main Chrome profile | Unsupported; use Browser Mode Selection |
 
 ## Essential Commands
 
 ```bash
-# Batch: ALWAYS use batch for 2+ sequential commands. Commands run in order.
+# Batch 2+ commands only when nothing in between can change the next action — see Batch Execution.
 agent-browser batch "open https://example.com" "snapshot -i"
 agent-browser batch "open https://example.com" "screenshot"
 agent-browser batch "click @e1" "wait 1000" "screenshot"
@@ -282,7 +271,7 @@ agent-browser batch "click @e1" "wait 1000" "screenshot"
 # Navigation
 agent-browser open <url>              # Navigate (aliases: goto, navigate)
 agent-browser close                   # Close browser
-agent-browser close --all             # Close all active sessions
+agent-browser close --all             # Close the pages held by every active session
 
 # Snapshot
 agent-browser snapshot -i             # Interactive elements with refs (recommended)
@@ -326,7 +315,8 @@ agent-browser --download-path ./downloads open <url>  # Set default download dir
 agent-browser tab list                         # List all open tabs
 agent-browser tab new                          # Open a blank new tab
 agent-browser tab new https://example.com      # Open URL in a new tab
-agent-browser tab 2                            # Switch to tab by index (0-based)
+agent-browser tab t2                           # Switch by stable tab id (t1, t2, ... — never reused in a session)
+agent-browser tab docs                         # Or by a label assigned with `tab new --label docs`
 agent-browser tab close                        # Close the current tab
 agent-browser tab close 2                      # Close tab by index
 
@@ -396,7 +386,10 @@ Every session automatically starts a WebSocket stream server on an OS-assigned p
 
 ## Batch Execution
 
-ALWAYS use `batch` when running 2+ commands in sequence. Batch executes commands in order, so dependent commands (like navigate then screenshot) work correctly. Each quoted argument is a separate command.
+Use `batch` for 2+ commands in sequence only when no intermediate output,
+visibility check, user confirmation, or handoff can change the next action.
+Batch executes commands in order, so dependent commands such as navigate then
+screenshot work correctly. Each quoted argument is a separate command.
 
 ```bash
 # Navigate and take a snapshot
@@ -412,7 +405,12 @@ agent-browser batch "click @e1" "wait 1000" "screenshot"
 agent-browser batch --bail "open https://example.com" "click @e1" "screenshot"
 ```
 
-Only use a single command (not batch) when you need to read the output before deciding the next command. For example, you must run `snapshot -i` as a single command when you need to read the refs to decide what to click. After reading the snapshot, batch the remaining steps.
+Use a single command when you need to inspect its output before deciding the
+next action. A workflow on the Visible GUI Browser over CDP path must also stop
+outside `batch` at each row of the [Visible Browser Evidence
+Gate](#visible-browser-evidence-gate) — including row 3's confirmation when a
+user will watch or operate the page. After the decision or confirmation, batch
+only the remaining uninterrupted steps.
 
 Stdin mode is also supported for programmatic use:
 
@@ -427,7 +425,7 @@ These patterns minimize tool calls and token usage.
 
 **Use `--urls` to avoid re-navigation.** When you need to visit links from a page, use `snapshot -i --urls` to get all href URLs upfront. Then `open` each URL directly instead of clicking refs and navigating back.
 
-**Snapshot once, act many times.** Never re-snapshot the same page. Extract all needed info (refs, URLs, text) from a single snapshot, then batch the remaining actions.
+**Snapshot once, act many times.** While nothing has invalidated the refs, do not re-snapshot: extract everything you need (refs, URLs, text) from one snapshot, then batch the remaining actions. Once the page changes, the refs are stale and you must re-snapshot — see [Ref Lifecycle](#ref-lifecycle-important) for what counts as a change.
 
 **Multi-page workflow (e.g. "visit N sites and screenshot each"):**
 
@@ -454,77 +452,17 @@ agent-browser batch "open https://example.com/signup" "snapshot -i"
 agent-browser batch "fill @e1 \"Jane Doe\"" "fill @e2 \"jane@example.com\"" "select @e3 \"California\"" "check @e4" "click @e5" "wait 2000"
 ```
 
-### Authentication with Auth Vault (Recommended)
+### Authentication
 
-```bash
-# Save credentials once (encrypted with AGENT_BROWSER_ENCRYPTION_KEY)
-# Recommended: pipe password via stdin to avoid shell history exposure
-echo "pass" | agent-browser auth save github --url https://github.com/login --username user --password-stdin
-
-# Login using saved profile (LLM never sees password)
-agent-browser auth login github
-
-# List/show/delete profiles
-agent-browser auth list
-agent-browser auth show github
-agent-browser auth delete github
-```
-
-`auth login` waits for username/password/submit selectors before interacting, with a timeout tied to the default action timeout.
-
-### Authentication with State Persistence
-
-```bash
-# Login once and save state
-agent-browser batch "open https://app.example.com/login" "snapshot -i"
-# Read snapshot to find form refs, then fill and submit
-agent-browser batch "fill @e1 \"$USERNAME\"" "fill @e2 \"$PASSWORD\"" "click @e3" "wait --url **/dashboard" "state save auth.json"
-
-# Reuse in future sessions
-agent-browser batch "state load auth.json" "open https://app.example.com/dashboard"
-```
+See the approach table in [Handling Authentication](#handling-authentication); full recipes in [authentication.md](references/authentication.md).
 
 ### Session Persistence
 
-```bash
-# Auto-save/restore cookies and localStorage across browser restarts
-agent-browser --session-name myapp open https://app.example.com/login
-# ... login flow ...
-agent-browser close  # State auto-saved to ~/.agent-browser/sessions/
-
-# Next time, state is auto-loaded
-agent-browser --session-name myapp open https://app.example.com/dashboard
-
-# Encrypt state at rest
-export AGENT_BROWSER_ENCRYPTION_KEY=$(openssl rand -hex 32)
-agent-browser --session-name secure open https://app.example.com
-
-# Manage saved states
-agent-browser state list
-agent-browser state show myapp-default.json
-agent-browser state clear myapp
-agent-browser state clean --older-than 7
-```
+`--session-name <name>` auto-saves cookies + localStorage on close and restores them next launch; `state list/show/clear/clean` manage the saved files, and `AGENT_BROWSER_ENCRYPTION_KEY` encrypts them at rest. See [Session State Persistence](references/session-management.md#session-state-persistence) and [Managing Saved State Files](references/session-management.md#managing-saved-state-files).
 
 ### Working with Iframes
 
-Iframe content is automatically inlined in snapshots. Refs inside iframes carry frame context, so you can interact with them directly.
-
-```bash
-agent-browser batch "open https://example.com/checkout" "snapshot -i"
-# @e1 [heading] "Checkout"
-# @e2 [Iframe] "payment-frame"
-#   @e3 [input] "Card number"
-#   @e4 [input] "Expiry"
-#   @e5 [button] "Pay"
-
-# Interact directly — no frame switch needed
-agent-browser batch "fill @e3 \"4111111111111111\"" "fill @e4 \"12/28\"" "click @e5"
-
-# To scope a snapshot to one iframe:
-agent-browser batch "frame @e2" "snapshot -i"
-agent-browser frame main          # Return to main frame
-```
+Iframe content is inlined in snapshots and refs inside iframes carry frame context, so you interact with them directly — no frame switch needed. Use `frame @eN` to scope a snapshot to one iframe and `frame main` to return. Worked example: [Iframes](references/snapshot-refs.md#iframes).
 
 ### Data Extraction
 
@@ -540,32 +478,33 @@ agent-browser get text @e1 --json
 
 ### Parallel Sessions
 
+Each `--session <name>` is an isolated browser with its own daemon, so parallel agents do not collide; `session list` shows them. See [Session Isolation Properties](references/session-management.md#session-isolation-properties) and [Session Cleanup](references/session-management.md#session-cleanup).
+
+### Control an Existing CDP Browser
+
+To launch and control a local GUI browser, follow
+[Visible GUI Browser over CDP](#visible-gui-browser-over-cdp) for launch,
+identity checks, and continued control. To attach to a local browser someone
+else already started, that browser must already expose a CDP port — regular
+Chrome does not on its default profile, so in practice this means Chrome Dev or a
+browser launched with the flags in that section. Attach with the same
+`--session` + `--cdp` form below, after obtaining the user's authorization.
+
+For a WebSocket, HTTP, or remote-service CDP URL, reuse the same task-specific
+session and explicit `--cdp` URL on every command:
+
 ```bash
-agent-browser --session site1 open https://site-a.com
-agent-browser --session site2 open https://site-b.com
-
-agent-browser --session site1 snapshot -i
-agent-browser --session site2 snapshot -i
-
-agent-browser session list
+agent-browser --session existing-cdp-<task-id> --cdp "<cdp-url>" get url
+agent-browser --session existing-cdp-<task-id> --cdp "<cdp-url>" snapshot -i
 ```
 
-### Connect to Existing Chrome
+Verify the browser identity before acting and the task-relevant result
+afterward. A remote browser does not satisfy human handoff unless the user can
+view and operate that same controlled page.
 
-> **Chrome 144+ Note:** `--auto-connect` and `--cdp` are broken on Chrome 144+ due to removed HTTP discovery endpoints. See [Chrome 147+ Compatibility](#chrome-147-compatibility) for the workaround using `extract-chrome-cookies.py`.
-
-```bash
-# Chrome <144: Auto-discover running Chrome with remote debugging enabled
-agent-browser --auto-connect open https://example.com
-agent-browser --auto-connect snapshot
-
-# Chrome <144: Or with explicit CDP port
-agent-browser --cdp 9222 snapshot
-
-# Chrome 144+: Use cookie extraction instead (see Handling Authentication > Option 1)
-python3 {baseDir}/templates/extract-chrome-cookies.py <domain> <output.json>
-cat <output.json> | agent-browser cookies import
-```
+When only reusable authentication state is needed—not control of the existing
+browser—use [Reuse Chrome Dev Authentication via CDP Cookies](references/authentication.md#reuse-chrome-dev-authentication-via-cdp-cookies)
+instead.
 
 ### Color Scheme (Dark Mode)
 
@@ -603,20 +542,45 @@ agent-browser screenshot device.png
 
 The `scale` parameter (3rd argument) sets `window.devicePixelRatio` without changing CSS layout. Use it when testing retina rendering or capturing higher-resolution screenshots.
 
-**Real-browser zoom / window resize is unreliable under the Background headless-fallback.** When `launchctl managername` is `Background` (SSH, background daemons, spawned sub-agents), `--headed` silently falls back to headless (see the GUI-session note near the top). In that state, zooming with real browser shortcuts (`Cmd/Ctrl +`), resizing the OS window, or anything depending on a real window's DPR does **not** move the observable values — `innerWidth`, `devicePixelRatio`, and `visualViewport` stay fixed even though the commands exit 0. To accept a "user actually zoomed / resized the window" behavior, attach to a real GUI browser over CDP (see the same note); otherwise mark that zoom level **uncovered** — an exit-0 shortcut is not a pass. The CSS size/DPI that `set viewport ... <scale>` emulates is fine for layout screenshots but does not exercise the real zoom path.
+**Zoom/resize limitation:** real-browser zoom and window resize are unreliable under the Background headless-fallback. When `launchctl managername` is `Background` (SSH, background daemons, spawned sub-agents), `--headed` silently falls back to headless (see the GUI-session note near the top). In that state, zooming with real browser shortcuts (`Cmd/Ctrl +`), resizing the OS window, or anything depending on a real window's DPR does not move the observable values — `innerWidth`, `devicePixelRatio`, and `visualViewport` stay fixed even though the commands exit 0. To accept a "user actually zoomed / resized the window" behavior, use [Visible GUI Browser over CDP](#visible-gui-browser-over-cdp); otherwise mark that zoom level uncovered — an exit-0 shortcut is not a pass. The CSS size/DPI that `set viewport ... <scale>` emulates is fine for layout screenshots but does not exercise the real zoom path.
 
 ### Visual Browser (Debugging)
 
+The command surface below works on both visible paths — the
+automation-launched `--headed` browser and a browser controlled over CDP. It can
+open or focus desktop windows; declare that impact as described in Browser Mode
+Selection before using `--headed` or `inspect`. These commands do not by
+themselves satisfy the [Visible Browser Evidence
+Gate](#visible-browser-evidence-gate); a workflow that owes a user acceptance or
+a handoff still passes that gate on the CDP path.
+
 ```bash
+# Automation-launched headed browser
 agent-browser --headed open https://example.com
 agent-browser highlight @e1          # Highlight element
-agent-browser inspect                # Open Chrome DevTools for the active page
+agent-browser inspect                # Open visible DevTools for the active page
 agent-browser record start demo.webm # Record session
 agent-browser profiler start         # Start Chrome DevTools profiling
 agent-browser profiler stop trace.json # Stop and save profile (path optional)
+
+# GUI browser over CDP — per Browser Identity Continuity above
+agent-browser --session human-handoff-<task-id> --cdp 9222 highlight @e1
+agent-browser --session human-handoff-<task-id> --cdp 9222 inspect
+agent-browser --session human-handoff-<task-id> --cdp 9222 record start demo.webm
+agent-browser --session human-handoff-<task-id> --cdp 9222 profiler start
+agent-browser --session human-handoff-<task-id> --cdp 9222 profiler stop trace.json
 ```
 
-Use `AGENT_BROWSER_HEADED=1` to enable headed mode via environment variable. Browser extensions work in both headed and headless mode.
+After Browser Mode Selection chooses automation-launched visible debugging,
+scope any environment override to one command:
+
+```bash
+AGENT_BROWSER_HEADED=1 agent-browser open https://example.com
+```
+
+Do not export `AGENT_BROWSER_HEADED=1` into a shared shell or persist it in
+shared/project configuration. Browser extensions work in both headed and
+headless mode.
 
 ### Local Files (PDFs, HTML)
 
@@ -629,29 +593,7 @@ agent-browser screenshot output.png
 
 ### iOS Simulator (Mobile Safari)
 
-```bash
-# List available iOS simulators
-agent-browser device list
-
-# Launch Safari on a specific device
-agent-browser -p ios --device "iPhone 16 Pro" open https://example.com
-
-# Same workflow as desktop - snapshot, interact, re-snapshot
-agent-browser -p ios snapshot -i
-agent-browser -p ios tap @e1          # Tap (alias for click)
-agent-browser -p ios fill @e2 "text"
-agent-browser -p ios swipe up         # Mobile-specific gesture
-
-# Take screenshot
-agent-browser -p ios screenshot mobile.png
-
-# Close session (shuts down simulator)
-agent-browser -p ios close
-```
-
-**Requirements:** macOS with Xcode, Appium (`npm install -g appium && appium driver install xcuitest`)
-
-**Real devices:** Works with physical iOS devices if pre-configured. Use `--device "<UDID>"` where UDID is from `xcrun xctrace list devices`.
+Mobile Safari on the iOS Simulator or a real device — same snapshot/interact loop, plus `tap` and `swipe`. Setup, requirements and commands: [iOS Simulator (Mobile Safari)](references/platforms.md#ios-simulator-mobile-safari).
 
 ## Security
 
@@ -790,15 +732,15 @@ agent-browser --session agent2 open site-b.com
 agent-browser session list
 ```
 
-Always close your browser session when done to avoid leaked processes:
+Always close your browser pages when done, so they stop holding a live browser:
 
 ```bash
-agent-browser close                    # Close default session
-agent-browser --session agent1 close   # Close specific session
-agent-browser close --all              # Close all active sessions
+agent-browser close                    # Close the pages held by the default session
+agent-browser --session agent1 close   # Close the pages held by one session
+agent-browser close --all              # Close the pages held by every active session
 ```
 
-`close` / `close --all` close browser sessions but do not kill the daemon process itself (verified). If the daemon is stale (about:blank, timeouts on a healthy page, os error 35), `close` won't fix it — see "Troubleshooting: Stale Daemon" for the scoped reset.
+`close` / `close --all` close the browser pages a daemon holds but do not kill the daemon process itself (verified). If the daemon is stale (about:blank, timeouts on a healthy page, os error 35), `close` won't fix it — see "Troubleshooting: Stale Daemon" for the per-session reset.
 
 To auto-shutdown the daemon after a period of inactivity (useful for ephemeral/CI environments):
 
@@ -820,37 +762,9 @@ agent-browser snapshot -i            # MUST re-snapshot
 agent-browser click @e1              # Use new refs
 ```
 
-## Annotated Screenshots (Vision Mode)
+## Annotated Screenshots and Semantic Locators
 
-Use `--annotate` to take a screenshot with numbered labels overlaid on interactive elements. Each label `[N]` maps to ref `@eN`. This also caches refs, so you can interact with elements immediately without a separate snapshot.
-
-```bash
-agent-browser screenshot --annotate
-# Output includes the image path and a legend:
-#   [1] @e1 button "Submit"
-#   [2] @e2 link "Home"
-#   [3] @e3 textbox "Email"
-agent-browser click @e2              # Click using ref from annotated screenshot
-```
-
-Use annotated screenshots when:
-
-- The page has unlabeled icon buttons or visual-only elements
-- You need to verify visual layout or styling
-- Canvas or chart elements are present (invisible to text snapshots)
-- You need spatial reasoning about element positions
-
-## Semantic Locators (Alternative to Refs)
-
-When refs are unavailable or unreliable, use semantic locators:
-
-```bash
-agent-browser find text "Sign In" click
-agent-browser find label "Email" fill "user@test.com"
-agent-browser find role button click --name "Submit"
-agent-browser find placeholder "Search" type "query"
-agent-browser find testid "submit-btn" click
-```
+`screenshot --annotate` overlays numbered boxes on interactive elements and prints a legend mapping each number to its `@ref` — useful when the accessibility tree is ambiguous. Semantic locators (`find text|label|role|placeholder|testid`) address elements without a snapshot, for when refs are unavailable or unreliable. See [Annotated Screenshots (Vision Mode)](references/snapshot-refs.md#annotated-screenshots-vision-mode) and [Semantic Locators](references/snapshot-refs.md#semantic-locators-alternative-to-refs).
 
 ## JavaScript Evaluation (eval)
 
@@ -884,24 +798,14 @@ agent-browser eval -b "$(echo -n 'Array.from(document.querySelectorAll("a")).map
 
 ## Configuration File
 
-Create `agent-browser.json` in the project root for persistent settings:
-
-```json
-{
-  "headed": true,
-  "proxy": "http://localhost:8080",
-  "profile": "./browser-data"
-}
-```
-
-Priority (lowest to highest): `~/.agent-browser/config.json` < `./agent-browser.json` < env vars < CLI flags. Use `--config <path>` or `AGENT_BROWSER_CONFIG` env var for a custom config file (exits with error if missing/invalid). All CLI options map to camelCase keys (e.g., `--executable-path` -> `"executablePath"`). Boolean flags accept `true`/`false` values (e.g., `--headed false` overrides config). Extensions from user and project configs are merged, not replaced.
+Project and user-level defaults (viewport, timeouts, engine, download path) can live in a config file instead of repeated flags — see [Configuration File](references/commands.md#configuration-file).
 
 ## Deep-Dive Documentation
 
 | Reference                                                            | When to Use                                               |
 | -------------------------------------------------------------------- | --------------------------------------------------------- |
-| [references/chrome-dev-setup.md](references/chrome-dev-setup.md)     | Why Chrome Dev is needed and how to create it |
-| [references/commands.md](references/commands.md)                     | Full command reference with all options                   |
+| [references/chrome-dev-setup.md](references/chrome-dev-setup.md)     | Optional Chrome Dev setup for persistent authenticated browsing |
+| [references/commands.md](references/commands.md)                     | Selected command reference; use CLI help for the version-matched full surface |
 | [references/snapshot-refs.md](references/snapshot-refs.md)           | Ref lifecycle, invalidation rules, troubleshooting        |
 | [references/session-management.md](references/session-management.md) | Parallel sessions, state persistence, concurrent scraping |
 | [references/authentication.md](references/authentication.md)         | Login flows, OAuth, 2FA handling, state reuse             |
@@ -909,75 +813,10 @@ Priority (lowest to highest): `~/.agent-browser/config.json` < `./agent-browser.
 | [references/profiling.md](references/profiling.md)                   | Chrome DevTools profiling for performance analysis        |
 | [references/proxy-support.md](references/proxy-support.md)           | Proxy configuration, geo-testing, rotating proxies        |
 
-## Cloud Providers
+## Other Runtimes and Tooling
 
-Use `-p <provider>` (or `AGENT_BROWSER_PROVIDER`) to run against a cloud browser instead of launching a local Chrome instance. Supported providers: `agentcore`, `browserbase`, `browserless`, `browseruse`, `kernel`.
-
-### AgentCore (AWS Bedrock)
-
-```bash
-# Credentials auto-resolved from env vars or AWS CLI (SSO, IAM roles, etc.)
-agent-browser -p agentcore open https://example.com
-
-# With persistent browser profile
-AGENTCORE_PROFILE_ID=my-profile agent-browser -p agentcore open https://example.com
-
-# With explicit region
-AGENTCORE_REGION=eu-west-1 agent-browser -p agentcore open https://example.com
-```
-
-Set `AWS_PROFILE` to select a named AWS profile.
-
-## Browser Engine Selection
-
-Use `--engine` to choose a local browser engine. The default is `chrome`.
-
-```bash
-# Use Lightpanda (fast headless browser, requires separate install)
-agent-browser --engine lightpanda open example.com
-
-# Via environment variable
-export AGENT_BROWSER_ENGINE=lightpanda
-agent-browser open example.com
-
-# With custom binary path
-agent-browser --engine lightpanda --executable-path /path/to/lightpanda open example.com
-```
-
-Supported engines:
-- `chrome` (default) -- Chrome/Chromium via CDP
-- `lightpanda` -- Lightpanda headless browser via CDP (10x faster, 10x less memory than Chrome)
-
-Lightpanda does not support `--extension`, `--profile`, `--state`, or `--allow-file-access`. Install Lightpanda from https://lightpanda.io/docs/open-source/installation.
-
-## Observability Dashboard
-
-The dashboard is a standalone background server that shows live browser viewports, command activity, and console output for all sessions.
-
-```bash
-# Start the dashboard server (background, port 4848)
-agent-browser dashboard start
-
-# All sessions are automatically visible in the dashboard
-agent-browser open example.com
-
-# Stop the dashboard
-agent-browser dashboard stop
-```
-
-The dashboard runs independently of browser sessions on port 4848 (configurable with `--port`). All sessions automatically stream to the dashboard. Sessions can also be created from the dashboard UI with local engines or cloud providers.
-
-### Dashboard AI Chat
-
-The dashboard has an optional AI chat tab powered by the Vercel AI Gateway. Enable it by setting:
-
-```bash
-export AI_GATEWAY_API_KEY=gw_your_key_here
-export AI_GATEWAY_MODEL=anthropic/claude-sonnet-4.6           # optional default
-export AI_GATEWAY_URL=https://ai-gateway.vercel.sh           # optional default
-```
-
-The Chat tab is always visible in the dashboard. Set `AI_GATEWAY_API_KEY` to enable AI responses.
+- **Cloud providers and alternative engines:** AWS Bedrock AgentCore, Lightpanda — [Platforms and Browser Engines](references/platforms.md)
+- **Observability dashboard:** watch live sessions — [Observability Dashboard](references/commands.md#observability-dashboard)
 
 ## Ready-to-Use Templates
 

@@ -10,6 +10,7 @@
 #     <repo>/claude/bin/codeagent-wrapper → ~/.claude/bin/codeagent-wrapper
 #     <repo>/claude/bin/poll-progress.sh  → ~/.claude/bin/poll-progress.sh
 #     <repo>/claude/statusline.sh        → ~/.claude/statusline.sh
+#     <repo>/claude/statusline-fields.py → ~/.claude/statusline-fields.py
 #     <repo>/claude/statusline-transcript.py → ~/.claude/statusline-transcript.py
 #     <repo>/codex/agents/*.toml         → ~/.codex/agents/*.toml
 #     <repo>/claude/skills/agent-browser → ~/.claude/skills/agent-browser
@@ -18,6 +19,7 @@
 #     <repo>/claude/skills/deep-discuss  → ~/.claude/skills/deep-discuss
 #     <repo>/claude/skills/review-gate   → ~/.claude/skills/review-gate
 #     <repo>/claude/skills/tdd-workflow  → ~/.claude/skills/tdd-workflow
+#     <repo>/claude/skills/game-release-loop → ~/.claude/skills/game-release-loop
 #     <repo>/ask-user-mcp                → ~/.codex/ask-user-mcp
 #   Sub-installers:
 #     <repo>/tt-web/install.sh           # localhost token-usage dashboard
@@ -26,7 +28,10 @@
 #     MCP server CLI tools referenced by codex/config.toml
 #     agent-browser
 #   Dependency checks + auto-fix (macOS assumed; interactive y/N prompts):
-#     jq (brew install if missing) — needed by statusline.sh
+#     python3 (brew install if missing) — required by statusline.sh, which delegates
+#                                    all JSON parsing to statusline-fields.py
+#     jq (brew install if missing) — used by this installer to merge settings.json,
+#                                    and by verify.sh for its settings.json checks
 #     ~/.local/bin in PATH (append export to ~/.zshrc / ~/.bashrc / fish config)
 #     codex CLI presence (warn only — OAuth-gated, can't auto-install)
 #     ~/.claude/settings.json statusLine field (add if missing; warn on conflict)
@@ -37,6 +42,9 @@
 # Manual merge required (preserves existing customizations):
 #   <repo>/claude/CLAUDE.md  → merge into ~/.claude/CLAUDE.md
 #   <repo>/codex/AGENTS.md   → merge into ~/.codex/AGENTS.md
+#     (in-repo, codex/AGENTS.md is a symlink to ../claude/CLAUDE.md — one policy
+#      source for both harnesses, so the two can't drift. Both merge targets
+#      therefore carry the same content.)
 #   <repo>/codex/config.toml → merge into ~/.codex/config.toml
 #
 # Symlink policy: if a target path already exists (file, dir, or symlink
@@ -191,20 +199,49 @@ prompt_yes() {
     esac
 }
 
+# jq is no longer a runtime dependency: statusline.sh does all its JSON work in
+# statusline-fields.py. It is still what wire_statusline_settings() uses to merge
+# the statusLine field into an existing ~/.claude/settings.json, so its absence
+# now degrades install-time wiring only — the statusline itself runs fine without it.
 ensure_jq() {
     if command -v jq >/dev/null 2>&1; then
         return 0
     fi
     echo
-    echo "Dependency: jq (required by statusline.sh)"
+    echo "Dependency: jq (used by this installer to merge settings.json)"
     if ! command -v brew >/dev/null 2>&1; then
-        echo "  [WARN] jq not found and brew not available. Install jq manually."
+        echo "  [WARN] jq not found and brew not available. Install jq manually,"
+        echo "         or wire settings.json statusLine by hand (see README)."
         return 0
     fi
     if prompt_yes "jq not found — brew install jq?"; then
         brew install jq
     else
-        echo "  [WARN] Skipped. statusline.sh will fail to write tt-status.json without jq."
+        echo "  [WARN] Skipped. This installer can't auto-wire settings.json statusLine;"
+        echo "         wire it by hand (see README). statusline.sh itself needs only python3."
+    fi
+}
+
+# python3 is load-bearing for the statusline: statusline.sh delegates ALL of its JSON
+# parsing to statusline-fields.py. Without python3 the statusline still exits 0 but
+# every field comes back empty and ~/.claude/tt-status.json stops updating — the exact
+# silent degradation that moving off jq was meant to remove. So check it explicitly
+# rather than letting it fail at render time.
+ensure_python3() {
+    if command -v python3 >/dev/null 2>&1; then
+        return 0
+    fi
+    echo
+    echo "Dependency: python3 (required by statusline.sh via statusline-fields.py)"
+    if ! command -v brew >/dev/null 2>&1; then
+        echo "  [WARN] python3 not found and brew not available. Install python3 manually,"
+        echo "         otherwise the statusline renders empty fields and tt-web loses its quota cards."
+        return 0
+    fi
+    if prompt_yes "python3 not found — brew install python?"; then
+        brew install python
+    else
+        echo "  [WARN] Skipped. statusline.sh will render empty fields and won't write tt-status.json."
     fi
 }
 
@@ -370,11 +407,24 @@ if [ -d "$TDD_WORKFLOW_SKILL" ]; then
     link_one "$TDD_WORKFLOW_SKILL" "$HOME/.claude/skills/tdd-workflow"
 fi
 
+# --- game-release-loop skill (Claude-only; browser-game release gate. disable-model-invocation,
+#     so it only ever runs when named explicitly — no trigger cost for non-game projects) ---
+
+GAME_RELEASE_LOOP_SKILL="$SCRIPT_DIR/claude/skills/game-release-loop"
+
+if [ -d "$GAME_RELEASE_LOOP_SKILL" ]; then
+    echo
+    echo "Installing game-release-loop skill:"
+    link_one "$GAME_RELEASE_LOOP_SKILL" "$HOME/.claude/skills/game-release-loop"
+fi
+
 # --- Claude hooks (symlinked per-file so we never clobber an existing ~/.claude/hooks) ---
-# Only the hook scripts are linked here. Activation requires wiring two entries into
-# ~/.claude/settings.json (PreToolUse:ask-recommend-gate + Stop:desktop-notify) plus
-# ECC_DISABLED_HOOKS="stop:desktop-notify" — the reference shape lives in claude/settings.json
-# and the README 安装 prompt walks Claude Code through the merge.
+# Only the hook scripts are linked here. Activation requires wiring three entries into
+# ~/.claude/settings.json (PreToolUse:ask-recommend-gate + PreToolUse:codeagent-stdin-guard
+# + Stop:desktop-notify) plus ECC_DISABLED_HOOKS="stop:desktop-notify" — the reference shape
+# lives in claude/settings.json and the README 安装 prompt walks Claude Code through the merge.
+# Test files ship alongside so the hooks stay verifiable after install
+# (`cd ~/.claude/hooks && node --test codeagent-stdin-guard.test.js`).
 
 HOOKS_SRC="$SCRIPT_DIR/claude/hooks"
 
@@ -382,7 +432,9 @@ if [ -d "$HOOKS_SRC" ]; then
     echo
     echo "Installing Claude hook scripts (wire into settings.json via the README 安装 prompt):"
     mkdir -p "$HOME/.claude/hooks/lib"
-    for rel in ask-recommend-gate.js desktop-notify.js lib/llm-judge.js lib/utils.js; do
+    for rel in ask-recommend-gate.js desktop-notify.js desktop-notify.test.js \
+               codeagent-stdin-guard.js codeagent-stdin-guard.test.js \
+               lib/llm-judge.js lib/utils.js; do
         src="$HOOKS_SRC/$rel"
         [ -f "$src" ] && link_one "$src" "$HOME/.claude/hooks/$rel"
     done
@@ -417,7 +469,7 @@ fi
 
 # --- statusline scripts (produce ~/.claude/tt-status.json for tt-web) ---
 
-STATUSLINE_FILES=(statusline.sh statusline-transcript.py)
+STATUSLINE_FILES=(statusline.sh statusline-fields.py statusline-transcript.py)
 have_statusline=0
 for f in "${STATUSLINE_FILES[@]}"; do
     [ -f "$SCRIPT_DIR/claude/$f" ] && have_statusline=1 && break
@@ -558,6 +610,7 @@ fi
 
 # --- Dependency validation + settings.json wiring (macOS-assumed) ---
 
+ensure_python3 || true
 ensure_jq || true
 ensure_local_bin_in_path || true
 check_codex_cli || true
@@ -590,6 +643,8 @@ Next steps
    These were NOT auto-symlinked — that would overwrite your
    existing customizations. The README has a one-shot prompt
    you can paste into Claude Code to merge them safely.
+   Note: in this repo codex/AGENTS.md is a symlink to
+   claude/CLAUDE.md, so both merges draw from the same policy text.
 
 2. Verify the install
    Run ./verify.sh for a mechanical check (symlinks, deps,
