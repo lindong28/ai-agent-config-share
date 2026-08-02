@@ -8,6 +8,19 @@
 
 ---
 
+## [open] HARNESS-004 Codex 不认 `disable-model-invocation`，explicit-only 在 Codex 侧只有软约束
+
+- **Type**: improvement
+- **Priority**: medium
+- **Discovered**: 2026-08-02
+- **Component**: `claude/skills/game-release-loop/SKILL.md` / `claude/CLAUDE.md`「Harness 适配」表 skill 行
+- **Description**: `disable-model-invocation: true` 是 Claude Code 专属 frontmatter。skill 现在双向安装到 `~/.codex/skills/` 后，Codex 会照常按 description 自动触发 `game-release-loop`——而该 skill 的设计意图（及 `docs/architecture.md` 的措辞）是"只在被显式点名时进入，非游戏项目零触发成本"。
+- **Root cause**: 上游 `codex/bin/gen-agents-skills.py` 只对 **command wrapper** 生成两层 prose 护栏（description 前缀 `EXPLICIT INVOCATION ONLY — never auto-trigger.` + 正文显式调用段），其 `link_skills()` 对普通 skill 是无条件 symlink、不打护栏——因为上游 `claude/skills/` 下此前没有任何 skill 带这个 flag。`game-release-loop` 是第一个。
+- **影响**: 非游戏项目的 Codex session 可能被这个重流程 skill 勾起。本轮的缓解是把等效约束写进 `CLAUDE.md`「Harness 适配」表（Codex 实际读的就是这份），但那是模型遵守的软约束，不是 loader 级禁止。
+- **状态**: **本次按用户裁决只做软约束**。已评估但未采纳的两个硬化方案：把护栏 prose 写进共享 SKILL.md 正文（一处改动，Claude 侧冗余无害）；或给 Codex 侧生成独立 wrapper 目录（严格隔离，代价是多一份会漂移的生成物 + verify.sh 要改为验内容）。
+- **候选优化**: 若要在 loader 层解决，需 Codex 自身支持等效 frontmatter；在此之前，上述两个方案中的第一个成本最低。
+- **Notes**: 本轮实测:临时 CODEX_HOME 下 `skills/<name>/SKILL.md` 会进 model-visible prompt input；`skills/.<name>/`（点号前缀）不会。点号前缀因此是 Codex 侧可用的隐藏手段，但 Claude Code loader 是否同样跳过未实测，故 `link_one` 的备份改走 `~/.ai-agent-config-share-backups/` 这一 loader 无关路径。
+
 ## [open] HARNESS-002 `codeagent-wrapper … &` 会被 codeagent-stdin-guard 误拦
 
 - **Type**: note

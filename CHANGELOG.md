@@ -2,6 +2,13 @@
 
 > Append-only（最新在前）。仅记录用户可感知的变更。
 
+## 2026-08-02
+
+- 变更：`claude/skills/` 下的**全部** skill 现在同时装到 `~/.claude/skills/` 与 `~/.codex/skills/` —— 此前只有 `agent-browser` 双向 symlink，`create-commit` / `deep-discuss` / `review-gate` / `tdd-workflow` / `game-release-loop` 都只装给 Claude Code，于是 Codex session 里点名 `$game-release-loop` 无法识别，而 `CLAUDE.md` 又把 review-gate（完成前强制底线）与 create-commit（commit 唯一路径）写成两侧同等 BINDING——政策要求的东西在 Codex 侧根本不存在。`~/.codex/skills/` 是 Codex 自带 `skill-installer` 文档的 `$CODEX_HOME/skills` 位置
+- 变更：`install.sh` 与 `verify.sh` 的 skill 处理改为按 `claude/skills/` 目录 glob 驱动，不再各自维护硬编码名单 —— 与两个脚本对 commands / references / agents 已有的做法一致。新增 skill 从此无需改脚本，也不会重演 `deep-discuss` 那种「install.sh 装了、verify.sh 没验」的漏网
+- 修复：`install.sh` 的 `link_one` 在「目标已是普通目录且用户选择覆盖」时会让**整个安装器**中止 —— 该分支执行 `rm "$dst"`，而 `rm` 删不掉目录，脚本又是 `set -euo pipefail`，于是第一个这样的冲突就终止安装、后续步骤一条不跑。这不是边角情形：手动装过 skill 的用户，其 `~/.claude/skills/*` 正是普通目录。现改为把旧目录 `mv` 到 `~/.ai-agent-config-share-backups/<时间戳>/` 下（保留相对 `$HOME` 的原路径结构）再建 symlink——用户选的覆盖真的生效，且不删除任何内容、可自行恢复。备份**不能**留在原地叫 `<name>.bak`：那样它仍在 skill 扫描根内，Codex 会把 `<name>.bak/SKILL.md` 注册成第二个同名 skill（已实测），"覆盖"就变成了新旧两份并存。`[CONFLICT]` 提示也从固定的 "regular file" 改为按实际形态显示 directory
+- 已知限制：`disable-model-invocation` 是 Claude 专属 frontmatter，**Codex 不认** —— 标了它的 `game-release-loop` 在 Claude Code 侧仍是硬强制（只在被点名时进入），在 Codex 侧降为软约束，由 `AGENTS.md`「Harness 适配」表的 skill 行承载。README、`docs/architecture.md` 中「非游戏项目零触发成本」的说法相应限定到 Claude Code 侧
+
 ## 2026-07-30
 
 - 新增：`game-release-loop` skill —— 浏览器游戏的发布闭环（能力门 → 授权门 → 旅程 × 目标覆盖账本 → READY / PARTIALLY VERIFIED / NOT READY 结论），复用 test-ux / create-review-execute-ux-contract / domain-registry / tdd-workflow；附 `claude/skills/game-release-loop/references/game-profile.md` 空白配置档模板（每款游戏在自己仓库里填一份）。带 `disable-model-invocation`，只在被显式点名时运行，非游戏项目无触发成本。install.sh 自动 symlink 到 `~/.claude/skills/game-release-loop`

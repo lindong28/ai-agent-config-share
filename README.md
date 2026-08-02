@@ -6,7 +6,7 @@ Claude Code 和 Codex CLI 的共享 agent 配置，包括 slash commands、行�
 
 它是一套**强观点**的个人配置：核心主张是"改动落地前先过 gate"——先写下可观察的验收标准再实现、代码 / 脚本 / 常驻配置类 artifact 在宣告完成或 commit 前过 review gate（trivial 可显式声明免审）、给用户的每组选项都必须带推荐项。它假定你愿意为质量付出更多轮次和 token，而不是让 agent 一把梭；想要轻量、少约束的配置，这套不合适。具体某个任务该走哪条流程（要不要 spec、要不要 plan、有没有 plan 时怎么监督）见 [docs/command-guide.md](docs/command-guide.md)，那里按场景分了流。
 
-两套 harness 拿到的东西不同：**Claude Code** 拿到全部（commands、skills、hooks、agent 定义、statusline、tt-web）；**Codex CLI** 拿到共享的政策源（`codex/AGENTS.md` 是 `claude/CLAUDE.md` 的 symlink）、`config.toml`、agent 定义与 agent-browser skill，但 hooks 与 slash commands 是 Claude Code 专属。
+两套 harness 拿到的东西不同：**Claude Code** 拿到全部（commands、skills、hooks、agent 定义、statusline、tt-web）；**Codex CLI** 拿到共享的政策源（`codex/AGENTS.md` 是 `claude/CLAUDE.md` 的 symlink）、`config.toml`、agent 定义与全部 skill（装到 `~/.codex/skills/`），但 hooks 与 slash commands 是 Claude Code 专属。
 
 采用方式上，`install.sh` 是整体安装：建 symlink、装 npm 全局包、创建共享 venv、跑 tt-web 与 ask-user-mcp 两个子安装器，并写 `settings.json` 的 statusLine（缺失就直接补，已指向别处则告警不覆盖）、在你同意后往 shell rc 追加 PATH。它**不**覆盖你已有的 `CLAUDE.md` / `AGENTS.md` / `config.toml`——那三个走手动 merge，合什么由你决定。
 
@@ -45,7 +45,7 @@ cd ai-agent-config-share
    - 把 env 里 `ECC_DISABLED_HOOKS` 设为 `stop:desktop-notify`（让本地 desktop-notify 取代 ECC 插件那个）。
    - 改 settings.json 前先给我看将写入的 diff。可选：desktop-notify 在非 Ghostty 终端的 fallback 需要 `terminal-notifier`（macOS `brew install terminal-notifier`），没有也不影响 Ghostty OSC9。
 
-4. install.sh 输出里如有 [WARN] / [CONFLICT] / NOTE（典型：settings.json 已有 statusLine 但指向别处、codex CLI 未装、jq 未装、`GITHUB_PERSONAL_ACCESS_TOKEN` 未设置——GitHub MCP 要它才能用），整理出来问我怎么处理。
+4. install.sh 输出里如有 [WARN] / [CONFLICT] / NOTE（典型：settings.json 已有 statusLine 但指向别处、codex CLI 未装、jq 未装、`GITHUB_PERSONAL_ACCESS_TOKEN` 未设置——GitHub MCP 要它才能用），整理出来问我怎么处理。另外，我如果对某个 [CONFLICT] 选了覆盖，而原位置是个真实目录（手动装过 skill 的话很常见），installer 会把它整个移到 `~/.ai-agent-config-share-backups/<时间戳>/` 下而不是删掉——跑完把出现过的 `[moved aside]` 行汇总给我，我要知道有哪些东西被挪走了。
 ```
 
 ## 验证安装
@@ -78,7 +78,7 @@ cd ai-agent-config-share
 
 装完后在 Claude Code 中输入 `/custom:` 触发 slash command 选择器。具体工作流组合见 [docs/command-guide.md](docs/command-guide.md)。
 
-skill 大多由模型按场景自动触发，无需你记住；`game-release-loop` 是唯一刻意只在被点名时才跑的（它标了 `disable-model-invocation`）。它与 `deep-discuss` 的用途见 [docs/command-guide.md](docs/command-guide.md)。
+skill 大多由模型按场景自动触发，无需你记住；`game-release-loop` 是唯一刻意只在被点名时才跑的（它标了 `disable-model-invocation`）。注意这条只在 Claude Code 侧是硬强制——Codex 不认这个 frontmatter，那边靠 `AGENTS.md`「Harness 适配」表里的对应条目约束，属软约束。它与 `deep-discuss` 的用途见 [docs/command-guide.md](docs/command-guide.md)。
 
 ## tt-web：本地 token usage dashboard
 

@@ -142,12 +142,14 @@ check_symlink_tree "routines"       "$SRC_ROOT/commands/routine"     "$HOME/.cla
 check_symlink_tree "references"     "$SRC_ROOT/references"           "$HOME/.claude/references"       "*.md"
 check_symlink_tree "claude-agents"  "$SRC_ROOT/agents"               "$HOME/.claude/agents"          "*.md"
 check_symlink_tree "codex-agents"   "$SCRIPT_DIR/codex/agents"       "$HOME/.codex/agents"           "*.toml"
-check_symlink      "agent-browser/claude" "$SRC_ROOT/skills/agent-browser" "$HOME/.claude/skills/agent-browser"
-check_symlink      "agent-browser/codex"  "$SRC_ROOT/skills/agent-browser" "$HOME/.codex/skills/agent-browser"
-check_symlink      "create-commit"        "$SRC_ROOT/skills/create-commit" "$HOME/.claude/skills/create-commit"
-check_symlink      "review-gate"          "$SRC_ROOT/skills/review-gate"   "$HOME/.claude/skills/review-gate"
-check_symlink      "tdd-workflow"         "$SRC_ROOT/skills/tdd-workflow"  "$HOME/.claude/skills/tdd-workflow"
-check_symlink      "game-release-loop"    "$SRC_ROOT/skills/game-release-loop" "$HOME/.claude/skills/game-release-loop"
+# Derived from the source dir rather than listed, so a newly added skill cannot end up
+# installed-but-unverified — which is how deep-discuss previously slipped through.
+for skill_src in "$SRC_ROOT/skills"/*/; do
+    [ -f "$skill_src/SKILL.md" ] || continue
+    skill_name="$(basename "$skill_src")"
+    check_symlink  "skills/$skill_name (claude)" "${skill_src%/}" "$HOME/.claude/skills/$skill_name"
+    check_symlink  "skills/$skill_name (codex)"  "${skill_src%/}" "$HOME/.codex/skills/$skill_name"
+done
 check_symlink      "ask-user-mcp"         "$SCRIPT_DIR/ask-user-mcp"       "$HOME/.codex/ask-user-mcp"
 check_symlink      "codeagent-wrapper"    "$SRC_ROOT/bin/codeagent-wrapper" "$HOME/.claude/bin/codeagent-wrapper"
 check_symlink      "statusline.sh"        "$SRC_ROOT/statusline.sh"         "$HOME/.claude/statusline.sh"
@@ -160,8 +162,7 @@ for hook_rel in ask-recommend-gate.js desktop-notify.js desktop-notify.test.js \
                 lib/llm-judge.js lib/utils.js; do
     check_symlink  "hooks/$hook_rel"      "$SRC_ROOT/hooks/$hook_rel"       "$HOME/.claude/hooks/$hook_rel"
 done
-# Previously uncovered despite install.sh linking them.
-check_symlink      "deep-discuss"         "$SRC_ROOT/skills/deep-discuss"   "$HOME/.claude/skills/deep-discuss"
+# Previously uncovered despite install.sh linking it.
 check_symlink      "poll-progress.sh"     "$SRC_ROOT/bin/poll-progress.sh"  "$HOME/.claude/bin/poll-progress.sh"
 
 # ---------- Dependency / PATH checks ----------

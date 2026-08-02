@@ -9,7 +9,7 @@
 | `AskUserQuestion` | 内置工具 | `ask-user` MCP server 的 AskUserQuestion 工具（本仓 `ask-user-mcp/`，装到 `~/.codex/ask-user-mcp`；以当前 tool catalog 为准）。该工具不可用时降级：正文列编号选项并标注推荐项，停轮等待用户回复，不得替用户选 |
 | `/custom:*` slash command | 原生（`~/.claude/commands/custom/`） | **无对应入口**——本仓不给 Codex 安装 command wrapper。文中出现 `/custom:<x>` 的强制路由，在 Codex 侧的处置是：读 `~/.claude/commands/custom/<x>.md` 这份文件并按它描述的流程亲自执行；确实无法达成时明确告知用户该步依赖 Claude Code，不得臆造完成或静默跳过 |
 | 子代理委派（Task / Agent / subagent / spawn） | 内置 Task / Agent 工具 | 内置 collaboration multi-agent 工具；按调用方语义保持角色、上下文隔离、并行与返回契约 |
-| skill 调用 | Skill tool | 本仓只给 Codex 装 `agent-browser`（`~/.codex/skills/agent-browser`）。其余 skill 同上一行 `/custom:*` 的处置——读其 `SKILL.md` 并亲自执行 |
+| skill 调用 | Skill tool | 本仓的 skill 全部装到 `~/.codex/skills/`，用 `$skill-name` 提及或按 description 隐式触发。例外：`disable-model-invocation` 是 Claude 专属 frontmatter，Codex 不认——标了它的 skill（`game-release-loop`）在 Codex 侧只在用户显式点名时进入，不因 description 匹配自动跑 |
 | hooks 强制层 | 自动执行（`~/.claude/hooks/` + settings.json 接线） | 仅 Claude Code；Codex 忽略 hook mechanics。两侧都必须遵守的 invariant 由本文件或双方可达的 reference 明确承载，不从 hook 实现反推 |
 | 任务清单 | TaskCreate / TodoWrite | 内置 plan 工具 |
 | 上表未列出的 Claude 专属工具 | 原生 | 无直接对应——用 Codex 原生机制达成同一目的；确实无法达成时明确告知用户该步依赖 Claude Code |

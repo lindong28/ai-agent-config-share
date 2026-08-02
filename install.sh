@@ -13,13 +13,8 @@
 #     <repo>/claude/statusline-fields.py → ~/.claude/statusline-fields.py
 #     <repo>/claude/statusline-transcript.py → ~/.claude/statusline-transcript.py
 #     <repo>/codex/agents/*.toml         → ~/.codex/agents/*.toml
-#     <repo>/claude/skills/agent-browser → ~/.claude/skills/agent-browser
-#                                      → ~/.codex/skills/agent-browser
-#     <repo>/claude/skills/create-commit → ~/.claude/skills/create-commit
-#     <repo>/claude/skills/deep-discuss  → ~/.claude/skills/deep-discuss
-#     <repo>/claude/skills/review-gate   → ~/.claude/skills/review-gate
-#     <repo>/claude/skills/tdd-workflow  → ~/.claude/skills/tdd-workflow
-#     <repo>/claude/skills/game-release-loop → ~/.claude/skills/game-release-loop
+#     <repo>/claude/skills/*/            → ~/.claude/skills/*
+#                                        → ~/.codex/skills/*
 #     <repo>/ask-user-mcp                → ~/.codex/ask-user-mcp
 #   Sub-installers:
 #     <repo>/tt-web/install.sh           # localhost token-usage dashboard
@@ -66,6 +61,12 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SRC_ROOT="$SCRIPT_DIR/claude"
 DST_ROOT="$HOME/.claude"
+
+# Where link_one parks a target it displaces. Deliberately outside every scan root:
+# a backup left next to the original would still be discovered — Codex registers
+# ~/.codex/skills/<name>.bak/SKILL.md as a second skill with the same name (verified),
+# so "overwrite" would silently leave the old version competing with the new one.
+BACKUP_ROOT="$HOME/.ai-agent-config-share-backups/$(date +%Y%m%d-%H%M%S)"
 
 if [ ! -d "$SRC_ROOT" ]; then
     echo "ERROR: source dir not found: $SRC_ROOT" >&2
@@ -149,13 +150,37 @@ link_one() {
     fi
 
     if [ -e "$dst" ]; then
-        if prompt_overwrite "$dst" "regular file"; then
-            rm "$dst"
+        local kind="regular file"
+        if [ -d "$dst" ]; then
+            kind="directory"
+        fi
+        if prompt_overwrite "$dst" "$kind"; then
+            if [ -d "$dst" ]; then
+                # `rm` cannot remove a directory, and `set -e` would abort the whole
+                # installer mid-run. Move it aside instead — nothing is destroyed, and
+                # the user can restore or delete the backup afterwards. It goes under
+                # BACKUP_ROOT rather than beside the original: see that variable.
+                local backup
+                case "$dst" in
+                    "$HOME"/*) backup="$BACKUP_ROOT/${dst#"$HOME"/}" ;;
+                    *)         backup="$BACKUP_ROOT/${dst##*/}" ;;
+                esac
+                local n=1
+                while [ -e "$backup" ] || [ -L "$backup" ]; do
+                    backup="$backup.$n"
+                    n=$((n + 1))
+                done
+                mkdir -p "$(dirname "$backup")"
+                mv "$dst" "$backup"
+                echo "  [moved aside] $dst -> $backup"
+            else
+                rm "$dst"
+            fi
             ln -s "$src" "$dst"
             echo "  [overwritten] $dst"
             overwritten=$((overwritten + 1))
         else
-            echo "  [SKIP — kept existing file] $dst"
+            echo "  [SKIP — kept existing $kind] $dst"
             skipped=$((skipped + 1))
         fi
         return
@@ -356,67 +381,24 @@ if [ -d "$CODEX_AGENTS_SRC" ]; then
     done < <(find "$CODEX_AGENTS_SRC" -type f -name '*.toml' -print0)
 fi
 
-# --- Agent-browser skill (symlink entire directory to both tools) ---
+# --- Skills (every skill directory symlinked into both harnesses) ---
+# Glob-driven like link_tree() above, so adding a skill needs no edit here — and
+# verify.sh derives its checks from the same listing, which is how deep-discuss
+# previously ended up installed but unverified.
+#
+# Codex reads user skills from ~/.codex/skills (the CODEX_HOME/skills path its own
+# skill-installer documents). Caveat: it does not honour Claude's
+# `disable-model-invocation` frontmatter, so game-release-loop is explicit-invocation-
+# only on the Claude side; in Codex it can auto-trigger off its description.
 
-AGENT_BROWSER_SKILL="$SCRIPT_DIR/claude/skills/agent-browser"
-
-if [ -d "$AGENT_BROWSER_SKILL" ]; then
+for skill_src in "$SRC_ROOT/skills"/*/; do
+    [ -f "$skill_src/SKILL.md" ] || continue
+    skill_name="$(basename "$skill_src")"
     echo
-    echo "Installing agent-browser skill:"
-    link_one "$AGENT_BROWSER_SKILL" "$HOME/.claude/skills/agent-browser"
-    link_one "$AGENT_BROWSER_SKILL" "$HOME/.codex/skills/agent-browser"
-fi
-
-# --- create-commit skill (Claude-only; referenced by /custom:execute-plan) ---
-
-CREATE_COMMIT_SKILL="$SCRIPT_DIR/claude/skills/create-commit"
-
-if [ -d "$CREATE_COMMIT_SKILL" ]; then
-    echo
-    echo "Installing create-commit skill:"
-    link_one "$CREATE_COMMIT_SKILL" "$HOME/.claude/skills/create-commit"
-fi
-
-# --- deep-discuss skill (Claude-only; tradeoff discussion, no plan.md) ---
-
-DEEP_DISCUSS_SKILL="$SCRIPT_DIR/claude/skills/deep-discuss"
-
-if [ -d "$DEEP_DISCUSS_SKILL" ]; then
-    echo
-    echo "Installing deep-discuss skill:"
-    link_one "$DEEP_DISCUSS_SKILL" "$HOME/.claude/skills/deep-discuss"
-fi
-
-# --- review-gate skill (post-generation review gate before completion/commit) ---
-
-REVIEW_GATE_SKILL="$SCRIPT_DIR/claude/skills/review-gate"
-
-if [ -d "$REVIEW_GATE_SKILL" ]; then
-    echo
-    echo "Installing review-gate skill:"
-    link_one "$REVIEW_GATE_SKILL" "$HOME/.claude/skills/review-gate"
-fi
-
-# --- tdd-workflow skill (Claude-only; TDD RED→GREEN discipline, referenced by execute-ux-contract) ---
-
-TDD_WORKFLOW_SKILL="$SCRIPT_DIR/claude/skills/tdd-workflow"
-
-if [ -d "$TDD_WORKFLOW_SKILL" ]; then
-    echo
-    echo "Installing tdd-workflow skill:"
-    link_one "$TDD_WORKFLOW_SKILL" "$HOME/.claude/skills/tdd-workflow"
-fi
-
-# --- game-release-loop skill (Claude-only; browser-game release gate. disable-model-invocation,
-#     so it only ever runs when named explicitly — no trigger cost for non-game projects) ---
-
-GAME_RELEASE_LOOP_SKILL="$SCRIPT_DIR/claude/skills/game-release-loop"
-
-if [ -d "$GAME_RELEASE_LOOP_SKILL" ]; then
-    echo
-    echo "Installing game-release-loop skill:"
-    link_one "$GAME_RELEASE_LOOP_SKILL" "$HOME/.claude/skills/game-release-loop"
-fi
+    echo "Installing $skill_name skill:"
+    link_one "${skill_src%/}" "$HOME/.claude/skills/$skill_name"
+    link_one "${skill_src%/}" "$HOME/.codex/skills/$skill_name"
+done
 
 # --- Claude hooks (symlinked per-file so we never clobber an existing ~/.claude/hooks) ---
 # Only the hook scripts are linked here. Activation requires wiring three entries into
