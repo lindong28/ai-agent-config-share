@@ -1,7 +1,7 @@
 ---
 name: review-agent-rules
-description: 审计并按需修复目标项目实际生效的 CLAUDE.md / AGENTS.md 规则栈，包括冲突、遮蔽、死引用、workspace 合规、over-rigor、capability/least-privilege 与无独立风险保证的重复工作。单文件写作质量走 review-claude-md，session 行为复盘走 review-session-skills。
-argument-hint: "[project-root | 空=当前项目]"
+description: 审计并按需修复目标项目实际生效的 CLAUDE.md / AGENTS.md 规则栈。这是指令栈冗余治理的入口——规则越加越多时用它盘一次：无独立风险保证的重复摄入、冲突、遮蔽、死引用、内容与宿主 scope 错位、永不生效的规则与孤儿条目、常驻预算不相称、over-rigor、capability/least-privilege、workspace 合规。单文件写作质量走 review-claude-md；session 行为复盘走 review-session-skills。
+argument-hint: "[project-root | 空=当前项目] [focus=<涉事规则/文件清单>]"
 disable-model-invocation: true
 ---
 
@@ -12,7 +12,8 @@ disable-model-invocation: true
 | 项目 | 契约 |
 |---|---|
 | 目标项目 | `$ARGUMENTS` 为空时取当前项目根；非空时解析为目标项目绝对根。下文“目标项目”均指该绑定 |
-| 默认范围 | 目标项目，以及从项目根向上到 user scope 实际生效的 CLAUDE.md / AGENTS.md、它们引用的 rules / references，和同层级 harness settings（`settings.json` / `settings.local.json`——其 hooks / permissions 条目同属生效规则） |
+| 定向模式 | `focus=<涉事规则/文件清单>` 给出时，审计范围收窄为该清单的加载 / 遮蔽 / 冲突 / 冗余 / 死引用核查，外加 caller 点名的问题类型对应的核查（如点名权限过授则对该清单跑 capability 相称性）；跳过全栈还原与未点名的默认扫描。定向核查可在隔离 readonly context 执行，findings 交调用方裁决；用户选中后的修复仍按本节「决策、修复与复验」在主线程照原文执行 |
+| 默认范围 | 目标项目，以及从项目根向上到 user scope 实际生效的 CLAUDE.md / AGENTS.md、它们引用的 rules / references，和同层级 harness settings（`settings.json` / `settings.local.json`——其 hooks / permissions 条目同属生效规则）。另含上述 scope 内 rules / references **目录的实际文件清单**：范围若只由「被引用到」定义，孤儿条目就永远不在候选集里，而它正是 `unreachable rule` 要找的东西 |
 | 审查对象 | 规则本身的矛盾、漂移、死引用、遮蔽关系、`token / workflow inefficiency`（含指令层 rigor 与 stakes 的相称性）、静态 transport 的 `capability / least-privilege` 相称性，以及可机械验证规则与 workspace 实践的符合性 |
 | 不负责 | 单个 CLAUDE.md / AGENTS.md 的通用写作质量（`/custom:review-claude-md`）；当前 session 中 harness artifact 的异常行为归因（`/custom:review-session-skills`）；项目产品文档同步（`/custom:sync-docs`）；plan.md 实例的 `(A,V)` 相称性（`/custom:review-plan`） |
 
@@ -42,7 +43,7 @@ disable-model-invocation: true
 | 消费方（实际接收 context 或执行工作者） | 必需 | `value / unresolved` |
 | 重复成本落点 | 条件 | 重复形 finding 必需记 `value / unresolved`；over-rigor / capability 等无重复子类记 `N/A` |
 | 各重复单元及其独立风险保证 | 条件 | 重复形 finding 必需记 `value / unresolved`（含独立风险 contract 与验证强度）；over-rigor / capability 等无重复子类记 `N/A` |
-| 无损替代路径 | 必需 | `value / unresolved`；说明改动（重复形删除/合并、over-rigor 降档、capability 去权 / 降 transport 档）后由谁承接每项保证 |
+| 无损替代路径 | 必需 | `value / unresolved`；说明改动（重复形删除/合并、over-rigor 降档、capability 去权 / 降 transport 档、常驻内容下沉到按需加载载体）后由谁承接每项保证 |
 | 承重证据 | 必需 | `value / unresolved`；包含 locator、snapshot / observed_at、当前适用性复核或失效边界 |
 | caller / gate 路径 | 条件 | 存在记 `value`，不存在记 `N/A`，应存在但无法核实记 `unresolved` |
 | 影响依据 | 必需 | 有 telemetry 才能记 `measured`，否则记 `projected` |
@@ -60,7 +61,7 @@ disable-model-invocation: true
 
 ### 1. 还原生效规则栈
 
-按当前 harness 的加载与遮蔽语义，从 user scope 到目标项目识别真正生效的指令文件；项目同时存在 CLAUDE.md 与 AGENTS.md 时，按 harness 适配规则补读被遮蔽但仍有约束力的文件。跟随规则文件中会改变执行行为的引用，记录每条规则的来源与适用范围。
+按当前 harness 的加载与遮蔽语义，从 user scope 到目标项目识别真正生效的指令文件；项目同时存在 CLAUDE.md 与 AGENTS.md 时，按 harness 适配规则补读被遮蔽但仍有约束力的文件。跟随规则文件中会改变执行行为的引用，记录每条规则的来源与适用范围。跟随之后把引用边**反转**一次，与范围内的目录清单比对：清单里无任何入口的条目记 `unreachable rule`。**入口不等于引用边**——`rules/` 下带 `paths` frontmatter 的文件由 harness 按路径条件原生加载，零入站引用是它的正常形态，按引用边判会把它们整批误报为孤儿。
 
 **两个相称性检查默认执行**（无需触发信号，均为静态编码的廉价核查）：(a) capability/least-privilege——静态 transport（spawn 子 agent / 外部 program 的权限档）授予的运行时权力是否与任务所需相称；(b) over-rigor——mandate 的 assurance 是否超出 stakes 所需档位（判据均见 §3）。更重的**重复 / 成本拓扑还原**仍**按触发门**：用户明确要求效率审计或初扫出现重复迹象时，再为候选链路补消费方、加载生命周期 / 触发条件 / 重复频率，还原 `context / workflow 成本拓扑`。
 
@@ -79,7 +80,9 @@ disable-model-invocation: true
 | `practice violation` | 规则清晰且仍有效，workspace 实践违反它 |
 | `stale rule` | 规则描述的对象已退役，或权威事实已改变；不能仅凭“多数项目都没遵守”判旧规则过时 |
 | `conflict / shadowing` | 同一适用范围内的规则互相矛盾，或加载遮蔽让预期规则实际不生效 |
-| `dead reference` | 规则指向不存在或不可解析的文件、section、命令或路径 |
+| `dead reference` | 规则指向不存在或不可解析的文件、section、命令或路径；**也含指得到却指不准**——按该指针的描述去找，最直白的命中不是它想要的那处（描述性指路而非引用真实 heading 时的典型） |
+| `scope mismatch` | 内容住在一个读者会据宿主的**文件名 / 首句 / 加载层级**判定「不适用于我此刻」的地方，于是它在最该生效的相位被跳过。判据是宿主的 scope 声明与内容实际适用面之间的差，不是内容本身好坏。与 `unreachable rule` 的区别：这里内容**确实被加载**了，只是读者判它不适用；那里是结构上就进不来。危害轴是覆盖而非成本——窄场景内容占着常驻预算那一面归 `token / workflow inefficiency` 的常驻预算子类 |
+| `unreachable rule` | 规则或路由的触发条件在结构上无法被满足，于是它永远不生效。典型是**触发信号与治理对象的可观测性不匹配**——要求某类问题先在运行时暴露才启动检查，而那类问题恰恰是静态的、不会产生运行时证据；或该条目没有任何入口指向它（反向死引用：文件在、无人 route 进来）。与 `conflict / shadowing` 的区别：那是**另有规则**把它压住，去掉那条它就生效；这里没有对手，是门本身打不开。与 `stale rule` 的区别：对象没退役、规则也没写错 |
 | `token / workflow inefficiency` | 同一消费方重复摄入等价规则 / context，或同一对象与风险 contract 被重复 review、test、judge、轮询或重跑，却没有独立风险保证；或某规则 / 指令 mandate 的 rigor 超出其治理对象 stakes / 可逆性所需档位（`~/.claude/references/rigor-tiers.md` proportionality invariant），即便无重复 |
 | `capability / least-privilege 违规` | 规则栈 route 进的 work-driving command / skill 的静态 transport 授予执行工作者超出任务所需的运行时权力（sandbox / approval / kill / FS-write 档）；危害轴是共享宿主 / 并发 session 的 blast-radius，与 inefficiency 正交（判据见下 capability 段）|
 | `unresolved` | 当前机器、权限或证据不足以判断；保留缺失证据，不猜结论 |
@@ -89,6 +92,8 @@ finding 必须给出规则原文位置、验证动作/事实和影响。没有 f
 `token / workflow inefficiency` 与 `capability / least-privilege 违规` finding 必须满足“效率候选记录”的证据门。重点检查 ownership 不清、兼容 contract / charter 未合并或证据无失效边界造成的重复 model work。文件长、调用多或措辞相似本身都不是 finding；不能证明无损替代时保留现状。
 
 **over-rigor 子类**（只判 over 方向）不要求“重复”：其判据是 `~/.claude/references/rigor-tiers.md` 的 proportionality invariant。审计对象是规则栈 route 进的 work-driving command / skill 里**静态编码**的 rigor（不止 CLAUDE.md 散文）；**不含**这些 command / skill 产出的 plan.md 实例的 `(A,V)` 相称性，也不含某 session 观测到的运行时 rigor（分属 review-plan 与 review-session-skills）。效率候选记录中 `重复成本落点`、`各重复单元及其独立风险保证` 记 `N/A`，`消费方` 记承担过度 rigor 的执行工作者，disposition 证据门里的“inefficiency 成立”读作“rigor 过度成立”。降档修复须证明无损替代：降到相称档位后由谁承接每项真实风险保证，不弱化实际保护；证明不了则 `retain`。
+
+**常驻预算子类**（同样不要求"重复"）：只在窄场景适用的内容占着**常驻**位置——每轮进 context、极少命中。它与 over-rigor 同属"无重复的成本子类"，故走同一套证据门：`重复成本落点`、`各重复单元及其独立风险保证` 记 `N/A`，`消费方` 记每轮摄入它的 context，disposition 里的"inefficiency 成立"读作"常驻不相称成立"。无损替代是下沉到按需加载的载体并留下路由指针；证明不了由谁承接原有的触达保证就 `retain`——常驻位删一段是不可逆且高杠杆的，而"很少命中"本身不构成 finding（同 `文件长、调用多`）。
 
 **capability / least-privilege**（`capability / least-privilege 违规` 分类的判据详情）：判据同为 proportionality（相称性），但维度是**执行工作者被授予的运行时权力**（sandbox / kill / FS-write 档），而非施加于被改 unit 的 authorization+verification 机制强度 (A,V)——审计 spawn 子 agent / 外部 program 时的静态 transport 权限档是否超出该任务实际所需。缺陷方向**同为 over（过授）**：least-privilege 只判过授（欠授只是功能 bug、不在本命令 scope）。与 over-rigor 的区别在**危害轴**——over-rigor 浪费的是 assurance 努力，capability 过授则弱化共享宿主 / 并发 session 的 blast-radius 保护（如只读任务拿到 full-capability transport）。**审计边界、效率候选记录映射、无损替代证明门均同 over-rigor 子类**（将“rigor 过度”读作“能力过授”，`消费方` 为被过授的执行工作者）；capability 特有的无损替代如“只读评审改用只读 FS + 仅 /tmp 写、去除 kill”，证明不了则 `retain`。
 
@@ -109,15 +114,17 @@ finding 必须给出规则原文位置、验证动作/事实和影响。没有 f
 
 **finding 的 scope（项目 vs user）不改变可动作性**：user-scope / 跨项目共享的载体（user CLAUDE.md 及其 references、user-level skill / command、被规则栈 route 进的共享 wrapper / transport）与项目载体一样，成立即按下方落点修——**不得**因「是 user-level / 共享 / 会波及别的项目」把它排除、延到「另一次 user-scope review」或降格为只观察；共享载体 blast-radius 更大（波及所有项目），更该修。
 
-修复后按落点进入 owning workflow：
+修复后按落点进入 owning workflow。**这张表是 harness artifact 修复落点的通用权威**，消费者不止本命令（`fix-skill-from-session` 也指向它）。它要覆盖的类型集是：CLAUDE.md / AGENTS.md、principles、skill、command、agent 定义、`rules/` 规则文件、其他 reference、script、hook、settings、harness 适配层——收窄任何一行前先确认这些仍各有落点：
 
 | 落点 | Owning workflow |
 |---|---|
 | CLAUDE.md / AGENTS.md（symlink 审其实际 source） | `/custom:review-claude-md` |
 | principles 文件 | `/custom:review-skill` |
-| skill、command、其他 reference | `/custom:review-skill` |
+| skill、command、agent 定义、`rules/` 下的规则文件、其他 reference | `/custom:review-skill` |
 | 项目 README / CHANGELOG / docs/ | 以目标项目为 `target_repo`，将 finding、规则来源、修复 diff 与原验证证据作为改动语境 / 源证据，按 `sync-docs.md`「被 supervisor 编排复用」执行完整 recipe |
-| script、hook、配置或其他文件 | 相关测试 + 生成后 review gate |
+| hook **配置**（`settings.json` / `settings.local.json` 及 plugin 的 `hooks/hooks.json` 里的 hooks 段） | 本仓未收录专审 hook 配置的 `/custom:review-hooks`：按 event / matcher / id / command 四项逐条核对接线是否真会触发（`verify.sh` 的 settings.json hook 检查即此判据），再走生成后 review gate |
+| script、hook **脚本本体**、settings 其余部分或其他文件 | 相关测试 + 生成后 review gate |
+| 一次改动同时碰配置与脚本本体 | 两条都走，先定配置语义（接线会不会触发）再验脚本行为 |
 | symlink / 目录结构等 filesystem 状态 | 重新运行原验证 |
 
 `owning workflow` 每次结果 / 状态回传后，只要本次路径的实际落地 diff 相对上次已检查证据发生变化，就对修复基线重做上述风险检查；未变化时复用已有检查结论与授权边界。若发现新问题或新增 / 扩大 `regression` 风险，不得进入终态或把已落地风险 diff 当作 `retain`：能与其他改动安全分离时先撤销本命令改动、恢复修复基线，再把重新应用视为新的拟议 fix 按本节“风险检查结果”表裁决；无法安全恢复时以 `unresolved` 停止并回传实际落地 diff 与阻碍，不自行追加 edit。

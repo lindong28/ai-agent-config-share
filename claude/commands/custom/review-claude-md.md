@@ -21,7 +21,7 @@ description: 审查并修复单个项目级或 user-level CLAUDE.md / AGENTS.md 
 
 先确定 source 的实际 consumer 集合及 project / user loading scope，并保留入口与链路作为 scope evidence；同一 source 有多个加载入口时合并其 consumer。无法确认 scope 时报告 `unresolved`，不要猜测或进入修复。
 
-将 principles 按 `max-principle-per-subagent` 均匀分组，每组 spawn 一个 general-purpose subagent **并行**审查。值越小，每条原则获得越多注意力。
+将 principles 按 `max-principle-per-subagent` 均匀分组，每组 spawn 一个 `general-purpose-readonly` subagent **并行**审查。值越小，每条原则获得越多注意力。spawn 时**不传 `name`**——判据见 `~/.claude/references/delegation-policy.md` §Harness transport。
 
 每个 subagent 的输入：
 - `~/.claude/references/claude-md-review-principles.md`（传完整文件——相邻原则提供边界上下文，帮助 subagent 避免报告属于其他组的发现；明确告知只应用分配给该 subagent 的那几条 principle）

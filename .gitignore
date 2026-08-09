@@ -5,3 +5,6 @@
 # pytest lands this at the repo root, because tt-web/README.md documents running
 # the suite from here (`pytest tt-web/tests`) rather than from tt-web/.
 .pytest_cache/
+
+# EnterWorktree 的受管落点——建在这里的树不是仓库内容
+.claude/worktrees/

@@ -1,13 +1,30 @@
 #!/usr/bin/env node
 /**
- * Desktop Notification Hook (Stop · Notification · PreToolUse:AskUserQuestion)
+ * Desktop Notification Hook (Notification · ask-recommend-gate)
  *
  * Notifies when Claude needs the user's attention:
- *   - Stop                            → a turn finished        ("[project] <summary>")
+ *   - Notification/idle_prompt        → a turn finished        ("[project] <summary>")
  *   - Notification/permission_prompt  → waiting to approve     ("[project] 🔐 …")
- *   - PreToolUse/AskUserQuestion      → waiting for a choice   ("[project] ❓ 等你选择 · …")
- * Only permission_prompt Notifications fire; idle_prompt/auth_success/elicitation_*
- * are ignored (idle_prompt would double up with the Stop notification).
+ *   - AskUserQuestion                 → waiting for a choice   ("[project] ❓ 等你选择 · …")
+ * auth_success/elicitation_* are ignored — not attention-worthy.
+ *
+ * "A turn finished" deliberately reads idle_prompt and NOT the Stop event, even
+ * though Stop is the event literally named "Claude finished responding". Hooks
+ * matching one event all run in PARALLEL, so a Stop-registered notifier fires
+ * before its siblings have ruled: stop-gate.js can exit 2 and force the turn to
+ * continue, and ECC's stop-format-typecheck can keep the terminal busy for
+ * minutes afterwards. Both produce the same defect — a notification that pulls
+ * the user to a tab still visibly working. idle_prompt is emitted by the CLI
+ * itself only once nothing is loading, no tool is pending, no /loop is running,
+ * and the user has not touched the terminal since the last message, so it
+ * cannot fire mid-work no matter what hooks are registered. Its cost is the
+ * `messageIdleNotifThresholdMs` delay (a ~/.claude.json global-config key,
+ * pinned low in this repo's claude.json — the 60000 default is far too slow).
+ *
+ * Correspondingly the AskUserQuestion notification is NOT registered on
+ * PreToolUse: it is emitted by ask-recommend-gate.js on its allow path, since
+ * that gate can deny the call outright and a parallel notifier would announce a
+ * question the user is never shown.
  *
  * Two backends, in priority order:
  *
@@ -36,7 +53,9 @@
  * Tab title and bell are intentionally NOT handled here — ghostty-tab-title.sh
  * owns the tab indicator. This hook only emits the desktop notification.
  *
- * Hook ID : stop:desktop-notify
+ * Hook ID : stop:desktop-notify (historical — the ECC registration under that id
+ *           stays disabled via ECC_DISABLED_HOOKS; this copy is invoked from
+ *           settings.json's Notification event and from ask-recommend-gate.js)
  * Profiles: standard, strict
  */
 
@@ -46,6 +65,7 @@ const { spawnSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const { log } = require('./lib/utils');
+const { lastAssistantMessage } = require('./lib/transcript');
 
 const MAX_BODY_LENGTH = 100;
 const ACTIVATE_BUNDLE_ID = 'com.mitchellh.ghostty';
@@ -122,18 +142,37 @@ function isCharDevice(devPath) {
  * alone made the walk return the bogus path "/dev/?" and silently drop every
  * notification on Linux. Opening with O_WRONLY (not 'w', which adds O_CREAT)
  * keeps a future bad path from *creating* the file it names.
+ *
+ * The walk shares ONE deadline rather than giving each `ps` its own timeout.
+ * Per-call timeouts multiply: 12 hops × 2 calls × 2 s is a 48 s worst case,
+ * which blows past every hook timeout this file runs under and — since
+ * ask-recommend-gate.js now calls run() inside its own budget — could get that
+ * hook hard-killed instead of failing open. A healthy `ps` returns in
+ * milliseconds, so a whole-walk budget costs nothing in the normal case and
+ * caps the pathological one.
  */
+const TTY_WALK_BUDGET_MS = 3000;
+
 function findTTY() {
   try {
     fs.closeSync(fs.openSync('/dev/tty', DEVICE_FLAGS));
     return '/dev/tty';
   } catch {}
 
+  const deadline = Date.now() + TTY_WALK_BUDGET_MS;
+  const ps = args => {
+    const left = deadline - Date.now();
+    if (left <= 0) return null;
+    return (spawnSync('ps', args, { encoding: 'utf8', timeout: left }).stdout || '').trim();
+  };
+
   let pid = process.ppid;
   for (let i = 0; i < 12 && pid > 1; i++) {
-    const tty = (spawnSync('ps', ['-o', 'tty=', '-p', String(pid)], { encoding: 'utf8', timeout: 2000 }).stdout || '').trim();
+    const tty = ps(['-o', 'tty=', '-p', String(pid)]);
+    if (tty === null) break;
     if (tty && isCharDevice(`/dev/${tty}`)) return `/dev/${tty}`;
-    const ppid = (spawnSync('ps', ['-o', 'ppid=', '-p', String(pid)], { encoding: 'utf8', timeout: 2000 }).stdout || '').trim();
+    const ppid = ps(['-o', 'ppid=', '-p', String(pid)]);
+    if (ppid === null) break;
     pid = parseInt(ppid, 10) || 0;
   }
   return null;
@@ -173,7 +212,7 @@ function osc9(body, viaPassthrough) {
  * empty exactly when the session is truly detached.
  *
  * Twin of tmux_client_ttys() in ghostty-tab-title.sh: same algorithm, same
- * load-bearing guard, both on the Stop path. Change one, change the other.
+ * load-bearing guard, both on the Notification path. Change one, change the other.
  */
 function tmuxClientTTYs() {
   const pane = process.env.TMUX_PANE;
@@ -254,13 +293,18 @@ function notifyTerminalNotifier(project, body) {
 }
 
 /**
- * Mosh is not a byte-transparent transport and drops OSC 9. Hand the original
- * Stop payload to the agent-desktop-notify relay (installed by this repo's
+ * Mosh is not a byte-transparent transport and drops OSC 9. Hand the turn-ended
+ * payload to the agent-desktop-notify relay (installed by this repo's
  * agent-desktop-notify/; the SSH trust fabric stays in system-config), which
  * independently proves that the active tmux client descends from mosh-server
  * before contacting the MacBook.
+ *
+ * The relay's --claude mode builds its own title/body from `cwd` and
+ * `last_assistant_message`, so the caller normalizes idle_prompt's payload into
+ * that shape rather than forwarding it verbatim — idle_prompt carries neither
+ * field's content, and an un-normalized forward would relay an empty body.
  */
-function notifyMoshRelay(raw) {
+function notifyMoshRelay(payload) {
   const executable = path.join(process.env.HOME || '', '.local', 'bin', 'agent-desktop-notify');
   try {
     fs.accessSync(executable, fs.constants.X_OK);
@@ -268,7 +312,7 @@ function notifyMoshRelay(raw) {
     return;
   }
   const result = spawnSync(executable, ['--claude'], {
-    input: raw,
+    input: payload,
     encoding: 'utf8',
     stdio: ['pipe', 'ignore', 'pipe'],
     timeout: 8000,
@@ -288,17 +332,52 @@ function clip(s, n = ATTENTION_MAX) {
 }
 
 /**
+ * Whether this payload means "the turn is over" — the signal the Mosh relay and
+ * the summary body are both keyed on. Stop is still honoured for a payload that
+ * arrives on that event (nothing in this repo registers it any more, but the
+ * ECC hook id stop:desktop-notify can), so this stays a two-source predicate.
+ *
+ * That compatibility branch is also a footgun: re-registering this file on Stop
+ * reinstates exactly the premature notification described in the header, since
+ * Stop fires before stop-gate.js has ruled. Keep the registration on
+ * Notification; the branch exists so an externally-driven Stop payload still
+ * produces a sane body, not as an invitation to wire it back up.
+ */
+function isTurnEnd(input) {
+  if (input.hook_event_name === 'Notification') return input.notification_type === 'idle_prompt';
+  return input.tool_name !== 'AskUserQuestion';
+}
+
+/**
+ * The agent's closing message. Stop hands it over inline; idle_prompt does not
+ * (its `message` is the fixed string "Claude is waiting for your input"), so
+ * there the transcript is the only source. Returns null when unavailable —
+ * extractSummary degrades that to "Done" rather than suppressing the
+ * notification, since a body-less "your turn ended" still beats silence.
+ */
+function turnEndText(input) {
+  if (typeof input.last_assistant_message === 'string') return input.last_assistant_message;
+  if (!input.transcript_path) return null;
+  try {
+    return lastAssistantMessage(input.transcript_path);
+  } catch (err) {
+    log(`[DesktopNotify] transcript read failed: ${err.message}`);
+    return null;
+  }
+}
+
+/**
  * Build the notification body for whichever event fired, or null to stay silent.
  *
- *   PreToolUse/AskUserQuestion      → "[project] ❓ 等你选择 · <header>"
+ *   AskUserQuestion                 → "[project] ❓ 等你选择 · <header>"
  *   Notification/permission_prompt  → "[project] 🔐 <message>"
- *   Stop (default)                  → "[project] <first-line summary>"
+ *   Notification/idle_prompt        → "[project] <first-line summary>"
  *
- * Other Notification types (idle_prompt, auth_success, elicitation_*) return
- * null: idle_prompt would double up with the Stop hook, the rest aren't
- * attention-worthy.
+ * Other Notification types (auth_success, elicitation_*) return null — not
+ * attention-worthy. `turnEnd` is the already-resolved closing message, passed
+ * in rather than read here so the transcript is touched once per invocation.
  */
-function buildBody(input, project) {
+function buildBody(input, project, turnEnd) {
   if (input.tool_name === 'AskUserQuestion') {
     const qs = input.tool_input && input.tool_input.questions;
     const first = Array.isArray(qs) && qs.length ? qs[0] : null;
@@ -306,29 +385,30 @@ function buildBody(input, project) {
     return `[${project}] ❓ 等你选择${label ? ` · ${label}` : ''}`;
   }
 
-  if (input.hook_event_name === 'Notification') {
-    if (input.notification_type !== 'permission_prompt') return null;
+  if (input.hook_event_name === 'Notification' && input.notification_type === 'permission_prompt') {
     return `[${project}] 🔐 ${clip(input.message) || '等你授权'}`;
   }
 
-  return `[${project}] ${extractSummary(input.last_assistant_message)}`;
+  if (!isTurnEnd(input)) return null;
+  return `[${project}] ${extractSummary(turnEnd)}`;
 }
 
 /**
- * Fast-path entry point. Returns the stdout to echo: the original payload for
- * Stop (preserving prior passthrough behavior), or '' for the Notification /
- * PreToolUse events so nothing is mistaken for a hook decision.
+ * Fast-path entry point. Returns the stdout to echo: the original payload on a
+ * Stop event (preserving the passthrough chained hooks expect), or '' for the
+ * Notification / AskUserQuestion paths so nothing is mistaken for a decision.
  */
 function run(raw) {
-  let isStop = true;
+  let echoPayload = true;
   try {
     const input = raw.trim() ? JSON.parse(raw) : {};
-    isStop = input.tool_name !== 'AskUserQuestion' &&
-             input.hook_event_name !== 'Notification';
+    echoPayload = input.tool_name !== 'AskUserQuestion' &&
+                  input.hook_event_name !== 'Notification';
 
     const project = getProjectName(input.cwd || process.cwd());
-    const body = buildBody(input, project);
-    if (body == null) return isStop ? raw : '';
+    const turnEnd = isTurnEnd(input) ? turnEndText(input) : null;
+    const body = buildBody(input, project, turnEnd);
+    if (body == null) return echoPayload ? raw : '';
 
     // OSC 9 is the only backend that reaches the user's *local* terminal when
     // the session isn't purely local: over SSH terminal-notifier would fire on
@@ -344,12 +424,14 @@ function run(raw) {
       const tty = isGhostty() ? findTTY() : null;
       if (!tty || !notifyGhostty(tty, body)) notifyTerminalNotifier(project, body);
     }
-    if (isStop && (isSSH() || isTmux())) notifyMoshRelay(raw);
+    if (isTurnEnd(input) && (isSSH() || isTmux())) {
+      notifyMoshRelay(JSON.stringify({ cwd: input.cwd, last_assistant_message: turnEnd }));
+    }
   } catch (err) {
     log(`[DesktopNotify] Error: ${err.message}`);
   }
 
-  return isStop ? raw : '';
+  return echoPayload ? raw : '';
 }
 
 module.exports = { run };

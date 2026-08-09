@@ -19,8 +19,22 @@ BIND_HOST="${TT_WEB_BIND:-0.0.0.0}"
 CONNECT_HOST="127.0.0.1"
 BASE_PORT="${TT_WEB_PORT:-39001}"
 
+# Which python runs everything below. The repo pins a venv, but a remote may not
+# have one -- gpu-box does not -- so this falls back rather than failing. It is
+# resolved once and reported by `status`, because the alternative is what
+# happened before: the same command silently ran on a different interpreter
+# depending on whether the shell was interactive, and the resulting bugs were
+# found in production rather than here.
+TT_WEB_PYTHON="$(
+  for candidate in "$ROOT_DIR/../.venv/bin/python" "$ROOT_DIR/.venv/bin/python"; do
+    [ -x "$candidate" ] && { echo "$candidate"; exit 0; }
+  done
+  command -v python3
+)"
+: "${TT_WEB_PYTHON:=python3}"
+
 usage() {
-  echo "usage: tt-web {start|stop|restart|status|open|rollup}"
+  echo "usage: tt-web {start|stop|restart|status|open|network [--json] [--force]|export (--out PATH|--version)|machines (accept NAME [--yes]|retire NAME...)|rollup [--check [--json]|adopt-timezone|blockers|recover]}"
 }
 
 is_running() {
@@ -52,7 +66,7 @@ start() {
   port="$(find_port)"
   : > "$LOG_FILE"
   local pid
-  pid="$(python3 - "$ROOT_DIR/server.py" "$BIND_HOST" "$port" "$LOG_FILE" <<'PY'
+  pid="$("$TT_WEB_PYTHON" - "$ROOT_DIR/server.py" "$BIND_HOST" "$port" "$LOG_FILE" <<'PY'
 import os
 import sys
 
@@ -67,7 +81,9 @@ with open(os.devnull, "rb", buffering=0) as stdin, open(log_file, "ab", bufferin
     os.dup2(stdin.fileno(), 0)
     os.dup2(log.fileno(), 1)
     os.dup2(log.fileno(), 2)
-os.execvp("python3", ["python3", server, "--host", host, "--port", port])
+# sys.executable, not a name resolved again through PATH: the server must run
+# on the same interpreter this launcher already chose.
+os.execv(sys.executable, [sys.executable, server, "--host", host, "--port", port])
 PY
 )"
   echo "$pid" > "$PID_FILE"
@@ -118,12 +134,13 @@ status() {
   port="$(cat "$PORT_FILE" 2>/dev/null || echo "$BASE_PORT")"
   uptime="$(ps -o etime= -p "$pid" 2>/dev/null | awk '{$1=$1; print}')"
   echo "tt-web running: pid=$pid port=$port uptime=${uptime:-unknown} url=http://$CONNECT_HOST:$port"
+  echo "python: $TT_WEB_PYTHON ($("$TT_WEB_PYTHON" -c 'import sys,sqlite3;print("%s, sqlite %s" % (sys.version.split()[0], sqlite3.sqlite_version))' 2>/dev/null || echo unknown))"
 }
 
 compile_ok() {
   # Mirror server.py's _source_files(): top-level *.py + parsers/**/*.py. Returns
   # nonzero if any fails to compile, so we never restart into broken code.
-  python3 - "$ROOT_DIR" <<'PY' 2>/dev/null
+  "$TT_WEB_PYTHON" - "$ROOT_DIR" <<'PY' 2>/dev/null
 import pathlib, py_compile, sys
 root = pathlib.Path(sys.argv[1])
 files = sorted(root.glob("*.py")) + sorted((root / "parsers").glob("**/*.py"))
@@ -136,7 +153,7 @@ refresh_if_stale() {
   local port stale
   port="$(cat "$PORT_FILE" 2>/dev/null || echo "$BASE_PORT")"
   stale="$(curl -fsS "http://$CONNECT_HOST:$port/api/health?asset_watch=1" 2>/dev/null \
-    | python3 -c 'import json,sys; print("1" if json.load(sys.stdin).get("stale") else "0")' 2>/dev/null || echo 0)"
+    | "$TT_WEB_PYTHON" -c 'import json,sys; print("1" if json.load(sys.stdin).get("stale") else "0")' 2>/dev/null || echo 0)"
   [ "$stale" = "1" ] || return 0
   if compile_ok; then
     echo "tt-web: 检测到代码已更新，重启以加载新代码…"
@@ -158,7 +175,7 @@ open_dashboard() {
 
   if [ -n "${SSH_CONNECTION:-}" ]; then
     local ts_host
-    ts_host="$(tailscale status --json 2>/dev/null | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("Self",{}).get("DNSName",""))' 2>/dev/null)"
+    ts_host="$(tailscale status --json 2>/dev/null | "$TT_WEB_PYTHON" -c 'import json,sys; d=json.load(sys.stdin); print(d.get("Self",{}).get("DNSName",""))' 2>/dev/null)"
     ts_host="${ts_host%%.*}"  # extract short hostname (e.g. "macmini" from "macmini.tail4399e6.ts.net.")
     : "${ts_host:=$(hostname)}"
     local url="http://$ts_host:$port"
@@ -170,7 +187,7 @@ open_dashboard() {
 
 run_rollup() {
   mkdir -p "$STATE_DIR"
-  PYTHONPATH="$ROOT_DIR${PYTHONPATH:+:$PYTHONPATH}" python3 - <<'PY'
+  PYTHONPATH="$ROOT_DIR${PYTHONPATH:+:$PYTHONPATH}" "$TT_WEB_PYTHON" - <<'PY'
 import rollup
 
 result = rollup.run()
@@ -179,6 +196,375 @@ print(
         **result
     )
 )
+if result.get("sources_blocked"):
+    print(
+        "ATTENTION: {sources_blocked} source path(s) are blocked; existing rows were preserved "
+        "but new usage was not written. Run 'tt-web rollup blockers' for persistent status and available recovery guidance.".format(
+            **result
+        )
+    )
+PY
+}
+
+run_rollup_check() {
+  PYTHONPATH="$ROOT_DIR${PYTHONPATH:+:$PYTHONPATH}" "$TT_WEB_PYTHON" - "$@" <<'PY'
+import json
+import sys
+
+import rollup
+
+args = sys.argv[1:]
+if args not in ([], ["--json"]):
+    print("usage: tt-web rollup --check [--json]", file=sys.stderr)
+    raise SystemExit(2)
+
+result = rollup._check_rollup(
+    rollup.DEFAULT_DB_PATH,
+    lambda: rollup.load_all_entries(read_only=True, diagnostic=True),
+)
+if args == ["--json"]:
+    print(json.dumps(result, sort_keys=True))
+    raise SystemExit(0)
+
+status = result["status"]
+if status == "safe":
+    print("Rollup check status: SAFE — the database and source scan were complete.")
+elif status == "attention":
+    print("Rollup check status: ATTENTION — inspect shrink-guard or identity blocker details.")
+else:
+    print("Rollup check status: INDETERMINATE — a complete consistent comparison was not available.")
+verdict = result["verdict"]
+if verdict == "unknown":
+    print("Shrink-guard verdict: unknown (no complete database/source comparison).")
+elif verdict == "safe":
+    print("Shrink-guard verdict: safe for the buckets that were compared.")
+else:
+    print("Shrink-guard verdict: attention; protected fields would shrink.")
+span = result["db_span"]
+print(
+    "Database: {rows} row(s), span {start}..{end}".format(
+        rows=span["rows"],
+        start=span["start"] or "none",
+        end=span["end"] or "none",
+    )
+)
+if result["source_errors"]:
+    print("Source scan errors: {count}; comparison is incomplete.".format(count=len(result["source_errors"])))
+    for error in result["source_errors"]:
+        print("  {path}: {error}".format(path=error.get("path") or "unknown", error=error["error"]))
+for error in result["diagnostic_errors"]:
+    print("Diagnostic error ({stage}): {error}".format(**error))
+window = result["window"]
+print("Recompute window: {start}..{end} ({days} days, inclusive)".format(**window))
+print(
+    "Dry run: orphan_rows={orphan} (preserved; no action), would_skip={skip}, would_write={write}".format(
+        orphan=result["orphan_rows"]["count"],
+        skip=result["would_skip"]["count"],
+        write=result["would_write"]["count"],
+    )
+)
+for item in result["orphan_rows"]["items"]:
+    print("  orphan_row {key}: preserved because current source no longer produces it".format(key="/".join(item["key"])))
+for item in result["would_skip"]["items"]:
+    changes = ", ".join(
+        "{field} {old}->{new}".format(
+            field=field,
+            old=item["old"][field],
+            new=item["new"][field],
+        )
+        for field in item["decreased_fields"]
+    )
+    print(
+        "  would_skip {key}: {changes}".format(
+            key="/".join(item["key"]),
+            changes=changes,
+        )
+    )
+if result["sources_blocked"]:
+    print(
+        "Identity blockers: {count}; existing rows are preserved, but new usage from these paths is paused.".format(
+            count=result["sources_blocked"]
+        )
+    )
+    for blocker in result["blocked_sources"]:
+        print("  {source_path}: {reason}".format(**blocker))
+    print("Next step: run 'tt-web rollup blockers' for persistent status and available recovery guidance.")
+else:
+    print("Identity blockers: 0; no action required.")
+PY
+}
+
+run_rollup_identity() {
+  PYTHONPATH="$ROOT_DIR${PYTHONPATH:+:$PYTHONPATH}" "$TT_WEB_PYTHON" "$ROOT_DIR/rollup_identity.py" "$@"
+}
+
+run_rollup_adopt_timezone() {
+  PYTHONPATH="$ROOT_DIR${PYTHONPATH:+:$PYTHONPATH}" "$TT_WEB_PYTHON" - "$@" <<'PY'
+import argparse
+
+import rollup
+
+parser = argparse.ArgumentParser(
+    prog="tt-web rollup adopt-timezone",
+    description="Explicitly adopt an unmarked +08:00 legacy rollup as Asia/Shanghai.",
+)
+parser.add_argument("--db", required=True, help="exact legacy rollup database to adopt")
+parser.add_argument("--known-utc-offset", required=True, choices=["+08:00"])
+parser.add_argument(
+    "--raw-log-start",
+    action="append",
+    required=True,
+    metavar="AGENT=YYYY-MM-DD",
+    help="earliest reconstructible raw-log date for one agent; repeat per agent",
+)
+parser.add_argument(
+    "--authorize-pre-log-assumption",
+    action="store_true",
+    help=(
+        "authorize only history before each agent's raw-log start; "
+        "does not cover in-range counter mismatches"
+    ),
+)
+parser.add_argument(
+    "--authorize-non-exact-overlap-assumption",
+    action="store_true",
+    help=(
+        "separately authorize in-range buckets whose protected counters differ; "
+        "cost attribution remains unverified"
+    ),
+)
+args = parser.parse_args()
+
+if rollup._normalize_db_path(args.db) != rollup._normalize_db_path(rollup.DEFAULT_DB_PATH):
+    parser.error(
+        "--db must be this checkout's canonical owning-host rollup: %s"
+        % rollup.DEFAULT_DB_PATH
+    )
+
+raw_log_starts = {}
+for item in args.raw_log_start:
+    if "=" not in item:
+        parser.error("--raw-log-start must use AGENT=YYYY-MM-DD")
+    agent, start = item.split("=", 1)
+    if not agent or agent in raw_log_starts:
+        parser.error("--raw-log-start agents must be non-empty and unique")
+    raw_log_starts[agent] = start
+
+# The source snapshot is fully materialized before the adoption transaction.
+entries = rollup.load_all_entries(read_only=True)
+result = rollup.adopt_bucket_timezone(
+    args.db,
+    entries,
+    known_utc_offset=args.known_utc_offset,
+    raw_log_starts=raw_log_starts,
+    authorize_pre_log_assumption=args.authorize_pre_log_assumption,
+    authorize_non_exact_overlap_assumption=(
+        args.authorize_non_exact_overlap_assumption
+    ),
+)
+overlap = result["evidence"]["reconstructible_overlap"]
+keys = overlap["bucket_keys"]
+window = overlap["comparison_window"]
+growth = overlap["post_rollup_source_growth"]
+protected = overlap["protected_counter_verification"]
+non_equal = overlap["non_equal_protected_counter_assumption"]
+cost = overlap["cost_attribution_verification"]
+history = result["evidence"]["pre_log_history"]
+print("Rollup timezone adoption: ADOPTED")
+print("Database: %s" % args.db)
+print("Bucket boundary: Asia/Shanghai (known machine fact: UTC+08:00)")
+print(
+    "Reconstructible overlap bucket keys: expected=%d matched=%d missing=%d"
+    % (keys["expected"], keys["matched"], keys["missing"])
+)
+print(
+    "Comparison window: through %s inclusive; source_entries=%d bucket_keys=%d."
+    % (
+        window["end_inclusive"],
+        window["source_entries_in_scope"],
+        window["source_bucket_keys_in_scope"],
+    )
+)
+print(
+    "Post-rollup source growth: outside comparison; source_entries=%d bucket_keys=%d "
+    "missing_from_database=%d."
+    % (
+        growth["source_entries"],
+        growth["source_bucket_keys"],
+        growth["bucket_keys_missing_from_database"],
+    )
+)
+print(
+    "The window ends at the last recorded rollup start, not at a source snapshot: "
+    "records appended while that rollup was reading can already be in the database, "
+    "and their bucketing was not verified here."
+)
+print(
+    "A later rollup picks up a missing key only when its date falls in the recompute "
+    "window or is absent from the database; older dates already present need an "
+    "explicit backfill."
+)
+print(
+    "Protected-counter equality: expected=%d equal=%d status=%s"
+    % (
+        protected["equal_bucket_keys"]["expected"],
+        protected["equal_bucket_keys"]["actual"],
+        protected["status"],
+    )
+)
+print(
+    "Cost attribution verification: %s; fields=%s."
+    % (cost["status"], ",".join(cost["fields"]))
+)
+print(
+    "Non-equal protected-counter overlap: bucket_keys=%d status=%s."
+    % (non_equal["bucket_keys"], non_equal["status"])
+)
+print(
+    "Pre-log history: %s onward is recorded as a user-authorized historical assumption, not verified fact."
+    % history["start_date"]
+)
+print("Result: the explicit marker was written; ordinary readers and writers never perform this adoption automatically.")
+PY
+}
+
+run_machine_retire() {
+  PYTHONPATH="$ROOT_DIR${PYTHONPATH:+:$PYTHONPATH}" "$TT_WEB_PYTHON" - "$@" <<'PY'
+import argparse
+
+import generation
+
+parser = argparse.ArgumentParser(
+    prog="tt-web machines retire",
+    description=(
+        "Deleting a machine declaration only deactivates it and is reversible. "
+        "Permanent retirement only happens through this command, which records "
+        "irreversible state before updating machines.json."
+    ),
+)
+parser.add_argument(
+    "names",
+    nargs="+",
+    help="active or generation-backed deactivated remote machine name",
+)
+args = parser.parse_args()
+
+config = generation.retire_machines(args.names)
+print("Machine retirement: COMMITTED")
+print("Retired names: %s" % ", ".join(sorted(args.names)))
+print("Active machines remaining: %d" % len(config.machines))
+print("Result: retirement state was persisted before machines.json was updated; these names cannot be reused.")
+PY
+}
+
+run_machine_accept() {
+  PYTHONPATH="$ROOT_DIR${PYTHONPATH:+:$PYTHONPATH}" "$TT_WEB_PYTHON" - "$@" <<'PY'
+import argparse
+import sys
+
+import machine_config
+import sync
+
+parser = argparse.ArgumentParser(
+    prog="tt-web machines accept",
+    description=(
+        "Bind a declared machine to whatever currently answers on its SSH "
+        "target. Needed once per machine before its usage can be pulled."
+    ),
+)
+parser.add_argument("name", help="machine name from machines.json")
+parser.add_argument("--yes", action="store_true", help="skip the confirmation")
+args = parser.parse_args()
+
+try:
+    config = machine_config.load_machine_config()
+except machine_config.MachineConfigError as exc:
+    print("Cannot read machine config: %s" % exc, file=sys.stderr)
+    raise SystemExit(2)
+
+machine = config.by_name.get(args.name)
+if machine is None:
+    print(
+        "Unknown machine %r; declared: %s"
+        % (args.name, ", ".join(sorted(config.by_name))),
+        file=sys.stderr,
+    )
+    raise SystemExit(2)
+if machine.is_self:
+    print("%s is this machine; it needs no SSH binding." % machine.name)
+    raise SystemExit(0)
+
+print("Machine name:  %s" % machine.name)
+print("SSH target:    %s" % machine.ssh_host)
+print()
+print(
+    "Accepting binds this slot to whichever machine answers on that SSH "
+    "target right now."
+)
+print(
+    "It guarantees later syncs reach the same machine. It does not verify that "
+    "the target is the machine you have in mind -- only your SSH config decides "
+    "that, so confirm it points where you expect before accepting."
+)
+if not args.yes:
+    print()
+    try:
+        reply = input("Bind %s to %s? [y/N] " % (machine.name, machine.ssh_host))
+    except EOFError:
+        reply = ""
+    if reply.strip().lower() not in ("y", "yes"):
+        print("Not accepted; no binding was written.")
+        raise SystemExit(1)
+
+try:
+    current = sync.sync_machine(machine, accept_first_use_ssh_target=True)
+except Exception as exc:
+    print("Sync failed: %s" % exc, file=sys.stderr)
+    raise SystemExit(1)
+
+print()
+print("Bound and pulled.")
+print("  source host identity: %s" % current.meta["source_host_identity"])
+print(
+    "  rows: %d, data since %s"
+    % (current.meta["row_count"], current.meta["data_start_date"])
+)
+print("Later syncs refuse if that identity changes.")
+PY
+}
+
+
+run_network() {
+  PYTHONPATH="$ROOT_DIR${PYTHONPATH:+:$PYTHONPATH}" "$TT_WEB_PYTHON" "$ROOT_DIR/network_report.py" "$@"
+}
+
+run_export() {
+  PYTHONPATH="$ROOT_DIR${PYTHONPATH:+:$PYTHONPATH}" "$TT_WEB_PYTHON" - "$@" <<'PY'
+import argparse
+import json
+import sys
+
+import exporter
+
+parser = argparse.ArgumentParser(prog="tt-web export")
+mode = parser.add_mutually_exclusive_group(required=True)
+mode.add_argument("--out", help="create an export bundle directory")
+mode.add_argument(
+    "--version",
+    action="store_true",
+    help="print the exporter commit without reading or refreshing rollup state",
+)
+args = parser.parse_args()
+
+try:
+    if args.version:
+        print(exporter.exporter_version())
+    else:
+        manifest = exporter.export_bundle(output_path=args.out)
+        print(json.dumps(manifest, sort_keys=True))
+except exporter.ExportError as exc:
+    print("Export refused: %s" % exc, file=sys.stderr)
+    raise SystemExit(2)
 PY
 }
 
@@ -199,8 +585,55 @@ case "${1:-}" in
   open)
     open_dashboard
     ;;
+  network)
+    shift
+    run_network "$@"
+    ;;
+  export)
+    shift
+    run_export "$@"
+    ;;
+  machines)
+    shift
+    case "${1:-}" in
+      retire)
+        shift
+        run_machine_retire "$@"
+        ;;
+      accept)
+        shift
+        run_machine_accept "$@"
+        ;;
+      *)
+        echo "unknown machines command: ${1:-}" >&2
+        usage >&2
+        exit 2
+        ;;
+    esac
+    ;;
   rollup)
-    run_rollup
+    shift
+    case "${1:-}" in
+      "")
+        run_rollup
+        ;;
+      --check)
+        shift
+        run_rollup_check "$@"
+        ;;
+      adopt-timezone)
+        shift
+        run_rollup_adopt_timezone "$@"
+        ;;
+      blockers|recover|-h|--help)
+        run_rollup_identity "$@"
+        ;;
+      *)
+        echo "unknown rollup command: $1" >&2
+        run_rollup_identity --help >&2
+        exit 2
+        ;;
+    esac
     ;;
   *)
     usage

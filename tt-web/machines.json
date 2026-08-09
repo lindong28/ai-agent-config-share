@@ -1,0 +1,8 @@
+{
+  "machines": [
+    { "name": "macbook", "ssh_host": "macbook", "self": true },
+    { "name": "macmini", "ssh_host": "macmini", "self": false },
+    { "name": "gpu-box", "ssh_host": "gpu-box", "self": false }
+  ],
+  "retired_names": []
+}

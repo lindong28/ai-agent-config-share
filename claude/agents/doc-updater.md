@@ -30,7 +30,7 @@ doc-updater 作用于**当前 CWD 所在的 repo**（在其中读写文档）；
 | readme | 产品定位、目标用户、核心卖点——这些决定 README 的叙事角度 |
 | architecture | 模块边界、分层原则、哪些抽象是核心——影响文档结构 |
 | adr | 决策的 context 和被否方案——作者可能漏写"为什么不选 B" |
-| contracts | 关键 user journey、哪些 feature 最需要测试覆盖、quality bar 阈值 |
+| contracts | UX 契约：关键 user journey、哪些 feature 最需要测试覆盖、quality bar 阈值；其他作用域的契约：性质 / 消费者 / 写入权威三项由谁定 |
 | experiences | 粒度（按什么 topic 分文件）、是否有未记录的 tribal knowledge |
 | issues | 优先级框架、domain 文件划分——什么算"值得单独跟踪" |
 | changelog | 版本号方案、是否需要从 git history 回填 |

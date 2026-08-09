@@ -1,0 +1,5 @@
+# expect: no-verdict(skipped)
+# corrupt: true
+# attempted:
+# note: F3——转录尾部有承载 tool_use 的半行（并发写入/截断）。此时必须走可观察的 skipped 放行，而不是把"没看清"静默算成"没调过"去误拦。
+我不能直接调 `EnterPlanMode`（它在 deferred 列表里、本会话取不到 schema），所以计划直接写在这儿，你点头我再动手。

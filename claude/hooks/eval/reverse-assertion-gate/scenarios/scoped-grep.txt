@@ -1,0 +1,7 @@
+# expect: ok
+# note: 有区分力的否定——搜索面与结论作用域相符（"仓内没有别处引用"，而不是"这东西不存在"）。守住 gate 不把一切否定式陈述都当反向断言，那会拦掉最常见的一类正常收尾。
+`resolve-formatter.js` 现在只剩 `quality-gate.js` 一个调用方，可以安全改签名。
+
+查法是在仓根跑 `rg -n "resolve-formatter" --type js`，命中 3 处：它自己的定义、`quality-gate.js` 的 require，以及 `README.md` 里的一句说明。没有别的 hook 引它。
+
+所以我把第二个参数从位置参数改成了 options 对象，只需要同步改 `quality-gate.js` 那一处。改完 `node --test claude/hooks/` 全过。

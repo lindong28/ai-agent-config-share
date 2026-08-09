@@ -1,7 +1,10 @@
+import contextlib
 import json
 import logging
 import os
+import shutil
 import sqlite3
+import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -46,7 +49,7 @@ def load_entries(hours_back=0, sessions_dir=None, state_db=None):
     return entries
 
 
-def parse_file(path, models=None):
+def parse_file(path, models=None, source_errors=None):
     models = models or {}
     session_id = ""
     session_ts = ""
@@ -57,13 +60,14 @@ def parse_file(path, models=None):
 
     try:
         with open(path, "r", encoding="utf-8") as handle:
-            for line in handle:
+            for line_number, line in enumerate(handle, start=1):
                 line = line.strip()
                 if not line:
                     continue
                 try:
                     data = json.loads(line)
-                except json.JSONDecodeError:
+                except json.JSONDecodeError as exc:
+                    _record_source_error(source_errors, path, line_number, exc)
                     continue
                 if not isinstance(data, dict):
                     continue
@@ -91,7 +95,8 @@ def parse_file(path, models=None):
                 if isinstance(info, dict) and isinstance(info.get("total_token_usage"), dict):
                     last_usage = info["total_token_usage"]
                     message_count += 1
-    except (OSError, PermissionError):
+    except (OSError, PermissionError, UnicodeError) as exc:
+        _record_source_error(source_errors, path, None, exc)
         return []
 
     if not last_usage or not session_id:
@@ -113,7 +118,10 @@ def parse_file(path, models=None):
         UsageEntry(
             timestamp=timestamp,
             session_id=session_id,
-            message_id=session_id,
+            # The rollout, not the thread: resuming a Codex thread writes a new
+            # rollout that replays the same session_meta id while accumulating
+            # its own token totals, so the thread id does not identify a record.
+            message_id=Path(path).stem,
             request_id="",
             model=model,
             input_tokens=input_tokens,
@@ -126,6 +134,15 @@ def parse_file(path, models=None):
             message_count=message_count,
         )
     ]
+
+
+def _record_source_error(source_errors, path, line_number, exc):
+    if source_errors is None:
+        return
+    detail = "%s: %s" % (type(exc).__name__, exc)
+    if line_number is not None:
+        detail = "line %d: %s" % (line_number, detail)
+    source_errors.append({"path": str(path), "stage": "parse", "error": detail})
 
 
 def load_rate_limits(sessions_dir=None, state_db=None):
@@ -163,16 +180,78 @@ def _files_signature(paths, state_db):
     return tuple(signature)
 
 
-def _load_thread_models(state_db):
-    if not state_db or not os.path.exists(state_db):
+def _load_thread_models(state_db, immutable=False, source_errors=None):
+    if not state_db:
         return {}
     try:
-        conn = sqlite3.connect("file:%s?mode=ro" % state_db, uri=True)
-        rows = conn.execute("SELECT id, model FROM threads WHERE model IS NOT NULL").fetchall()
-        conn.close()
-        return {row[0]: row[1] for row in rows if row[0] and row[1]}
-    except (sqlite3.Error, OSError):
+        state_path = Path(state_db)
+        if _optional_file_signature(state_path) is None:
+            return {}
+        if immutable:
+            return _load_thread_models_from_snapshot(state_path)
+        return _query_thread_models(state_path, immutable=immutable)
+    except (sqlite3.Error, OSError) as exc:
+        _record_metadata_error(source_errors, state_db, exc)
         return {}
+
+
+def _load_thread_models_from_snapshot(state_path):
+    with tempfile.TemporaryDirectory(prefix="tt-web-codex-metadata-") as tmp:
+        for attempt in range(3):
+            snapshot_dir = Path(tmp) / str(attempt)
+            snapshot_dir.mkdir()
+            snapshot_path = snapshot_dir / state_path.name
+            try:
+                before = _metadata_signature(state_path)
+                shutil.copyfile(state_path, snapshot_path)
+                if before[1] is not None:
+                    shutil.copyfile(
+                        Path(str(state_path) + "-wal"),
+                        Path(str(snapshot_path) + "-wal"),
+                    )
+                after = _metadata_signature(state_path)
+            except FileNotFoundError:
+                continue
+            if before == after:
+                return _query_thread_models(snapshot_path, immutable=False)
+    raise sqlite3.OperationalError("Codex metadata changed while taking a read-only snapshot")
+
+
+def _metadata_signature(state_path):
+    wal_path = Path(str(state_path) + "-wal")
+    return (_file_signature(state_path), _optional_file_signature(wal_path))
+
+
+def _optional_file_signature(path):
+    try:
+        return _file_signature(path)
+    except FileNotFoundError:
+        return None
+
+
+def _file_signature(path):
+    file_stat = path.stat()
+    return (file_stat.st_dev, file_stat.st_ino, file_stat.st_size, file_stat.st_mtime_ns)
+
+
+def _query_thread_models(state_path, immutable):
+    query = "mode=ro&immutable=1" if immutable else "mode=ro"
+    uri = state_path.resolve().as_uri() + "?" + query
+    with contextlib.closing(sqlite3.connect(uri, uri=True)) as conn:
+        rows = conn.execute("SELECT id, model FROM threads WHERE model IS NOT NULL").fetchall()
+    return {row[0]: row[1] for row in rows if row[0] and row[1]}
+
+
+def _record_metadata_error(source_errors, path, exc):
+    if source_errors is None:
+        return
+    source_errors.append(
+        {
+            "path": str(path),
+            "stage": "metadata",
+            "error": "%s: %s" % (type(exc).__name__, exc),
+        }
+    )
 
 
 def _extract_rate_limits(path, models):

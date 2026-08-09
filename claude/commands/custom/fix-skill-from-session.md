@@ -1,6 +1,6 @@
 ---
 name: fix-skill-from-session
-description: 当前 session 中 command、skill、reference、agent 定义、script、hook 或 harness 适配层出现行为错误、漏 use case 或模糊指令，需要 source-level 修复时使用。
+description: 当前 session 中 command、skill、reference、agent 定义、script、hook、CLAUDE.md / rules、settings 或 harness 适配层出现行为错误、漏 use case 或模糊指令，需要 source-level 修复时使用。
 ---
 
 # fix-skill-from-session
@@ -134,7 +134,9 @@ fix 过程中至少要让以下几类信息变清晰。**这不是顺序步骤**
 
 ### 审核
 
-完成 edit 后执行 `/custom:review-skill <target> max-principle-per-subagent=100` 审核目标文件中本次 fix 的改动部分；用户显式要求全面审查时省略该覆盖，沿用 review-skill 自身的默认值。
+完成 edit 后按**落点**审核本次 fix 的改动部分。落点到 owning workflow 的映射见 `~/.claude/commands/custom/review-agent-rules.md`「决策、修复与复验」的落点表——那是这份映射的权威，此处不复述，以免两处对同一问题给出不同答案。
+
+不能默认走 `review-skill`：本命令的 target 覆盖面比它宽（CLAUDE.md、hook、settings 都在 fix 范围内），而它有硬类型 gate——按落点分派才不会把一个它不受理的 target 硬塞进去。落到 review-skill 那一路时带 `max-principle-per-subagent=100` 只审改动部分；用户显式要求全面审查时省略该覆盖，沿用其默认值。
 
 - **收敛性**：判断 finding 是否需修。需修 → 改 → 重审。循环到一轮无需修。
 

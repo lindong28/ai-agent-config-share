@@ -147,11 +147,17 @@ agent-browser doctor                                  # diagnose + clean the sid
 kill <N>                                              # terminate that pid — a daemon that is alive but wedged
 ```
 
-`doctor`'s own `Session <name> (pid <N>)` line is what binds a pid to a session name; take the pid from there rather than from `~/.agent-browser/<session>.pid`, because a pid file can outlive its daemon and the pid can be recycled, so killing it blind can hit an unrelated process. If `doctor` reports no live pid for your session, the daemon was already dead and `doctor` has cleared its leftovers — reconnect via the Standard Connection Workflow and confirm the stall is gone. Only report `Blocked` if it persists; never guess at a pid. Never broad-match `agent-browser` across processes either: every daemon presents the same argv with no session name in it, so a pattern kill takes out every parallel agent's daemon too.
+`doctor`'s own `Session <name> (pid <N>)` line is what binds a pid to a session name; take the pid from there rather than from `~/.agent-browser/<session>.pid`, because a pid file can outlive its daemon and the pid can be recycled, so killing it blind can hit an unrelated process. If `doctor` reports no live pid for your session, the daemon was already dead and `doctor` has cleared its leftovers — reconnect via the Standard Connection Workflow and confirm the stall is gone. If it persists, take the terminal rule at the end of this section rather than stopping here; never guess at a pid. Never broad-match `agent-browser` across processes either: every daemon presents the same argv with no session name in it, so a pattern kill takes out every parallel agent's daemon too.
 
 Once the daemon is gone, reconnect via the Standard Connection Workflow above. Do not keep retrying commands against a stale daemon after the first unexplained stall — finish the reset first.
 
-The termination step is the one place this skill steps outside its own `allowed-tools`: it needs `kill`. Where that is unavailable the reset stops at `doctor`, and an unresolved stall is `Blocked` — do not guess at a process.
+Beyond `kill` for the termination step, the only other step that reaches outside this skill's own `allowed-tools` is the Playwright fallback below, which runs through the target project's own runner. Where `kill` is unavailable the reset stops at `doctor`; where neither the reset nor that fallback can proceed, an unresolved stall is `Blocked` when it gates the task and `uncovered` otherwise — do not guess at a process.
+
+### Fallback: the project's own Playwright for verification
+
+When the reset above has been carried out and screenshots or page-state checks still stall, and the target project already drives Playwright itself (so its browser binaries are installed, not merely the package importable), drive the remaining verification through the project's own Playwright instead of resetting again — a script of its own launches an independent browser, so a stale agent-browser daemon cannot reach it. Feed that script through the project runner's stdin (or a `mktemp` path), never as a file written into the target repo — this skill leaves no artifact behind to clean up. Take this branch before declaring a terminal outcome; the `Blocked`/`uncovered` rule above still applies when the project has no usable Playwright either.
+
+Independence cuts both ways: the fresh browser carries none of the session state the daemon held, and it is still a headless automation browser. So this covers only pages reachable without that state — a local dev server, a public page, or state the script rebuilds itself. Verification depending on an existing login, anything that must come from a real window (the `--headed` and Visible-GUI-over-CDP rows of Browser Mode Selection, and the Background note), and every interactive flow (human handoff, the Visible Browser Evidence Gate) all stay with Browser Mode Selection.
 
 ### Why NOT --auto-connect or --cdp with Regular Chrome
 
@@ -648,13 +654,13 @@ export AGENT_BROWSER_MAX_OUTPUT=50000
 
 ## Diffing (Verifying Changes)
 
-Use `diff snapshot` after performing an action to verify it had the intended effect. This compares the current accessibility tree against the last snapshot taken in the session.
+Use `diff snapshot` after performing an action to verify it had the intended effect, against a baseline you saved to a file.
 
 ```bash
-# Typical workflow: snapshot -> action -> diff
-agent-browser snapshot -i          # Take baseline snapshot
-agent-browser click @e2            # Perform action
-agent-browser diff snapshot        # See what changed (auto-compares to last snapshot)
+# Typical workflow: save baseline -> action -> diff against the file
+agent-browser snapshot > before.txt              # baseline (see note below on -i)
+agent-browser click @e2                          # perform action
+agent-browser diff snapshot --baseline before.txt
 ```
 
 For visual regression testing or monitoring:
@@ -670,6 +676,15 @@ agent-browser diff url https://staging.example.com https://prod.example.com --sc
 ```
 
 `diff snapshot` output uses `+` for additions and `-` for removals, similar to git diff. `diff screenshot` produces a diff image with changed pixels highlighted in red, plus a mismatch percentage.
+
+**Baseline limitation:** `--baseline` is not optional. Without it `diff snapshot` compares against an empty baseline, not against your last `snapshot` — take a snapshot, perform no action, and it still reports the whole page as additions. `diff --help` claims the opposite; the observed behavior is what holds. Refs are also renumbered on every snapshot, so a `-i` baseline marks every ref-bearing line as changed and the diff degenerates into noise — take the baseline without `-i` when you only need to see what the page did.
+
+**Re-reading the control you clicked is not verification.** Confirm an action's effect against the authoritative view of that state — a list page, a counter — because two page-authoring patterns defeat re-reading, and both fail confidently rather than visibly:
+
+| Pattern | What it does to your reader |
+| --- | --- |
+| Control inside an `aria-hidden="true"` subtree | Absent from `snapshot` altogether — `snapshot -s` on it errors as if no node exists. `eval` still sees it, so this is the one case where `eval` is the fallback |
+| Rendered state driven by a CSS class, not by the attribute you read (author-implemented `role="checkbox"`, native input behind custom visuals) | `aria-checked` / `.checked` keep reporting the old value after the screen changed. Both readers faithfully report what the page asserts; the page is what's lying |
 
 ## Timeouts and Slow Pages
 
@@ -769,6 +784,8 @@ agent-browser click @e1              # Use new refs
 ## JavaScript Evaluation (eval)
 
 Use `eval` to run JavaScript in the browser context. **Shell quoting can corrupt complex expressions** -- use `--stdin` or `-b` to avoid issues.
+
+**Shadow boundaries:** a flat `document.querySelector` never crosses one, so on component-heavy pages a selector that "finds no such control" is usually the query failing, not the control missing. Reach an open root through its host (`host.shadowRoot.querySelector(...)`); a closed root's `.shadowRoot` is `null` and is not reachable from `eval` at all. `snapshot` pierces both — including closed roots, whose refs are fully clickable — so prefer snapshot refs over hand-written selectors unless the node is one `snapshot` cannot see (see `aria-hidden` under [Diffing](#diffing-verifying-changes)).
 
 ```bash
 # Simple expressions work with regular quoting

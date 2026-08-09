@@ -46,7 +46,7 @@ origin: 2026-05-19
 
 首次 spawn 前记录 working-tree baseline：把 `git status --porcelain` 脏文件清单与 `git diff HEAD`（含 staged + unstaged）内容快照写入 plan 同目录 `baseline.patch`。它是 audit trail，不进入单元 review / commit；后续撞车处置见 §3.5。
 
-**并发隔离（开工前）**：其它 agent session 可能并发在同一 repo 执行 plan。开工前按 `~/.claude/references/concurrent-plan-isolation.md` 检测并发、按三层结构隔离在独立 worktree 落地；plan 显式声明"单 session 独占"时可免。
+**并发隔离（开工前）**：其它 agent session 可能并发在同一 repo 执行 plan。开工前按 `~/.claude/references/concurrent-plan-isolation.md` 检测并发、按三层结构隔离在独立 worktree 落地；plan 显式声明"单 session 独占"时可免**建 worktree**（另两层的铁律与并发检测不在豁免内）；执行中出现「执行中提升」的反证即按该节重判该豁免。
 
 ---
 
@@ -131,7 +131,7 @@ poll-progress.sh 只读新增进度行（默认每轮最多回显 80 行），�
 **周期性 FYI 汇报（默认要求）**：执行期内每 ≤30 分钟向用户发一次简短进度汇报。
 - **动机**：长执行期里 supervisor 的事件驱动汇报（gate / blocked / 完成时才说话）会造成数小时的静默，用户失去"现在在哪、有没有在动"的可见性，只能反复主动来问。
 - **性质**：FYI 单向信息流，不是找用户——不提问、不等待回复、不构成 stop；用户可看可不看。内容：当前阶段 / 自上次汇报以来的推进 / 异常与否 / 下一里程碑，3-8 行。一切照常时一句话即可。
-- **机制**：idle 等待期 supervisor 无法主动发消息，须靠调度唤醒——唤醒 / 间隔 / 完成即删的机制归 `~/.claude/references/background-agent-monitoring.md`。FYI 汇报搭同一巡检唤醒的便车（巡检醒来时顺带发一条），不另起第二个 cron。仅 Critical 异常（进程死亡 / 付费墙 / 外部服务故障证据）才额外 PushNotification——周期汇报本身不推送，避免通知疲劳。
+- **机制**：idle 等待期 supervisor 无法主动发消息，须靠调度唤醒——唤醒 / 间隔 / 完成即删 / 醒来时没有活跃后台任务该怎么分流的机制，均归 `~/.claude/references/background-agent-monitoring.md`。FYI 汇报搭同一巡检唤醒的便车（巡检醒来时顺带发一条），不另起第二个 cron。仅 Critical 异常（进程死亡 / 付费墙 / 外部服务故障证据）才额外 PushNotification——周期汇报本身不推送，避免通知疲劳。
 
 Claude Code 需要完整上下文时（§3 裁决 / context 压缩后恢复 / 排查异常），用 `Read(<output-file>)` 读整份 `.output`；poll-progress.sh 只读不改源文件，完整记录始终在盘上。**poll-progress.sh 回显含「跳过 N 行」时必须先全量 `Read(<output-file>)` 再裁决**（单轮新增 > 80 行触发截断）——被跳过的中段在增量模式下不再出现，blocked / Stop Gate report / verify 证据可能正落在中段。resume 会产生新的后台任务 = 新 `.output` 文件，对新文件重新记录路径并从 0 开始轮询。Codex 则以 collaboration agent 的 message / final status 为裁决输入；需要更多证据时续用原 agent 定向索取，不把整个主 session transcript 再喂一遍。
 
@@ -152,7 +152,7 @@ supervisor 在 `plan-execution-principles.md`「Trajectory Gate」规定的触�
 
 **真实数据接地（verify 证据的地基）**：plan verify 针对的行为若依赖真实生产输入 / 数据流（监控能否上膛、部署里前提基线是否真产出、用户实际能看到多少），且**该真实输入可取得**——则合成 / 历史回放 / 臆想输入的 PASS **不算通过**：MUST 用真实数据验证（非 advisory），合成只作 smoke。这是静默失效的收口——对合成输入验通过、生产真实数据流从没接地，坑直达用户。真实输入**确实不可取得**时（如需部署后才有）**DEFER 不 CLOSE**：记为部署后强制 live 补验义务，未过前该能力不算激活、plan 不算最终交付；live 补验失败按不 ship / 升级用户裁决，不静默当已交付。
 
-Claude Code resume 调用形如（spawn 同一套 flag 组 + 后台 + timeout，仅 path prefix 改为 `resume <SESSION_ID>`）：
+Claude Code resume 调用形如（同 spawn 的 flag 组 + 后台 + timeout，path prefix 改为 `resume <SESSION_ID>`）：
 
 ```
 Bash({
@@ -161,6 +161,8 @@ Bash({
   timeout: 21900000,
 })
 ```
+
+`<WORKDIR>` 在 resume 上与 spawn 同等重要、且同等生效（wrapper ≥ 5.9.2）：它决定被恢复的 agent 在哪棵树上工作，与 `<SESSION_ID>` 决定的"哪段对话"是两回事。写错或省略不会报错，只会让「自己找文件 / 自己产出 diff」这类步骤静默作用在别处。
 
 Codex harness 对原 collaboration agent 发 follow-up task，语义与上面 resume 相同。两条路径的 prompt 都走 trust-the-model——只列与本次 continuation 相关的 supervisor 裁决：Stop Gate fail 项及证据、Trajectory Gate verdict 与方案调整、执行期间新增的用户决定，以及 plan 路径和（若 long-task）当前 state.md / journal.md 摘要。**不复述 gate 全文或主对话**——Codex 重读 reference / state 文件即可。
 

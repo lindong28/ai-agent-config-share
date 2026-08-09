@@ -1,17 +1,104 @@
+/* Visual system: data-dense technical interface.
+   Parameters follow ~/.claude/skills/web-visual-system/references/reference-instance.md —
+   spacing ladder, paired type steps, elevation levels, motion and state matrix all come
+   from there. Values below are that instance; substitute values, not structure.
+   Verify with that skill's validate-visual-system.js against the rendered page. */
+
+@font-face {
+  font-family: "IBM Plex Sans";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("/web/vendor/fonts/ibm-plex-sans-latin-400-normal.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "IBM Plex Sans";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("/web/vendor/fonts/ibm-plex-sans-latin-500-normal.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "IBM Plex Sans";
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("/web/vendor/fonts/ibm-plex-sans-latin-600-normal.woff2") format("woff2");
+}
+
+/* The page emphasises one word with <em>; without a real italic the browser slants the
+   upright face, which is a different and worse shape than the designed one. */
+@font-face {
+  font-family: "IBM Plex Sans";
+  font-style: italic;
+  font-weight: 400;
+  font-display: swap;
+  src: url("/web/vendor/fonts/ibm-plex-sans-latin-400-italic.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "IBM Plex Mono";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("/web/vendor/fonts/ibm-plex-mono-latin-400-normal.woff2") format("woff2");
+}
+
 :root {
   color-scheme: light;
-  --bg: #f6f5f0;
+
+  /* Spacing ladder — 4px base. Nothing between the steps. */
+  --sp-1: 2px;
+  --sp-2: 4px;
+  --sp-3: 6px;
+  --sp-4: 8px;
+  --sp-5: 12px;
+  --sp-6: 16px;
+  --sp-7: 24px;
+  --sp-8: 32px;
+
+  --h-control: 28px;
+  --pad-cell: var(--sp-3) var(--sp-5);
+  --pad-card: var(--sp-5) var(--sp-6);
+
+  --font-sans: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  --r-sm: 3px;
+  --r-md: 5px;
+  --r-lg: 6px;
+  --r-pill: 999px;
+
+  /* Separation is carried by line and tint; shadow only for things that float. */
+  --e-raised: 0 0 0 1px rgba(28, 33, 40, 0.05), 0 1px 2px rgba(28, 33, 40, 0.06);
+  --e-overlay: 0 0 0 1px rgba(28, 33, 40, 0.08), 0 2px 4px rgba(28, 33, 40, 0.08),
+    0 8px 24px -8px rgba(28, 33, 40, 0.16);
+
+  --dur: 120ms;
+  --ease: cubic-bezier(0.4, 0, 0.2, 1);
+  --t-state: color var(--dur) var(--ease), background-color var(--dur) var(--ease),
+    border-color var(--dur) var(--ease), box-shadow var(--dur) var(--ease),
+    opacity var(--dur) var(--ease);
+
+  --canvas: #f4f7f9;
   --surface: #ffffff;
-  --surface-alt: #f0f7f4;
-  --ink: #202124;
-  --muted: #68706a;
-  --line: #d9ddd6;
-  --teal: #0f766e;
-  --blue: #2563eb;
-  --amber: #b7791f;
-  --rose: #be4458;
-  --green: #4d7c0f;
-  --shadow: 0 1px 3px rgba(24, 32, 28, 0.08);
+  --surface-sunken: #eef2f6;
+  --ink: #1c2128;
+  --ink-muted: #57616c;
+  --ink-subtle: #7d8894;
+  --line: #d3dae1;
+  --line-soft: #e6ebf0;
+  --line-strong: #b4bec8;
+  --bg-hover: #f0f4f8;
+  --bg-active: #e5ecf3;
+  --accent: #0b66c3;
+  --accent-ink: #0a559f;
+  --accent-bg: #dcecfb;
+  --ok: #1a7f4b;
+  --warn: #8a6300;
+  --danger: #c0362c;
 }
 
 * {
@@ -21,20 +108,44 @@
 body {
   margin: 0;
   min-width: 320px;
-  background: var(--bg);
+  background: var(--canvas);
   color: var(--ink);
-  font-family: ui-sans-serif, "Avenir Next", "Segoe UI", sans-serif;
-  font-size: 15px;
-  line-height: 1.45;
+  font: 400 13px/18px var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* The UA's bold is 700, which is off this ramp — emphasis lands on the 600 step
+   like every other heading rather than introducing a weight nothing else uses. */
+strong,
+b {
+  font-weight: 600;
 }
 
 a {
-  color: var(--blue);
+  color: var(--accent-ink);
   text-decoration: none;
+  transition: var(--t-state);
 }
 
 a:hover {
   text-decoration: underline;
+}
+
+/* Keyboard users get no location cue if the UA ring is the only one, and several
+   controls below repaint their background on focus, which hides it entirely. */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  border-radius: var(--r-sm);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+  }
 }
 
 .app-shell {
@@ -47,41 +158,39 @@ a:hover {
   z-index: 5;
   display: grid;
   grid-template-columns: minmax(180px, 1fr) auto auto;
-  gap: 16px;
+  gap: var(--sp-6);
   align-items: center;
-  padding: 14px 22px;
+  padding: var(--sp-4) var(--sp-6);
   border-bottom: 1px solid var(--line);
-  background: rgba(246, 245, 240, 0.96);
+  background: rgba(244, 247, 249, 0.94);
   backdrop-filter: blur(12px);
 }
 
 .brand {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: var(--sp-4);
   min-width: 0;
 }
 
 .brand-mark {
-  width: 28px;
-  height: 28px;
-  border-radius: 7px;
-  background: linear-gradient(135deg, var(--teal), var(--amber));
-  box-shadow: var(--shadow);
+  width: 22px;
+  height: 22px;
+  border-radius: var(--r-md);
+  background: var(--accent);
 }
 
 .brand-title {
   margin: 0;
-  font-size: 18px;
-  font-weight: 700;
-  letter-spacing: 0;
+  font: 600 16px/22px var(--font-sans);
+  letter-spacing: -0.01em;
   white-space: nowrap;
 }
 
 .nav {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: var(--sp-2);
   justify-content: center;
 }
 
@@ -90,37 +199,54 @@ a:hover {
 .icon-btn,
 select,
 button {
-  min-height: 34px;
+  min-height: var(--h-control);
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: var(--r-md);
   background: var(--surface);
   color: var(--ink);
-  font: inherit;
+  font: 500 13px/18px var(--font-sans);
+  transition: var(--t-state);
+}
+
+.nav a:hover,
+.preset-btn:hover,
+.icon-btn:hover,
+select:hover,
+button:hover:not(:disabled) {
+  background: var(--bg-hover);
+  border-color: var(--line-strong);
+}
+
+.nav a:active,
+.preset-btn:active,
+.icon-btn:active,
+button:active:not(:disabled) {
+  background: var(--bg-active);
 }
 
 .nav a {
   display: inline-flex;
   align-items: center;
-  padding: 0 12px;
+  padding: 0 var(--sp-5);
   color: var(--ink);
 }
 
 .nav a[aria-current="page"] {
-  border-color: var(--teal);
-  background: var(--surface-alt);
-  color: var(--teal);
-  font-weight: 700;
+  border-color: var(--accent);
+  background: var(--accent-bg);
+  color: var(--accent-ink);
+  font-weight: 600;
 }
 
 .toolbar {
   display: flex;
-  gap: 8px;
+  gap: var(--sp-4);
   justify-content: flex-end;
   align-items: center;
 }
 
 select {
-  padding: 0 10px;
+  padding: 0 var(--sp-4);
 }
 
 .icon-btn,
@@ -129,13 +255,13 @@ button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 6px;
-  padding: 0 12px;
+  gap: var(--sp-3);
+  padding: 0 var(--sp-5);
   cursor: pointer;
 }
 
 .icon-btn[aria-busy="true"] {
-  color: var(--muted);
+  color: var(--ink-muted);
   opacity: 0.72;
 }
 
@@ -152,6 +278,7 @@ button {
 
 button:disabled {
   cursor: progress;
+  opacity: 0.55;
 }
 
 @keyframes spin {
@@ -163,58 +290,192 @@ button:disabled {
 .main {
   width: min(1280px, 100%);
   margin: 0 auto;
-  padding: 22px;
+  padding: var(--sp-6) var(--sp-7);
+}
+
+/* Two labelled groups rather than one flat row: five equal cards left an orphan
+   in the fourth column, and "spend so far" and "quota left" are read for
+   different reasons. Widths stay even because each group gets track count to
+   match its card count. */
+.kpi-sections {
+  display: grid;
+  grid-template-columns: 2fr 3fr;
+  gap: var(--sp-6);
+  margin-bottom: var(--sp-6);
+}
+
+.kpi-group {
+  min-width: 0;
+}
+
+.kpi-group-title {
+  margin: 0 0 var(--sp-4);
+  color: var(--ink-muted);
+  font: 600 11px/16px var(--font-sans);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 }
 
 .kpi-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 12px;
-  margin-bottom: 18px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--sp-5);
+}
+
+.kpi-grid.quota {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.sync-panel {
+  margin-bottom: var(--sp-6);
+  padding: var(--pad-card);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  background: var(--surface);
+  box-shadow: var(--e-raised);
+}
+
+/* Collapsed by default: when every machine is current this is 230px of
+   timestamps standing between the reader and the first dollar figure. The
+   script opens it when a machine actually needs attention. */
+.sync-panel > summary {
+  cursor: pointer;
+  list-style: none;
+  border-radius: var(--r-sm);
+  transition: var(--t-state);
+}
+
+.sync-panel > summary:hover {
+  color: var(--accent-ink);
+}
+
+.sync-panel > summary::-webkit-details-marker {
+  display: none;
+}
+
+.sync-panel > summary::after {
+  content: "▸";
+  margin-left: var(--sp-4);
+  color: var(--ink-muted);
+  font-size: 12px;
+}
+
+.sync-panel[open] > summary::after {
+  content: "▾";
+}
+
+.sync-panel-head,
+.sync-machine-title {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--sp-5);
+  align-items: center;
+}
+
+.sync-panel-head .status-line {
+  margin: 0 0 0 var(--sp-4);
+}
+
+.sync-machines {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--sp-4);
+  margin-top: var(--sp-5);
+}
+
+/* Inner radius steps down from the panel's 6px by its padding, so the child
+   does not read as pasted onto a corner it shares. */
+.sync-machine {
+  min-width: 0;
+  padding: var(--sp-4);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-sm);
+  background: var(--surface-sunken);
+}
+
+.sync-machine.excluded {
+  border-color: #e8b4b0;
+  background: #fdf0ef;
+}
+
+.sync-chips {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--sp-2);
+}
+
+.sync-machine-time,
+.sync-machine-reason,
+.scope-note {
+  margin: var(--sp-3) 0 0;
+  color: var(--ink-muted);
+  font: 400 12px/16px var(--font-sans);
+  overflow-wrap: anywhere;
+}
+
+.sync-machine-reason {
+  color: var(--ink);
+}
+
+.scope-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 18px;
+  padding: var(--sp-1) var(--sp-4);
+  border-radius: var(--r-pill);
+  background: var(--accent-bg);
+  color: var(--accent-ink);
+  font: 600 11px/16px var(--font-sans);
+  vertical-align: middle;
 }
 
 .kpi-card,
 .panel {
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: var(--r-lg);
   background: var(--surface);
-  box-shadow: var(--shadow);
+  box-shadow: var(--e-raised);
+  transition: var(--t-state);
 }
 
 .kpi-card {
-  min-height: 112px;
-  padding: 14px;
+  min-height: 100px;
+  padding: var(--pad-card);
 }
 
 .kpi-label {
-  color: var(--muted);
-  font-size: 13px;
+  color: var(--ink-muted);
+  font: 500 12px/16px var(--font-sans);
 }
 
+/* Tabular figures, not the mono face: they equalise digit width, which is all
+   the alignment needs, whereas mono also gives the decimal point a full cell
+   and renders $1020.79 as "$1020 . 79". */
 .kpi-value {
-  margin-top: 8px;
-  font-size: 28px;
-  font-weight: 800;
-  letter-spacing: 0;
+  margin-top: var(--sp-4);
+  font: 600 26px/32px var(--font-sans);
+  letter-spacing: -0.015em;
+  font-variant-numeric: tabular-nums;
 }
 
 .kpi-sub {
-  margin-top: 6px;
-  color: var(--muted);
-  font-size: 13px;
+  margin-top: var(--sp-2);
+  color: var(--ink-muted);
+  font: 400 12px/16px var(--font-sans);
+  font-variant-numeric: tabular-nums;
 }
 
 .kpi-meta {
-  margin-top: 4px;
-  color: var(--muted);
-  font-size: 12px;
-  opacity: 0.78;
+  margin-top: var(--sp-2);
+  color: var(--ink-subtle);
+  font: 400 11px/16px var(--font-sans);
 }
 
 .panel-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 14px;
+  gap: var(--sp-6);
 }
 
 .panel-grid .panel-wide {
@@ -222,26 +483,26 @@ button:disabled {
 }
 
 .panel {
-  padding: 14px;
+  padding: var(--pad-card);
   min-width: 0;
 }
 
 .panel-head {
   display: flex;
   justify-content: space-between;
-  gap: 12px;
+  gap: var(--sp-5);
   align-items: baseline;
-  margin-bottom: 10px;
+  margin-bottom: var(--sp-5);
 }
 
 .panel h2 {
   margin: 0;
-  font-size: 16px;
-  letter-spacing: 0;
+  font: 600 14px/20px var(--font-sans);
+  letter-spacing: -0.005em;
 }
 
 .panel-link {
-  font-size: 13px;
+  font: 500 12px/16px var(--font-sans);
   white-space: nowrap;
 }
 
@@ -271,46 +532,157 @@ button:disabled {
 
 .estimate-note,
 .status-line {
-  margin: 12px 0 0;
-  color: var(--muted);
-  font-size: 13px;
+  margin: var(--sp-5) 0 0;
+  color: var(--ink-muted);
+  font: 400 12px/16px var(--font-sans);
+}
+
+/* Methodology text is read when a figure looks wrong, not on every visit. Kept
+   beside the chart it qualifies, collapsed, and set to a readable measure —
+   as a permanent paragraph it ran the full 1200px panel width. */
+.note-disclosure {
+  margin: 0 0 var(--sp-4);
+  color: var(--ink-muted);
+  font: 400 12px/16px var(--font-sans);
+}
+
+.note-disclosure > summary {
+  cursor: pointer;
+  color: var(--ink-muted);
+  transition: var(--t-state);
+}
+
+.note-disclosure > summary:hover {
+  color: var(--ink);
+}
+
+.note-disclosure > summary::before {
+  content: "ⓘ ";
+}
+
+.note-disclosure p {
+  max-width: 68ch;
+  margin: var(--sp-4) 0 0;
 }
 
 .controls {
   display: grid;
   grid-template-columns: repeat(4, minmax(140px, 1fr));
-  gap: 10px;
-  margin-bottom: 14px;
+  gap: var(--sp-5);
+  margin-bottom: var(--sp-6);
 }
 
 .field {
   display: grid;
-  gap: 5px;
+  gap: var(--sp-2);
+  /* A select sizes itself to its widest option, and a grid item defaults to
+     min-width:auto, so one long project path stretched this field past the
+     window and scrolled the whole page sideways. The width the page can spare
+     is the column's, not the option list's. */
+  min-width: 0;
+}
+
+.field select,
+.field input {
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
 }
 
 .field label {
-  color: var(--muted);
-  font-size: 12px;
-  font-weight: 700;
+  color: var(--ink-muted);
+  font: 600 11px/16px var(--font-sans);
+  letter-spacing: 0.04em;
   text-transform: uppercase;
 }
 
 .preset-row {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
-  margin: 0 0 14px;
-}
-
-.preset-btn {
-  background: #fffaf0;
+  gap: var(--sp-4);
+  margin: 0 0 var(--sp-6);
 }
 
 .table-wrap {
   overflow: auto;
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: var(--r-lg);
   background: var(--surface);
+}
+
+/* The table scrolls inside its own box so the header can stick to the top of
+   it. Sticking to the viewport instead would need the topbar's height as a
+   constant, and that height changes with the layout. */
+.table-wrap.sticky-head {
+  max-height: calc(100vh - 320px);
+  min-height: 320px;
+}
+
+/* Rows scroll underneath this, so it sits a level up rather than merely being
+   pinned — without it the header and the row passing behind it read as coplanar.
+   Level 1, per the reference instance's mapping: level 2 is for things that float
+   over the page, and applying it per-cell would stack that weight across the row. */
+.table-wrap.sticky-head thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--surface-sunken);
+  box-shadow: var(--e-raised);
+  clip-path: inset(0 0 -8px 0);
+}
+
+.sessions-controls {
+  grid-template-columns: repeat(3, minmax(140px, 1fr));
+}
+
+/* Offset measured from the rendered header rather than assumed: a guessed
+   constant sat above the header's real height and let the date row ride up
+   over its bottom edge. The script sets --sessions-head-h after each render. */
+.date-group th {
+  position: sticky;
+  top: var(--sessions-head-h, 30px);
+  z-index: 1;
+  padding: var(--pad-cell);
+  background: var(--accent-bg);
+  color: var(--ink);
+  font: 600 12px/16px var(--font-sans);
+  letter-spacing: normal;
+  text-transform: none;
+  font-variant-numeric: tabular-nums;
+}
+
+td.nowrap,
+th.nowrap {
+  white-space: nowrap;
+}
+
+/* One line per row is what makes a hundred rows scannable. A td's own
+   max-width is ignored under auto table layout, so the clipping lives on an
+   inner box; the full value stays on its title. */
+.project-cell span {
+  display: block;
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pager {
+  display: flex;
+  gap: var(--sp-5);
+  align-items: center;
+  justify-content: center;
+  margin-top: var(--sp-5);
+}
+
+.pager .status-line {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.pager button:disabled {
+  cursor: default;
+  opacity: 0.45;
 }
 
 table {
@@ -321,50 +693,69 @@ table {
 
 th,
 td {
-  padding: 10px 12px;
-  border-bottom: 1px solid var(--line);
+  padding: var(--pad-cell);
+  border-bottom: 1px solid var(--line-soft);
   text-align: left;
   vertical-align: top;
 }
 
 th {
-  color: var(--muted);
-  font-size: 12px;
+  background: var(--surface-sunken);
+  border-bottom-color: var(--line);
+  color: var(--ink-muted);
+  font: 600 11px/16px var(--font-sans);
+  letter-spacing: 0.04em;
   text-transform: uppercase;
   white-space: nowrap;
 }
 
+td {
+  font: 400 12px/16px var(--font-sans);
+}
+
+/* Numbers that share a column get tabular figures so the decimal position holds
+   still between refreshes. The face stays the text face — see .kpi-value. */
 td.numeric,
 th.numeric {
   text-align: right;
+}
+
+td.numeric {
   font-variant-numeric: tabular-nums;
+}
+
+/* Every data row, not just the clickable ones on Sessions: on a table this wide the
+   hover tint is what keeps the eye on one row while reading across it. The expanded
+   turn detail is excluded — it is a panel that happens to live in a <tr>. */
+.table-wrap tbody tr:not(.turn-detail) {
+  transition: var(--t-state);
+}
+
+.table-wrap tbody tr:not(.turn-detail):hover {
+  background: var(--bg-hover);
 }
 
 .session-row {
   cursor: pointer;
 }
 
-.session-row:hover {
-  background: var(--surface-alt);
-}
-
 .turn-detail td {
-  background: #fbfcfa;
+  background: var(--surface-sunken);
   padding: 0;
 }
 
 .turn-list {
   margin: 0;
-  padding: 10px 12px;
+  padding: var(--sp-4) var(--sp-5);
   list-style: none;
 }
 
 .turn-list li {
   display: grid;
   grid-template-columns: 170px 1fr 90px 90px 90px;
-  gap: 10px;
-  padding: 8px 0;
-  border-bottom: 1px solid var(--line);
+  gap: var(--sp-5);
+  padding: var(--sp-3) 0;
+  border-bottom: 1px solid var(--line-soft);
   font-variant-numeric: tabular-nums;
 }
 
@@ -375,43 +766,76 @@ th.numeric {
 .pill {
   display: inline-flex;
   align-items: center;
-  min-height: 24px;
+  min-height: 20px;
   max-width: 280px;
-  padding: 0 8px;
-  border-radius: 6px;
-  background: var(--surface-alt);
-  color: var(--teal);
-  font-size: 12px;
-  font-weight: 700;
+  padding: 0 var(--sp-4);
+  border-radius: var(--r-sm);
+  background: var(--surface-sunken);
+  color: var(--ink-muted);
+  font: 600 11px/16px var(--font-sans);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
+/* An agent keeps one colour everywhere. The pill used to be the same teal for
+   both agents while the charts drew them in different hues, so the mapping had
+   to be re-learned on each page. */
+.pill.agent-claude-code {
+  background: #e3edfa;
+  color: #1a5695;
+}
+
+.pill.agent-codex {
+  background: #fbe8dc;
+  color: #9c3f11;
+}
+
 .muted {
-  color: var(--muted);
+  color: var(--ink-muted);
 }
 
 .error {
-  color: var(--rose);
+  color: var(--danger);
 }
 
 .network-main {
   width: min(1800px, 100%);
 }
 
+/* Track counts divide the four evidence cards evenly — 4, then 2, then 1.
+   `auto-fit` picked whatever the width allowed, which meant three tracks
+   anywhere from roughly 1036px to 1371px and Timezone alone on a second row
+   with two thirds of it empty. Adding a fifth evidence card means revisiting
+   these counts. */
 .network-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
-  gap: 16px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--sp-6);
+  /* Each card is as tall as its own contents. Stretching them to match the
+     tallest left Timezone with 250px of empty card below three rows of text. */
+  align-items: start;
+}
+
+@media (max-width: 1180px) {
+  .network-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+/* The synthesised answer leads; the evidence cards support it. As the fifth
+   item in the grid it landed alone on a second row, a quarter as wide as the
+   space beside it, and its list ran past the card. */
+.network-card-conclusion {
+  grid-column: 1 / -1;
 }
 
 .network-error {
-  margin: 0 0 16px;
-  padding: 16px 18px;
-  border: 1px solid #efb7b7;
-  border-radius: 8px;
-  background: #fff7f7;
+  margin: 0 0 var(--sp-6);
+  padding: var(--pad-card);
+  border: 1px solid #e8b4b0;
+  border-radius: var(--r-lg);
+  background: #fdf0ef;
   color: var(--ink);
 }
 
@@ -420,49 +844,49 @@ th.numeric {
 }
 
 .network-error h2 {
-  margin: 0 0 6px;
-  font-size: 16px;
-  letter-spacing: 0;
+  margin: 0 0 var(--sp-3);
+  font: 600 14px/20px var(--font-sans);
+  letter-spacing: -0.005em;
 }
 
 .network-error p {
   margin: 0;
-  color: var(--muted);
+  color: var(--ink-muted);
 }
 
 .network-error-actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
-  margin-top: 12px;
+  gap: var(--sp-4);
+  margin-top: var(--sp-5);
 }
 
 .network-card {
   min-width: 0;
-  padding: 16px;
+  padding: var(--pad-card);
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: var(--r-lg);
   background: var(--surface);
-  box-shadow: var(--shadow);
+  box-shadow: var(--e-raised);
 }
 
 .network-card h2 {
-  margin: 0 0 12px;
-  font-size: 16px;
-  letter-spacing: 0;
+  margin: 0 0 var(--sp-5);
+  font: 600 14px/20px var(--font-sans);
+  letter-spacing: -0.005em;
 }
 
 .network-card-body {
   display: grid;
-  gap: 4px;
+  gap: var(--sp-2);
 }
 
 .kv-row {
   display: grid;
   grid-template-columns: 132px minmax(0, 1fr);
-  gap: 10px;
-  padding: 5px 0;
-  border-top: 1px solid rgba(217, 221, 214, 0.7);
+  gap: var(--sp-5);
+  padding: var(--sp-2) 0;
+  border-top: 1px solid var(--line-soft);
 }
 
 .kv-row:first-child {
@@ -470,8 +894,8 @@ th.numeric {
 }
 
 .kv-row .label {
-  color: var(--muted);
-  font-size: 13px;
+  color: var(--ink-muted);
+  font: 400 12px/16px var(--font-sans);
 }
 
 .kv-row .value {
@@ -482,64 +906,68 @@ th.numeric {
 .status-pill {
   display: inline-flex;
   align-items: center;
-  min-height: 22px;
-  padding: 2px 8px;
-  border-radius: 999px;
-  font-size: 12px;
-  font-weight: 700;
+  min-height: 20px;
+  padding: var(--sp-1) var(--sp-4);
+  border-radius: var(--r-pill);
+  font: 600 11px/16px var(--font-sans);
   vertical-align: middle;
 }
 
 .status-pill.ok {
-  background: #e6f4ec;
-  color: #1a7f3a;
+  background: #dff3e6;
+  color: var(--ok);
 }
 
 .status-pill.warn {
-  background: #fdf3e0;
-  color: #8a5a00;
+  background: #fbf0d9;
+  color: var(--warn);
 }
 
 .status-pill.bad {
-  background: #fce4e4;
-  color: #b02a2a;
+  background: #fbe3e1;
+  color: var(--danger);
+}
+
+.status-pill.info {
+  background: var(--accent-bg);
+  color: var(--accent-ink);
 }
 
 .verdict-banner {
   display: flex;
   justify-content: space-between;
-  gap: 16px;
+  gap: var(--sp-6);
   align-items: center;
-  margin: 0 0 16px;
-  padding: 16px 18px;
+  margin: 0 0 var(--sp-6);
+  padding: var(--pad-card);
   border: 1px solid var(--line);
-  border-radius: 8px;
-  font-size: 16px;
-  font-weight: 700;
+  border-radius: var(--r-lg);
+  font: 600 14px/20px var(--font-sans);
+  letter-spacing: -0.005em;
 }
 
 .verdict-banner.low {
-  border-color: #b7dfc5;
-  background: #e6f4ec;
-  color: #1a7f3a;
+  border-color: #b3ddc4;
+  background: #dff3e6;
+  color: var(--ok);
 }
 
 .verdict-banner.high {
-  border-color: #efb7b7;
-  background: #fce4e4;
-  color: #b02a2a;
+  border-color: #e8b4b0;
+  background: #fbe3e1;
+  color: var(--danger);
 }
 
 .verdict-banner.proxy-in-use {
-  border-color: #ead7ad;
-  background: #fdf3e0;
-  color: #8a5a00;
+  border-color: #e6d3a8;
+  background: #fbf0d9;
+  color: var(--warn);
 }
 
 .verdict-banner.unknown {
   border-color: var(--line);
   background: var(--surface);
-  color: var(--muted);
+  color: var(--ink-muted);
 }
 
 .stale-banner {
@@ -549,23 +977,22 @@ th.numeric {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 12px;
-  padding: 10px 16px;
-  background: #fef3c7;
-  color: #92400e;
-  border-bottom: 1px solid #f59e0b;
-  font-size: 14px;
+  gap: var(--sp-5);
+  padding: var(--sp-4) var(--sp-6);
+  background: #fbf0d9;
+  color: #7a5600;
+  border-bottom: 1px solid #e6d3a8;
+  font: 400 13px/18px var(--font-sans);
 }
 
 .stale-banner button {
   cursor: pointer;
-  border: 1px solid #b45309;
-  border-radius: 6px;
-  padding: 4px 10px;
-  background: #f59e0b;
-  color: #1f2937;
-  font-size: 13px;
-  font-weight: 600;
+  border: 1px solid #c08a1a;
+  border-radius: var(--r-md);
+  padding: var(--sp-2) var(--sp-4);
+  background: #f0b429;
+  color: #34290a;
+  font: 600 12px/16px var(--font-sans);
 }
 
 .stale-banner button:disabled {
@@ -574,29 +1001,29 @@ th.numeric {
 }
 
 .stale-banner code {
-  padding: 1px 5px;
-  border-radius: 4px;
-  background: rgba(0, 0, 0, 0.08);
-  font-size: 12px;
+  padding: var(--sp-1) var(--sp-2);
+  border-radius: var(--r-sm);
+  background: rgba(28, 33, 40, 0.08);
+  font: 400 11px/16px var(--font-mono);
 }
 
 .stale-hint {
   opacity: 0.85;
-  font-size: 13px;
+  font-size: 12px;
 }
 
 .network-updated {
   color: inherit;
-  font-size: 13px;
-  font-weight: 500;
+  font: 500 12px/16px var(--font-sans);
   opacity: 0.82;
   text-align: right;
+  font-variant-numeric: tabular-nums;
 }
 
 .dns-list,
 .conclusion-list {
   display: grid;
-  gap: 6px;
+  gap: var(--sp-3);
 }
 
 .dns-row {
@@ -604,6 +1031,7 @@ th.numeric {
 }
 
 .conclusion-list {
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
   margin: 0;
   padding: 0;
   list-style: none;
@@ -611,22 +1039,30 @@ th.numeric {
 
 .conclusion-list li {
   display: flex;
-  gap: 8px;
+  gap: var(--sp-4);
   align-items: flex-start;
-  padding: 5px 0;
+  padding: var(--sp-2) 0;
 }
 
 .section-failure,
 .empty-state {
-  color: var(--muted);
+  color: var(--ink-muted);
 }
 
 .conclusion-note {
-  margin: 12px 0 0;
-  padding-top: 10px;
-  border-top: 1px solid rgba(217, 221, 214, 0.7);
-  color: var(--muted);
-  font-size: 13px;
+  margin: var(--sp-5) 0 0;
+  padding-top: var(--sp-4);
+  border-top: 1px solid var(--line-soft);
+  color: var(--ink-muted);
+  font: 400 12px/16px var(--font-sans);
+}
+
+/* Side by side the two groups need ~250px per card; below that they stack
+   rather than squeezing "$11,857.68" into a card too narrow to hold it. */
+@media (max-width: 1080px) {
+  .kpi-sections {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (max-width: 900px) {
@@ -641,9 +1077,16 @@ th.numeric {
   }
 
   .kpi-grid,
+  .kpi-grid.quota,
   .panel-grid,
-  .controls {
+  .controls,
+  .sync-machines {
     grid-template-columns: 1fr;
+  }
+
+  .sync-panel-head,
+  .sync-machine-title {
+    align-items: flex-start;
   }
 
   .chart-box,
@@ -652,7 +1095,7 @@ th.numeric {
   }
 
   .main {
-    padding: 14px;
+    padding: var(--sp-6);
   }
 
   .verdict-banner {
@@ -667,7 +1110,7 @@ th.numeric {
 
   .kv-row {
     grid-template-columns: 1fr;
-    gap: 2px;
+    gap: var(--sp-1);
   }
 
   .network-updated {

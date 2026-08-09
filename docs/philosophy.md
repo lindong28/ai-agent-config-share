@@ -18,7 +18,7 @@ Agent 越强，它能自主完成的工作越多。但只要它还没强到可�
 2. **Agent 交付的成果里，哪一部分是给你审核的契约？哪一部分是它自己负责的内部细节？**
 3. **Agent 用什么形式和你交互？** 看板？群消息？1-1 对话？
 
-把市面上各类 agent harness / skill 摊开看，**它们的设计取舍基本都可以拆到这三个维度上**。本文剩下的内容就在这三个维度上展开 — 既说明这个 repo 选了什么，也说明为什么这么选。
+把市面上各类 agent harness / skill 摊开看，**它们的设计取舍大多可以拆到这三个维度上**。本文剩下的内容就在这三个维度上展开 — 既说明这个 repo 选了什么，也说明为什么这么选。这三个维度不是全部：它们都假设规则写下来 Agent 就会遵守，而这个假设有它自己的失败模式，见下面的「维度之外：gate」。
 
 ---
 
@@ -46,7 +46,7 @@ Agent 越强，它能自主完成的工作越多。但只要它还没强到可�
 
 **2. 我们的 execute 文档重点不是"怎么执行"，而是"什么时候才允许停"。**
 
-很多 execute skill 把重点放在 "按顺序跑、跑完报告、有错就汇报"。我们认为这种风格的最大失败模式不是 Agent 跑错，是 Agent **过早把活推回给人**。所以 [plan-execution-principles.md](../claude/references/plan-execution-principles.md) 的核心是一个 Stop Gate — 任何想中断的念头都要先过 5 道关：必要性、归因分层、替代路径、verify 拆分、交接可执行性。没过完，default-to-continue。
+很多 execute skill 把重点放在 "按顺序跑、跑完报告、有错就汇报"。我们认为这种风格的最大失败模式不是 Agent 跑错，是 Agent **过早把活推回给人**。所以 [plan-execution-principles.md](../claude/references/plan-execution-principles.md) 的核心是一个 Stop Gate — 任何想中断的念头都要先过 6 道关：必要性、归因分层、替代路径、verify 拆分、交接可执行性、文档同步已处理。没过完，default-to-continue。
 
 > 一句话总结：**我们不是在规定 Agent 怎么走，而是在规定它什么时候允许停下来**。这是 harness 的本职工作。
 
@@ -77,16 +77,27 @@ Agent 越强，它能自主完成的工作越多。但只要它还没强到可�
 
 - 多数 plan skill 把 verify 留给 implementer 自己写 unit test，**没有显式的"用户视角 verify"层**。结果就是：Agent 写的 unit test 全绿，但产品打开后用户觉得不对 — 因为 Agent 根本没拿到"用户怎么验收"的契约。
 
-
 ---
 
-### 维度三：Agent 和人的交互UX是什么
+### 维度三：Agent 和人的交互 UX 是什么
 
 传统协作里我们有三种典型形式：**看板**（发布任务、追踪进度）、**群消息**（多人观察、并发讨论）、**1-1 对话**（深入交流单一议题）。这三种在和 Agent 协作时同样适用，只是工具形态不同。
 
 目前这个 repo 主要用 **1-1 对话** 风格 — 通过 `AskUserQuestion` 给你一组带 pros/cons 和推荐项的选项让你选，深入但同步阻塞。
 
 后续会进一步探索基于看板和群消息的交互模式。
+
+---
+
+### 维度之外：gate
+
+上面三个维度都把规则写成 Agent 读得到的文字，然后指望它照做。这对**读了会改变行为**的规则有效，但有一类失败模式它接不住：**从输出上看不出来的失败**。收尾说"接下来我去做 X"而其实没有任何东西在跑、把一组本该让你选的方案写成正文列表顺手替你定了、宣称某个工具本 session 不可用而它从没被调过一次、交付一条"这条路走不通"的反向断言而支撑它的读数在结论为假时长得一模一样——这些回复读起来都完全正常，用户没有任何可以据以起疑的信号。反向断言尤其危险：正向误判迟早被下游打脸，反向误判直接删掉了本该继续的检查，没有下游能发现它。
+
+所以这个 repo 的第二类载体是 **gate**：不再是"边做边参考的规则"，而是卡在某个动作必经路径上的一道关——宣告完成前、动手实施某个决策前、以及回合结束的 Stop 处。gate 有两种实现强度，别混为一谈：`review-gate` 与 `decision-review` 仍是 Agent 读的 skill，靠 BINDING 声明约束（强在时机固定、判据外包给独立评审者，而不是强在物理拦截）；hook 才是真的物理拦截——它挂在 harness 的生命周期上，Agent 绕不过去。hook 里也分两种计费：`ask-recommend-gate` 挂在 AskUserQuestion 这个 tool call 上（强制的正是本文反复讲的"每组选项都要带推荐项"），只在真的发起提问时才花一次判官调用，所以默认就接；Stop 处那四道判官则是每个回合到达 Stop 都要花一次，因此默认不接、由用户自己权衡后开启。
+
+上面举的四类失败（承诺了后续动作却没东西在跑、把并列选项写成正文列表而不走 AskUserQuestion、宣称某工具不可用却从没调过、反向断言）恰好各对应一道 Stop 判官。
+
+> 三个维度决定 Agent 什么时候来找你；gate 决定它糊弄不过去。
 
 ---
 
@@ -107,9 +118,9 @@ Agent 越强，它能自主完成的工作越多。但只要它还没强到可�
 
 ---
 
-## 3. 需要 "skill编译器" 来迭代skill
+## 3. 需要 "skill 编译器" 来迭代 skill
 
-写一个好 skill 需要遵守的原则不少 — 信任 LLM 的 inference-time 泛化能力、用 lens 而不是流程、不要 speculatively 加内容、加之前先做 delete-test……（完整列表见 [skill-creation-principles.md](../claude/references/skill-creation-principles.md), [skill-creation-patterns.md](../claude/references/skill-creation-patterns.md) 和 [skill-review-principles.md](../claude/references/skill-review-principles.md)
+写一个好 skill 需要遵守的原则不少 — 信任 LLM 的 inference-time 泛化能力、用 lens 而不是流程、不要 speculatively 加内容、加之前先做 delete-test……（完整列表见 [skill-creation-principles.md](../claude/references/skill-creation-principles.md), [skill-creation-patterns.md](../claude/references/skill-creation-patterns.md) 和 [skill-review-principles.md](../claude/references/skill-review-principles.md)）
 
 但**指望每个 skill 作者把这堆原则内化清楚再写，是不 scale 的**。原则越多，作者犯错的方式也越多。
 

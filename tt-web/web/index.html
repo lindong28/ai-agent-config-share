@@ -35,42 +35,61 @@
         </div>
       </header>
       <main class="main">
-        <section class="kpi-grid" aria-label="KPI">
-          <article class="kpi-card">
-            <div class="kpi-label">Today cost</div>
-            <div id="today-cost" class="kpi-value">—</div>
-            <div id="today-tokens" class="kpi-sub">— tokens</div>
-          </article>
-          <article class="kpi-card">
-            <div class="kpi-label">Week cost</div>
-            <div id="week-cost" class="kpi-value">—</div>
-            <div id="week-tokens" class="kpi-sub">— tokens</div>
-          </article>
-          <article class="kpi-card">
-            <div class="kpi-label">Claude 5h</div>
-            <div id="claude-five-hour" class="kpi-value">—</div>
-            <div id="claude-five-reset" class="kpi-sub">—</div>
-            <div id="claude-five-updated" class="kpi-meta">—</div>
-          </article>
-          <article class="kpi-card">
-            <div class="kpi-label">Claude 7d</div>
-            <div id="claude-seven-day" class="kpi-value">—</div>
-            <div id="claude-seven-reset" class="kpi-sub">—</div>
-            <div id="claude-seven-updated" class="kpi-meta">—</div>
-          </article>
-          <article class="kpi-card">
-            <div class="kpi-label">Codex 7d</div>
-            <div id="codex-seven-day" class="kpi-value">—</div>
-            <div id="codex-seven-reset" class="kpi-sub">—</div>
-            <div id="codex-seven-updated" class="kpi-meta">—</div>
-          </article>
+        <details id="sync-panel" class="sync-panel" aria-label="Machine sync status">
+          <summary class="sync-panel-head">
+            <div>
+              <strong>All machines</strong>
+              <span id="sync-coverage" class="status-line">coverage —/—</span>
+            </div>
+            <span id="sync-summary" class="status-line" aria-live="polite">Checking generations…</span>
+          </summary>
+          <div id="sync-machines" class="sync-machines"></div>
+        </details>
+        <div class="kpi-sections">
+          <section class="kpi-group" aria-labelledby="kpi-spend-title">
+            <h2 id="kpi-spend-title" class="kpi-group-title">Spend</h2>
+            <div class="kpi-grid">
+              <article class="kpi-card">
+                <div class="kpi-label">Today cost</div>
+                <div id="today-cost" class="kpi-value">—</div>
+                <div id="today-tokens" class="kpi-sub">— tokens</div>
+              </article>
+              <article class="kpi-card">
+                <div class="kpi-label">Week cost</div>
+                <div id="week-cost" class="kpi-value">—</div>
+                <div id="week-tokens" class="kpi-sub">— tokens</div>
+              </article>
+            </div>
+          </section>
+          <section class="kpi-group" aria-labelledby="kpi-quota-title">
+            <h2 id="kpi-quota-title" class="kpi-group-title">Quota remaining</h2>
+            <div class="kpi-grid quota">
+              <article class="kpi-card">
+                <div class="kpi-label">Claude 5h</div>
+                <div id="claude-five-hour" class="kpi-value">—</div>
+                <div id="claude-five-reset" class="kpi-sub">—</div>
+                <div id="claude-five-updated" class="kpi-meta">—</div>
+              </article>
+              <article class="kpi-card">
+                <div class="kpi-label">Claude 7d</div>
+                <div id="claude-seven-day" class="kpi-value">—</div>
+                <div id="claude-seven-reset" class="kpi-sub">—</div>
+                <div id="claude-seven-updated" class="kpi-meta">—</div>
+              </article>
+              <article class="kpi-card">
+                <div class="kpi-label">Codex 7d</div>
+                <div id="codex-seven-day" class="kpi-value">—</div>
+                <div id="codex-seven-reset" class="kpi-sub">—</div>
+                <div id="codex-seven-updated" class="kpi-meta">—</div>
+              </article>
+            </div>
+          </section>
           <div id="codex-five-hour-compat" hidden aria-hidden="true">
             <span id="codex-five-hour"></span>
             <span id="codex-five-reset"></span>
             <span id="codex-five-updated"></span>
           </div>
-        </section>
-        <p class="estimate-note">Codex cost is 推算 from GPT-5 pricing when exact billing is not present. GLM-5.1/5.2 cost is 推算 from bundled GLM-5 pricing.</p>
+        </div>
         <section class="panel-grid" aria-label="Overview charts">
           <article class="panel panel-wide">
             <div class="panel-head">
@@ -78,9 +97,13 @@
               <span id="cost-over-time-meta" class="status-line">—</span>
               <a id="cost-over-time-link" class="panel-link" href="/explore?x=day&group=agent&metric=cost">→ Explore</a>
             </div>
+            <details class="note-disclosure">
+              <summary>How these cost figures are computed</summary>
+              <p>Codex cost is estimated from GPT-5 pricing when exact billing is not present, and GLM-5.1/5.2 cost is estimated from bundled GLM-5 pricing.</p>
+              <p>Within the 28-day recompute window, accepted rows are recomputed from currently readable source. Logged costs remain the logged values; entries without exact cost use the pricing data currently available to tt-web. Rows with missing source or a protected-counter decrease keep their last trusted cost, and existing rows outside the window remain frozen.</p>
+            </details>
             <div class="chart-box"><canvas id="daily-cost-chart"></canvas></div>
             <p id="cost-over-time-coverage" class="estimate-note" hidden></p>
-            <p class="estimate-note">Historical costs are frozen at collection-time pricing; Codex uses GPT-5 pricing and GLM-5.1/5.2 uses bundled GLM-5 pricing when exact billing is absent.</p>
           </article>
           <article class="panel">
             <div class="panel-head">

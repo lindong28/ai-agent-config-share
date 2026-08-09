@@ -151,19 +151,53 @@ for skill_src in "$SRC_ROOT/skills"/*/; do
     check_symlink  "skills/$skill_name (codex)"  "${skill_src%/}" "$HOME/.codex/skills/$skill_name"
 done
 check_symlink      "ask-user-mcp"         "$SCRIPT_DIR/ask-user-mcp"       "$HOME/.codex/ask-user-mcp"
-check_symlink      "codeagent-wrapper"    "$SRC_ROOT/bin/codeagent-wrapper" "$HOME/.claude/bin/codeagent-wrapper"
+# install.sh picks the platform artifact and links it AS codeagent-wrapper, so the
+# expected source is the per-platform build, not the in-repo run-time dispatcher.
+# Kept in sync with detect_platform() in install.sh — if you change one, change
+# both. The Rosetta correction matters here too: without it an Apple Silicon host
+# running verify from an x86_64 shell would report "no build for this platform"
+# about a wrapper that installed and works fine.
+verify_arch="$(uname -m)"
+if [ "$(uname -s)" = "Darwin" ] && [ "$verify_arch" = "x86_64" ]; then
+    verify_sysctl=""
+    if command -v sysctl >/dev/null 2>&1; then verify_sysctl="$(command -v sysctl)"
+    elif [ -x /usr/sbin/sysctl ]; then verify_sysctl=/usr/sbin/sysctl
+    fi
+    if [ -n "$verify_sysctl" ] \
+        && [ "$("$verify_sysctl" -in sysctl.proc_translated 2>/dev/null || true)" = "1" ]; then
+        verify_arch=arm64
+    fi
+fi
+case "$(uname -s)/$verify_arch" in
+    Darwin/arm64)             wrapper_artifact="codeagent-wrapper-darwin-arm64" ;;
+    Linux/x86_64|Linux/amd64) wrapper_artifact="codeagent-wrapper-linux-amd64" ;;
+    *)                        wrapper_artifact="" ;;
+esac
+if [ -n "$wrapper_artifact" ]; then
+    check_symlink  "codeagent-wrapper"    "$SRC_ROOT/bin/$wrapper_artifact" "$HOME/.claude/bin/codeagent-wrapper"
+else
+    emit WARN "codeagent-wrapper" "no prebuilt binary for $(uname -s)/$(uname -m); /custom:execute-plan delegation unavailable"
+fi
 check_symlink      "statusline.sh"        "$SRC_ROOT/statusline.sh"         "$HOME/.claude/statusline.sh"
 check_symlink      "statusline-fields.py" "$SRC_ROOT/statusline-fields.py"  "$HOME/.claude/statusline-fields.py"
 check_symlink      "statusline-transcript.py" "$SRC_ROOT/statusline-transcript.py" "$HOME/.claude/statusline-transcript.py"
+check_symlink      "statusline-usage.py"  "$SRC_ROOT/statusline-usage.py"    "$HOME/.claude/statusline-usage.py"
 # Hook scripts are linked per-file by install.sh; without these checks a hook could be
 # wired in settings.json while its script was never linked (a silent no-op hook).
 for hook_rel in ask-recommend-gate.js desktop-notify.js desktop-notify.test.js \
                 codeagent-stdin-guard.js codeagent-stdin-guard.test.js \
-                lib/llm-judge.js lib/utils.js; do
+                run-with-flags.js \
+                writer-registry-gate.js block-broad-kill.js commit-message-language.js \
+                continuation-claim-gate.js prose-choice-gate.js \
+                capability-claim-gate.js reverse-assertion-gate.js \
+                bg-shell-reclaim-check.js \
+                lib/llm-judge.js lib/utils.js lib/hook-flags.js \
+                lib/judge-log.js lib/transcript.js; do
     check_symlink  "hooks/$hook_rel"      "$SRC_ROOT/hooks/$hook_rel"       "$HOME/.claude/hooks/$hook_rel"
 done
 # Previously uncovered despite install.sh linking it.
 check_symlink      "poll-progress.sh"     "$SRC_ROOT/bin/poll-progress.sh"  "$HOME/.claude/bin/poll-progress.sh"
+check_symlink      "active-plan"          "$SRC_ROOT/bin/active-plan"       "$HOME/.claude/bin/active-plan"
 
 # ---------- Dependency / PATH checks ----------
 
@@ -259,23 +293,68 @@ else
     # Also assert the handler command names the expected script. Checking only that
     # *some* command handler exists accepts a stanza whose command is stale or wrong
     # (`"command": "true"` would pass), which fires nothing while reporting green.
-    while IFS='|' read -r hook_event hook_matcher hook_id hook_script; do
-        if jq -e --arg ev "$hook_event" --arg m "$hook_matcher" --arg id "$hook_id" --arg sc "$hook_script" \
+    # Delimiter is ^ , not | : the writer-registry matcher is itself an alternation
+    # ("Edit|Write|MultiEdit|NotebookEdit"), so a pipe-split would shred that row into
+    # the wrong fields and silently check a hook that does not exist.
+    # Field 4 is the EXACT expected handler command, compared with `==`, not a
+    # substring. Substring matching passes commands that provably never run — a
+    # path with a `.disabled` suffix still contains the expected fragment, and so
+    # does `true # <fragment>`. Since the whole point of this check is catching a
+    # hook that is wired but inert, a matcher that green-lights an inert command
+    # defeats it. Exact match costs us nothing: the installer does not generate
+    # these strings, the README tells the reader to copy them verbatim from
+    # claude/settings.json, so any deviation is exactly what we want to surface.
+    # Field 5 marks whether the row is required. The four LLM judge gates are opt-in
+    # at the settings.json merge step (each costs a judge call per turn reaching Stop),
+    # so "not wired" is a legitimate configuration for them, not a defect to warn about.
+    # Delimiter is ^ , not | : the writer-registry matcher is itself an alternation.
+    # This check reports one thing only: does the wired command match, verbatim,
+    # the canonical command in the repo's claude/settings.json?
+    #
+    # It deliberately does NOT try to answer "will this hook actually fire".
+    # Three review rounds established that we cannot answer that from the command
+    # string: `node --check <script>` parses without executing, `node
+    # block-broad-kill.js` runs a module with no entry point and exits 0 doing
+    # nothing, and a dispatcher path with a `.disabled` suffix still ends in the
+    # right script argument. Each attempt to model those cases in shell missed a
+    # new one, and a wrong "it should still fire" is worse than no claim at all —
+    # it is exactly the unverified reverse assertion this repo's own rules forbid.
+    # The authority for whether a hook runs is lib/hook-flags.js plus the harness,
+    # not this script. So: mismatch is reported as drift, both strings printed,
+    # and the reader decides.
+    while IFS='^' read -r hook_event hook_matcher hook_id hook_script hook_required; do
+        [ -n "$hook_event" ] || continue
+        actual_cmd="$(jq -r --arg ev "$hook_event" --arg m "$hook_matcher" --arg id "$hook_id" \
             '[.hooks[$ev]? // [] | .[]? | select(.id == $id and .matcher == $m)
-              | select([.hooks[]? | select(.type == "command") | select(.command | contains($sc))] | length > 0)] | length > 0' \
-            "$SETTINGS" >/dev/null 2>&1; then
-            emit PASS "settings.json/hook" "$hook_id wired under $hook_event/$hook_matcher → $hook_script"
+              | .hooks[]? | select(.type == "command") | .command] | join(" ;; ") // empty' \
+            "$SETTINGS" 2>/dev/null || true)"
+        if [ -n "$actual_cmd" ] && [ "$actual_cmd" = "$hook_script" ]; then
+            emit PASS "settings.json/hook" "$hook_id wired under $hook_event/$hook_matcher, command matches the repo version"
+        elif [ -n "$actual_cmd" ]; then
+            emit WARN "settings.json/hook" "$hook_id is wired under $hook_event/$hook_matcher but its command differs from the repo version — whether it still fires depends on the difference, so compare them yourself:
+      repo:  $hook_script
+      yours: $actual_cmd"
         elif jq -e --arg id "$hook_id" \
             '[.hooks // {} | .[]? | .[]? | select(.id == $id)] | length > 0' \
             "$SETTINGS" >/dev/null 2>&1; then
-            emit FAIL "settings.json/hook" "$hook_id present but not as $hook_event/$hook_matcher running $hook_script — it will never fire (wrong event, matcher, or command)"
+            emit FAIL "settings.json/hook" "$hook_id exists in settings.json but not under $hook_event/$hook_matcher — a hook under the wrong event or matcher is never reached for the calls it was meant to gate"
+        elif [ "$hook_required" = "optional" ]; then
+            emit PASS "settings.json/hook" "$hook_id not wired (opt-in LLM judge gate — expected unless you chose it)"
         else
-            emit WARN "settings.json/hook" "$hook_id NOT wired — its script is linked but never fires (see README 安装 prompt step 3)"
+            emit WARN "settings.json/hook" "$hook_id NOT wired — its script is linked but nothing references it (see README 安装 prompt step 3)"
         fi
     done <<'HOOK_WIRING'
-PreToolUse|AskUserQuestion|pre:ask-user-question:recommend-gate|hooks/ask-recommend-gate.js
-PreToolUse|Bash|pre:bash:codeagent-stdin-guard|hooks/codeagent-stdin-guard.js
-Stop|*|stop:desktop-notify-local|hooks/desktop-notify.js
+PreToolUse^AskUserQuestion^pre:ask-user-question:recommend-gate^node "$HOME/.claude/hooks/ask-recommend-gate.js"^required
+PreToolUse^Bash^pre:bash:codeagent-stdin-guard^node "$HOME/.claude/hooks/codeagent-stdin-guard.js"^required
+Stop^*^stop:desktop-notify-local^node "$HOME/.claude/hooks/desktop-notify.js"^required
+PreToolUse^Edit|Write|MultiEdit|NotebookEdit^pre:edit:writer-registry-gate^node "$HOME/.claude/hooks/run-with-flags.js" writer-registry-gate writer-registry-gate.js^required
+PreToolUse^Bash^pre:bash:block-broad-kill^node "$HOME/.claude/hooks/run-with-flags.js" block-broad-kill block-broad-kill.js^required
+PreToolUse^Bash^pre:bash:commit-message-language^node "$HOME/.claude/hooks/run-with-flags.js" commit-message-language commit-message-language.js^required
+Stop^*^stop:bg-shell-reclaim-check^node "$HOME/.claude/hooks/bg-shell-reclaim-check.js"^required
+Stop^*^stop:continuation-claim-gate^node "$HOME/.claude/hooks/continuation-claim-gate.js"^optional
+Stop^*^stop:prose-choice-gate^node "$HOME/.claude/hooks/prose-choice-gate.js"^optional
+Stop^*^stop:capability-claim-gate^node "$HOME/.claude/hooks/capability-claim-gate.js"^optional
+Stop^*^stop:reverse-assertion-gate^node "$HOME/.claude/hooks/reverse-assertion-gate.js"^optional
 HOOK_WIRING
 
     # desktop-notify-local only takes over if the ECC plugin's own stop hook is off;
@@ -293,6 +372,77 @@ HOOK_WIRING
     else
         emit WARN "settings.json/env" "ECC_DISABLED_HOOKS='$ecc_disabled' has no exact stop:desktop-notify token (possible duplicate notifications)"
     fi
+fi
+
+# Hook profile. Three of the required hooks (writer-registry-gate, block-broad-kill,
+# commit-message-language) run through run-with-flags.js, which consults
+# HOOK_PROFILE / ECC_HOOK_PROFILE and only runs the hook under the `standard` or
+# `strict` profile. Under `minimal` the dispatcher exits 0 without calling the hook
+# at all — the wiring is present and correct, the script is linked, and the gate
+# still never fires. Every check above passes in that state, which is precisely the
+# silent-failure shape this suite exists to catch, so it gets its own check.
+# Both the settings.json env block and the ambient shell are consulted, because
+# either one reaches the dispatcher.
+# Hook profile. Three required hooks (writer-registry-gate, block-broad-kill,
+# commit-message-language) run through run-with-flags.js, which only runs them
+# under the `standard` or `strict` profile. Under `minimal` the dispatcher exits 0
+# without calling the hook — wiring present, script linked, gate never fires, and
+# every other check here still green. That is the exact silent-failure shape this
+# suite exists to catch, so it gets its own check.
+#
+# Two things the naive version of this check got wrong, both verified against
+# lib/hook-flags.js: the runtime does trim().toLowerCase() on the value (so
+# `Minimal` and ` minimal ` disable the hooks just as `minimal` does), and it
+# resolves HOOK_PROFILE before ECC_HOOK_PROFILE by NAME, out of one merged
+# process env — settings.json's env block and the ambient shell both land there.
+# So we normalize, and we treat a `minimal` from EITHER source as disabling.
+# lib/hook-flags.js resolves `HOOK_PROFILE || ECC_HOOK_PROFILE` out of ONE merged
+# process env, then trim()s and lowercase()s it. settings.json's env block and the
+# ambient shell both feed that env, so precedence is by NAME, not by source: any
+# HOOK_PROFILE at all wins over any ECC_HOOK_PROFILE. An earlier version of this
+# check treated "minimal from any source" as disabling, which reported FAIL on the
+# perfectly working combination HOOK_PROFILE=standard + ECC_HOOK_PROFILE=minimal.
+read_env_var() {  # settings.json env first, then the ambient shell
+    local v; v="$(jq -r --arg k "$1" '.env[$k] // empty' "$SETTINGS" 2>/dev/null || true)"
+    [ -n "$v" ] || eval "v=\${$1:-}"
+    printf '%s' "$v" | tr '[:upper:]' '[:lower:]' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//'
+}
+profile_raw="$(read_env_var HOOK_PROFILE)"
+[ -n "$profile_raw" ] || profile_raw="$(read_env_var ECC_HOOK_PROFILE)"
+case "${profile_raw:-standard}" in
+    standard|strict)
+        emit PASS "hook profile" "${profile_raw:-standard (default)} — dispatcher-routed gates run"
+        ;;
+    minimal)
+        emit FAIL "hook profile" "the effective hook profile is 'minimal' — run-with-flags.js then exits 0 without calling the three dispatcher-routed required gates (writer-registry-gate / block-broad-kill / commit-message-language). They stay wired and linked, and never run. Set HOOK_PROFILE=standard, or unwire those three so the gap is deliberate"
+        ;;
+    *)
+        emit WARN "hook profile" "hook profile '$profile_raw' is not one of minimal/standard/strict; hook-flags.js falls back to standard (gates run), but the value looks like a typo"
+        ;;
+esac
+
+# DISABLED_HOOKS can switch off a required gate by id with the same silent result.
+# Same precedence rule, same reason: DISABLED_HOOKS wins over ECC_DISABLED_HOOKS by
+# name. Reading ECC_DISABLED_HOOKS first would let this repo's own
+# ECC_DISABLED_HOOKS=stop:desktop-notify mask an ambient DISABLED_HOOKS that
+# switches a required gate off.
+disabled_ids="$(read_env_var DISABLED_HOOKS)"
+[ -n "$disabled_ids" ] || disabled_ids="$(read_env_var ECC_DISABLED_HOOKS)"
+for req in writer-registry-gate block-broad-kill commit-message-language bg-shell-reclaim-check; do
+    if printf '%s' "$disabled_ids" | tr ',' '\n' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' \
+        | grep -qxF "$req"; then
+        emit FAIL "hook profile" "the effective DISABLED_HOOKS lists '$req' — that required gate is wired but hook-flags.js will not run it"
+    fi
+done
+
+# lsof: bg-shell-reclaim-check is a required Stop hook whose whole job is spotting
+# background shells nobody has accounted for, and its probe shells out to lsof.
+# Without lsof it marks the probe unusable and lets the stop through — it fails
+# open, silently, forever. macOS ships lsof; many minimal Linux images do not.
+if command -v lsof >/dev/null 2>&1; then
+    emit PASS "lsof" "present (stop:bg-shell-reclaim-check can probe)"
+else
+    emit FAIL "lsof" "not on PATH — stop:bg-shell-reclaim-check (required) and stop:continuation-claim-gate (if wired) probe with lsof; without it they mark the probe unusable and let every stop through. They are wired, linked, and permanently inert. Install lsof (Debian/Ubuntu: apt install lsof), or unwire those gates so the gap is deliberate rather than silent"
 fi
 
 # ---------- Top-level config files (manually merged) ----------

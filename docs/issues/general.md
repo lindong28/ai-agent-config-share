@@ -1,6 +1,6 @@
 # General Issues
 
-> [Agent] `harness-issues.md` 不覆盖的其余问题的 domain 跟踪文件——本仓自身的产品代码 / 安装器（`install.sh` / `verify.sh` / `tt-web` / `ask-user-mcp`）缺陷，以及 wrapped-agent 行为问题与工具缺口。Agent harness 自身问题走 [harness-issues.md](harness-issues.md)。
+> [Agent] `harness-issues.md` 不覆盖的其余问题的 domain 跟踪文件——本仓自身的产品代码 / 安装器（`install.sh` / `verify.sh` / `ask-user-mcp`）缺陷，以及 wrapped-agent 行为问题与工具缺口。Agent harness 自身问题走 [harness-issues.md](harness-issues.md)；**tt-web 子项目的问题走它自己的 `tt-web/docs/issues/`**（该子项目自带 tracker 与 ux-contract），只有跨越子项目边界、影响本仓安装或集成的部分才留在这里。
 
 写入驱动：`/custom:supervise` 等流程，以及审计 / review 流程发现、但本次不就地修的本仓缺陷。按 `~/.claude/references/docs-organization-protocol.md` §4.8 追加一条。
 

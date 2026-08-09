@@ -8,21 +8,39 @@
   };
 
   const timeDims = new Set(["day", "week", "month"]);
-  const filterNames = ["agent", "project", "model"];
-  const filterAllLabels = { agent: "All agents", project: "All projects", model: "All models" };
+  const filterNames = ["agent", "project", "model", "machine"];
+  const filterAllLabels = { agent: "All agents", project: "All projects", model: "All models", machine: "All machines" };
   let xDimPinned = false;
+  let loadGeneration = 0;
 
   async function init() {
     const controls = ["#x-dim", "#group-dim", "#metric", "#range"].map((selector) => TTWeb.qs(selector));
     applyQuery();
-    await loadFilterOptions(false);
     async function load(force) {
-      if (force) {
-        await loadFilterOptions(true);
+      const generation = ++loadGeneration;
+      const before = await TTWeb.api("/api/sync-status");
+      if (!isCurrentLoad(generation)) return;
+      await loadFilterOptions(force, undefined, generation);
+      if (!isCurrentLoad(generation)) return;
+      await loadPivot(false, undefined, generation);
+      if (!isCurrentLoad(generation)) return;
+      let status = await TTWeb.api("/api/sync-status");
+      if (!isCurrentLoad(generation)) return;
+      TTWeb.renderSyncStatus(status);
+      if (status.syncing) {
+        status = await TTWeb.waitForSyncTerminal(status, {
+          isCurrent: () => isCurrentLoad(generation),
+        });
+        if (!isCurrentLoad(generation)) return;
+        if (status.polling_error) return;
       }
-      await loadPivot(force);
+      if (force || status.completed_at !== before.completed_at) {
+        await loadFilterOptions(false, false, generation);
+        if (!isCurrentLoad(generation)) return;
+        await loadPivot(false, false, generation);
+      }
     }
-    TTWeb.bindShell(load);
+    TTWeb.bindShell(load, { range: false });
     controls.forEach((control) => {
       if (control) {
         control.addEventListener("change", async () => {
@@ -33,31 +51,28 @@
             xDimPinned = true;
           }
           syncQuery();
-          if (control.id === "range") {
-            await loadFilterOptions(false);
-          }
-          loadPivot(false);
+          await load(false);
         });
       }
     });
     TTWeb.qsa("[data-filter-control]").forEach((control) => {
-      control.addEventListener("change", () => {
+      control.addEventListener("change", async () => {
         syncQuery();
-        loadPivot(false);
+        await load(false);
       });
     });
     TTWeb.qsa(".preset-btn").forEach((button) => {
-      button.addEventListener("click", () => {
+      button.addEventListener("click", async () => {
         const preset = presets[button.dataset.preset];
         TTWeb.qs("#x-dim").value = preset.x;
         TTWeb.qs("#group-dim").value = preset.group;
         TTWeb.qs("#metric").value = preset.metric;
         xDimPinned = true;
         syncQuery();
-        loadPivot(false);
+        await load(false);
       });
     });
-    await loadPivot(false);
+    await load(false);
   }
 
   function applyQuery() {
@@ -78,11 +93,19 @@
     }
   }
 
-  async function loadFilterOptions(force) {
+  function isCurrentLoad(generation) {
+    return generation === loadGeneration;
+  }
+
+  async function loadFilterOptions(force, allowSync, generation) {
     const options = await TTWeb.api("/api/pivot-filters", {
       range: TTWeb.getRange(),
       force: force ? "1" : undefined,
+      sync: allowSync === false ? "0" : undefined,
     });
+    if (generation !== undefined && !isCurrentLoad(generation)) {
+      return;
+    }
     filterNames.forEach((name) => populateFilter(name, options[name] || []));
     applyFilterQuery();
   }
@@ -152,7 +175,7 @@
     return filters;
   }
 
-  async function loadPivot(force) {
+  async function loadPivot(force, allowSync, generation) {
     const x = TTWeb.qs("#x-dim").value;
     const group = TTWeb.qs("#group-dim").value;
     const metric = TTWeb.qs("#metric").value;
@@ -160,8 +183,11 @@
     TTWeb.qs("#pivot-status").textContent = "Loading";
     const data = await TTWeb.api(
       "/api/pivot",
-      Object.assign({ x, group, metric, range, force: force ? "1" : undefined }, selectedFilters())
+      Object.assign({ x, group, metric, range, force: force ? "1" : undefined, sync: allowSync === false ? "0" : undefined }, selectedFilters())
     );
+    if (generation !== undefined && !isCurrentLoad(generation)) {
+      return;
+    }
     renderChart(data, x, metric);
     renderTable(data, metric);
     TTWeb.qs("#pivot-status").textContent = hasNoPivotData(data) ? "No data" : chartType(x) + " chart";
@@ -176,17 +202,92 @@
     return !data.rows.length || !data.columns.length;
   }
 
+  // A chart that quietly shows fewer series than the data has reads as if it
+  // showed all of them, so say what was left out and where to find it.
+  function renderSeriesLimitNote(plotted, columnCount) {
+    const note = TTWeb.qs("#pivot-series-note");
+    if (!note) {
+      return;
+    }
+    if (plotted.dropped > 0) {
+      note.hidden = false;
+      // Not "the N smallest": ranking counts a null as zero, and for cost a
+      // null is either no activity or an unknown price. A series nobody could
+      // price therefore ranks at the bottom whatever it actually cost, so the
+      // note states the basis instead of asserting a size order it cannot know.
+      note.textContent = `Charting ${TTWeb.SERIES_LIMIT} of ${columnCount} series, ranked by known cost. The other ${plotted.dropped} are not plotted, and a series whose pricing tt-web does not know ranks low here regardless of what it actually cost — for the same reason the remainder cannot be pooled into an "Other" line. Every series is listed in the table below.`;
+      return;
+    }
+    note.hidden = true;
+    note.textContent = "";
+  }
+
+  // The palette has a fixed number of slots and no ninth hue to hand out, so a
+  // grouping that produces more series than that (group by model, typically)
+  // cannot draw them all. What happens to the remainder depends on the metric.
+  //
+  // For token and message metrics the server writes 0 for a bucket a column had
+  // no activity in, so the tail sums cleanly into one "Other" line.
+  //
+  // Cost is different: `aggregators.pivot` writes null both when a column had no
+  // activity in that bucket AND when it had activity whose price tt-web does not
+  // know. Those two are indistinguishable by the time they reach us, so summing
+  // the non-null members would publish a figure that silently omits real spend
+  // and still reads as a complete total. Rather than fabricate that number, the
+  // smallest columns are left out of the chart and the omission is stated; the
+  // table below the chart continues to list every column, unknowns included.
+  function foldColumnsToSeriesLimit(data, metric) {
+    const seriesOf = (column) => data.rows.map((row) => row.values[column]);
+    const columns = data.columns.map((key) => ({ key, series: seriesOf(key) }));
+    if (columns.length <= TTWeb.SERIES_LIMIT) {
+      return { columns, dropped: 0, folded: 0 };
+    }
+    const total = (series) => series.reduce((sum, value) => sum + Math.abs(Number(value) || 0), 0);
+    const ranked = columns.slice().sort((a, b) => total(b.series) - total(a.series));
+
+    if (metric === "cost") {
+      return {
+        columns: ranked.slice(0, TTWeb.SERIES_LIMIT),
+        dropped: columns.length - TTWeb.SERIES_LIMIT,
+        folded: 0,
+      };
+    }
+
+    const head = ranked.slice(0, TTWeb.SERIES_LIMIT - 1);
+    const tail = ranked.slice(TTWeb.SERIES_LIMIT - 1);
+    const merged = data.rows.map((row, rowIndex) =>
+      tail.reduce((sum, column) => sum + Number(column.series[rowIndex] || 0), 0)
+    );
+    return {
+      columns: head.concat([{ other: true, label: `Other (${tail.length})`, series: merged }]),
+      dropped: 0,
+      folded: tail.length,
+    };
+  }
+
   function renderChart(data, x, metric) {
     if (hasNoPivotData(data)) {
+      // Clear the note here too, or an empty chart keeps claiming it is
+      // plotting a subset of series that are no longer on screen.
+      renderSeriesLimitNote({ dropped: 0 }, 0);
       renderEmptyChart();
       return;
     }
     setChartEmptyState(false);
     const type = chartType(x);
     const xLabels = data.rows.map((row) => displayLabel(row.x, x));
-    const datasets = data.columns.map((column, index) => {
-      const label = displayLabel(column, TTWeb.qs("#group-dim").value);
-      return TTWeb.dataset(label.text, data.rows.map((row) => row.values[column]), index, {
+    const plotted = foldColumnsToSeriesLimit(data, metric);
+    renderSeriesLimitNote(plotted, data.columns.length);
+    const datasets = plotted.columns.map((column, index) => {
+      if (column.other) {
+        return TTWeb.dataset(column.label, column.series, index, {
+          fill: false,
+          spanGaps: true,
+          fullLabel: column.label,
+        });
+      }
+      const label = displayLabel(column.key, TTWeb.qs("#group-dim").value);
+      return TTWeb.dataset(label.text, column.series, index, {
         fill: false,
         spanGaps: true,
         fullLabel: label.fullLabel,
@@ -274,7 +375,13 @@
       renderEmptyTable(table, header, data.columns.length + 1);
       return;
     }
-    const body = data.rows
+    // The table leads with the row the reader came for. On every other x
+    // dimension that is already the largest total; on a time axis it is the
+    // most recent bucket, which the server orders last because the chart above
+    // needs its axis running forward. Reversing here rather than in `data.rows`
+    // keeps the chart on the chronological order it requires.
+    const orderedRows = timeDims.has(xDim) ? data.rows.slice().reverse() : data.rows;
+    const body = orderedRows
       .map((row) => {
         const xLabel = displayLabel(row.x, xDim);
         const cells = data.columns

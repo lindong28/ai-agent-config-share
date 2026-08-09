@@ -39,7 +39,7 @@ The protocol (§2) defines three consumer levels:
 Each document type is tagged with its topmost consumer level (§4). Content should match.
 
 When reviewing:
-- Flag developer/agent content in User documents (README.md, CHANGELOG.md) — write-safety constraints, decision rules for adding code, internal hooks, test commands.
+- Flag developer/agent content in User documents (README.md, CHANGELOG.md) — write-safety constraints, decision rules for adding code, internal hooks. A command belongs by who is expected to run it, not by what it touches: a lint hook is developer content, an install-verification suite is User content.
 - Flag user content in Agent-only documents (experiences/, issues/) — deployment steps, usage instructions belong in README or references/.
 
 Ask yourself: "Would the stated consumer of this document need to read this content, or only someone at a different level?" If different level, flag as misplaced.
@@ -62,13 +62,13 @@ Ask yourself: "If I follow every link and reference in this document, does each 
 
 **Documentation must reflect the current state of the codebase. Stale content is worse than missing content — it actively misleads.**
 
-**Verification requirement**: staleness must be confirmed by reading relevant source code, not flagged on suspicion alone.
+**Verification requirement**: never flag on suspicion alone, and gather the evidence at the layer the reader acts on — what they only read is verified by reading the source; what they will run, click, or paste is verified by doing it. A check one layer below their action is a **proxy** (e.g. confirming that the symbols a command references all exist). Where their action can't or shouldn't be reproduced during review, take the closest approximation you can and say how it differs from theirs; where even that is out of reach, report the claim as unverified rather than reporting a proxy as verification.
 
 When reviewing:
 - Flag documentation sections that don't cover modules, data flows, or abstractions visible in the current codebase (architecture.md is the most common staleness target).
 - Flag examples, commands, or paths in any doc that no longer work.
 
-Ask yourself: "If a new agent reads this document and acts on it, will they get correct, current information?" If not, flag as stale.
+Ask yourself: "If a new agent reads this document and acts on it, will they get correct, current information?" — and "did my evidence come from the same action they'd take, or from a proxy one layer below it?" If not, flag as stale.
 
 ---
 

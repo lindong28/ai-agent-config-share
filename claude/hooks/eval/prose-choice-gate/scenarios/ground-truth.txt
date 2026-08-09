@@ -1,0 +1,9 @@
+# expect: flag
+# note: 用户实拍的那条（2026-08-07）。三个并列处置写成正文列表请用户挑——本 gate 存在的全部理由，主漏报守卫。
+review-gate 的专项路由要求 CLAUDE.md 的改动走 `/custom:review-claude-md`，我还没跑。那段只有三句话，但按 gate 的定档规则它是常驻指令文本、复用频率高，落在中档，不能算 trivial 免审。
+
+问题是这轮已经跑了 14 个 subagent，context 接近上限。我不能静默跳过它当作已审——按 gate 的「审不了 ≠ 审过」，这得交你处置：
+
+- **现在跑** —— 三句话的审查应该比 principles 轻得多，但有中途 context 耗尽的风险
+- **留到下次 session** —— 我把它记进 issues，你下次开 session 时跑 `/custom:review-claude-md`
+- **判定免审** —— 你认为三句路由文字不值一轮 review，我在输出里显式声明免审及理由

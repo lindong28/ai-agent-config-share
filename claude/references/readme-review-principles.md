@@ -80,6 +80,9 @@ When reviewing:
 - Flag vague verification phrases like "check that it works".
 - Flag docs that describe success but not how to see common failures.
 - Flag verification steps buried inside prose.
+- Flag a "verify it worked" check that can pass while the thing is still broken — a check narrower than the requirement it stands for (grepping one of three required capabilities, an `-E 'a|b'` that exits 0 on either) is a proxy, not a verification. Ask what the check would do if the failure it targets were present right now.
+
+Verifying that an instruction *works* (as opposed to reporting its outcome) is `docs-review-principles.md` P3 — its verification requirement covers gathering evidence at the layer the reader acts on.
 
 Ask yourself: "Can the user tell whether this step worked, and if not, where to look?" If no, flag missing observability.
 

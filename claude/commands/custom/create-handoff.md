@@ -1,7 +1,7 @@
 ---
 description: 把当前 session 的关键上下文外部化为一份 markdown handoff，交给新 coding agent session 接力。用户在 context 接近用满或要切到新 session 前手动触发。
 argument-hint: [可选：补充 scope/重点/语言/排除项]
-disable-model-invocation: true
+disable-model-invocation: false
 ---
 
 # handoff
@@ -25,6 +25,22 @@ disable-model-invocation: true
 **handoff 的内容边界（核心原则）**：handoff 只承载**客观 context**——用户原话 / 已生成产物 / 已推翻方案 / 文件路径 / 执行轨迹。它**不**承载 handoff 写作者的推理产出——推荐执行顺序 / 验证假设 / 主观建议 / 待测 case / "你应该自己再验证 X" 类的指导都不行。决策与新调研都是下一 agent 的工作；handoff 写作者的角色是**客观信息的搬运工**，不是 pre-think 替代下一 agent。
 
 **判断越界靠功能测试，不靠 phrase matching**：换标签（"改进思路 / 初步观察 / 记录的方向"）不改变功能本质。判断 lens：这段内容 reader 能否从 git log / 一手材料 / 用户原话独立得到？只能从你的会话思考得到 = 越界。跨样本归纳的规律（"action prompt 比 appearance prompt 更适合 GIF"）即使加"未量化验证"前缀也仍是推理而非客观。
+
+---
+
+## handoff 适用边界
+
+三态分流，判据是 `~/.claude/state/active-plan-<session_id>.json` 这个 marker（`~/.claude/bin/active-plan show` 可查）：
+
+| 情形 | 动作 |
+|---|---|
+| marker 在，且它指的就是本轮在做的 plan | **不写 handoff。** plan 目录的 `plan.md` / `state.md` / `journal.md` 已是交接物，compaction 后会由 briefing 注回路径。再写一份是同一信息的第二个副本，两份会立刻开始漂移 |
+| 本轮确实在执行某个 plan，但 marker 缺失或指向已结束的别的 plan | **`~/.claude/bin/active-plan set <当前 plan.md>`，而不是写 handoff。** 注意此格只能 `set`——单独 `clear` 会留下无 marker 状态，下次 compaction 的 briefing 就恢复不出当前 plan。（`clear` 只用于真正离开 plan、之后不再执行任何 plan 的情形，见 long-task-protocol）缺 marker 是状态外部化漏了一步，写 handoff 只是绕过它 |
+| 确无 plan，而本轮有值得续做的实质工作 | **写 handoff。** 典型是探索型 session、跨 harness 交接、或用户要一个人工检查点 |
+
+模型可自行调用本 command（`disable-model-invocation: false`），但只在第三种情形下自行调用；用户显式要求时照常调用，不因 marker 存在而拒绝——用户要一份人工检查点是正当理由。
+
+marker 只承诺"指得到 plan 目录"。`state.md` / `journal.md` 的内容是否够接手，取决于它们是否被按 `~/.claude/references/long-task-protocol.md`「声明 active plan」与 §3 持续维护——判断"不写 handoff"前先扫一眼这两份文件是否真的当前。
 
 ---
 

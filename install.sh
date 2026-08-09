@@ -7,11 +7,15 @@
 #     <repo>/claude/commands/routine/*.md → ~/.claude/commands/routine/*.md
 #     <repo>/claude/references/*.md       → ~/.claude/references/*.md
 #     <repo>/claude/agents/*.md           → ~/.claude/agents/*.md
-#     <repo>/claude/bin/codeagent-wrapper → ~/.claude/bin/codeagent-wrapper
+#     <repo>/claude/bin/codeagent-wrapper-<os>-<arch> → ~/.claude/bin/codeagent-wrapper
 #     <repo>/claude/bin/poll-progress.sh  → ~/.claude/bin/poll-progress.sh
+#     <repo>/claude/bin/active-plan       → ~/.claude/bin/active-plan
+#     <repo>/claude/hooks/*.js            → ~/.claude/hooks/*.js  (wire via README prompt)
+#     <repo>/claude/hooks/eval/<gate>/    → ~/.claude/hooks/eval/<gate>/
 #     <repo>/claude/statusline.sh        → ~/.claude/statusline.sh
 #     <repo>/claude/statusline-fields.py → ~/.claude/statusline-fields.py
 #     <repo>/claude/statusline-transcript.py → ~/.claude/statusline-transcript.py
+#     <repo>/claude/statusline-usage.py  → ~/.claude/statusline-usage.py
 #     <repo>/codex/agents/*.toml         → ~/.codex/agents/*.toml
 #     <repo>/claude/skills/*/            → ~/.claude/skills/*
 #                                        → ~/.codex/skills/*
@@ -31,8 +35,10 @@
 #     codex CLI presence (warn only — OAuth-gated, can't auto-install)
 #     ~/.claude/settings.json statusLine field (add if missing; warn on conflict)
 #
-# Platform note: codeagent-wrapper is an arm64 macOS binary required by
-# /custom:execute-plan. On Intel Mac it links but won't run.
+# Platform note: codeagent-wrapper (required by /custom:execute-plan) ships as two
+# prebuilt binaries — darwin-arm64 and linux-amd64. The installer picks the one
+# matching this host and links it as ~/.claude/bin/codeagent-wrapper. On any other
+# platform it warns and skips that one link; the rest of the install is unaffected.
 #
 # Manual merge required (preserves existing customizations):
 #   <repo>/claude/CLAUDE.md  → merge into ~/.claude/CLAUDE.md
@@ -402,11 +408,16 @@ done
 
 # --- Claude hooks (symlinked per-file so we never clobber an existing ~/.claude/hooks) ---
 # Only the hook scripts are linked here. Activation requires wiring three entries into
-# ~/.claude/settings.json (PreToolUse:ask-recommend-gate + PreToolUse:codeagent-stdin-guard
-# + Stop:desktop-notify) plus ECC_DISABLED_HOOKS="stop:desktop-notify" — the reference shape
-# lives in claude/settings.json and the README 安装 prompt walks Claude Code through the merge.
+# ~/.claude/settings.json (3 PreToolUse gates + 1 AskUserQuestion gate + 6 Stop hooks)
+# plus ECC_DISABLED_HOOKS="stop:desktop-notify" — the reference shape lives in
+# claude/settings.json and the README 安装 prompt walks Claude Code through the merge.
 # Test files ship alongside so the hooks stay verifiable after install
-# (`cd ~/.claude/hooks && node --test codeagent-stdin-guard.test.js`).
+# (`cd ~/.claude/hooks && node --test *.test.js`).
+#
+# Four of the Stop hooks are LLM judge gates (continuation / prose-choice /
+# capability-claim / reverse-assertion): each one costs a judge call per turn that
+# reaches Stop, so they are opt-in at the settings.json merge step, not forced on.
+# block-broad-kill / commit-message-language / writer-registry-gate are deterministic.
 
 HOOKS_SRC="$SCRIPT_DIR/claude/hooks"
 
@@ -416,26 +427,91 @@ if [ -d "$HOOKS_SRC" ]; then
     mkdir -p "$HOME/.claude/hooks/lib"
     for rel in ask-recommend-gate.js desktop-notify.js desktop-notify.test.js \
                codeagent-stdin-guard.js codeagent-stdin-guard.test.js \
-               lib/llm-judge.js lib/utils.js; do
+               run-with-flags.js \
+               writer-registry-gate.js writer-registry-gate.test.js \
+               block-broad-kill.js block-broad-kill.test.js \
+               commit-message-language.js commit-message-language.test.js \
+               continuation-claim-gate.js continuation-claim-gate.test.js \
+               continuation-claim-gate.control-flow.test.js \
+               prose-choice-gate.js prose-choice-gate.control-flow.test.js \
+               capability-claim-gate.js \
+               reverse-assertion-gate.js reverse-assertion-gate.test.js \
+               bg-shell-reclaim-check.js \
+               lib/llm-judge.js lib/utils.js lib/hook-flags.js \
+               lib/judge-log.js lib/transcript.js; do
         src="$HOOKS_SRC/$rel"
         [ -f "$src" ] && link_one "$src" "$HOME/.claude/hooks/$rel"
     done
+    # Eval scenario suites for the four LLM judge gates. Not needed at runtime —
+    # they are how you re-measure a gate's precision/recall after editing its rubric
+    # (`cd ~/.claude/hooks/eval/<gate> && node run.mjs`), so they only help if the
+    # scenarios travel with the hook rather than staying behind in the repo.
+    for gate in capability-claim-gate continuation-claim-gate prose-choice-gate reverse-assertion-gate; do
+        [ -d "$HOOKS_SRC/eval/$gate" ] || continue
+        link_one "$HOOKS_SRC/eval/$gate" "$HOME/.claude/hooks/eval/$gate"
+    done
 fi
 
-# --- codeagent-wrapper binary (arm64 macOS; required by /custom:execute-plan) ---
+# --- codeagent-wrapper binary (darwin/arm64 + linux/amd64; required by /custom:execute-plan) ---
+#
+# Upstream ships a dispatcher that picks the platform artifact at RUN time by
+# resolving <its own dir>/../.. as the repo root. That resolution assumes
+# ~/.claude is a symlink to the repo's claude/ directory. This installer does not
+# work that way — it links individual files into a real ~/.claude — so through the
+# installed symlink the dispatcher would resolve the repo root to $HOME and break.
+# This repo therefore does not carry it: we select the platform artifact HERE, at
+# install time, and link it directly as ~/.claude/bin/codeagent-wrapper.
+# Same platform coverage, one less indirection.
 
-CODEAGENT_WRAPPER="$SCRIPT_DIR/claude/bin/codeagent-wrapper"
-
-if [ -f "$CODEAGENT_WRAPPER" ]; then
-    echo
-    echo "Installing codeagent-wrapper binary:"
-    arch="$(uname -m)"
+detect_platform() {
+    # Emits darwin-arm64 / linux-amd64 / empty. Kept in sync with the same
+    # function in verify.sh — if you change one, change both.
+    #
+    # `uname -m` alone is not enough on Apple Silicon: run from a Rosetta
+    # (x86_64) shell it reports x86_64, and we would skip the wrapper on a
+    # machine that has a perfectly good arm64 build. sysctl.proc_translated=1
+    # means "this process is being translated", i.e. the host is really arm64.
+    local os arch
     os="$(uname -s)"
-    if [ "$os" != "Darwin" ] || [ "$arch" != "arm64" ]; then
-        echo "  [WARN] codeagent-wrapper is arm64 macOS only; current platform: $os/$arch."
-        echo "         Linking anyway, but /custom:execute-plan will fail at runtime."
+    arch="$(uname -m)"
+    if [ "$os" = "Darwin" ] && [ "$arch" = "x86_64" ]; then
+        # sysctl is not always on PATH (cron, trimmed PATH, some login shells),
+        # and a missing binary would read as "not translated" — i.e. exactly the
+        # misdetection this correction exists to prevent. Fall back to the
+        # absolute path before concluding anything.
+        local sysctl_bin=""
+        if command -v sysctl >/dev/null 2>&1; then sysctl_bin="$(command -v sysctl)"
+        elif [ -x /usr/sbin/sysctl ]; then sysctl_bin=/usr/sbin/sysctl
+        fi
+        if [ -n "$sysctl_bin" ] \
+            && [ "$("$sysctl_bin" -in sysctl.proc_translated 2>/dev/null || true)" = "1" ]; then
+            arch=arm64
+        fi
     fi
+    case "$os/$arch" in
+        Darwin/arm64)             printf 'darwin-arm64' ;;
+        Linux/x86_64|Linux/amd64) printf 'linux-amd64' ;;
+        *)                        printf '' ;;
+    esac
+}
+
+CODEAGENT_PLATFORM="$(detect_platform)"
+
+CODEAGENT_WRAPPER="$SCRIPT_DIR/claude/bin/codeagent-wrapper-$CODEAGENT_PLATFORM"
+
+echo
+echo "Installing codeagent-wrapper binary:"
+if [ -z "$CODEAGENT_PLATFORM" ]; then
+    echo "  [WARN] No codeagent-wrapper build for $(uname -s)/$(uname -m)."
+    echo "         Supported: Darwin/arm64, Linux/x86_64. /custom:execute-plan's"
+    echo "         delegation step will be unavailable; everything else installs normally."
+elif [ ! -f "$CODEAGENT_WRAPPER" ]; then
+    echo "  [WARN] Missing build for this platform: claude/bin/codeagent-wrapper-$CODEAGENT_PLATFORM"
+    echo "         /custom:execute-plan's delegation step will be unavailable."
+else
+    chmod +x "$CODEAGENT_WRAPPER"
     link_one "$CODEAGENT_WRAPPER" "$HOME/.claude/bin/codeagent-wrapper"
+    echo "  [platform] $CODEAGENT_PLATFORM"
 fi
 
 # --- poll-progress.sh (incremental .output reader; used by supervisor commands) ---
@@ -449,9 +525,20 @@ if [ -f "$POLL_PROGRESS" ]; then
     link_one "$POLL_PROGRESS" "$HOME/.claude/bin/poll-progress.sh"
 fi
 
+# --- active-plan (locates the plan.md currently in force; used by the plan commands) ---
+
+ACTIVE_PLAN="$SCRIPT_DIR/claude/bin/active-plan"
+
+if [ -f "$ACTIVE_PLAN" ]; then
+    echo
+    echo "Installing active-plan:"
+    chmod +x "$ACTIVE_PLAN"
+    link_one "$ACTIVE_PLAN" "$HOME/.claude/bin/active-plan"
+fi
+
 # --- statusline scripts (produce ~/.claude/tt-status.json for tt-web) ---
 
-STATUSLINE_FILES=(statusline.sh statusline-fields.py statusline-transcript.py)
+STATUSLINE_FILES=(statusline.sh statusline-fields.py statusline-transcript.py statusline-usage.py)
 have_statusline=0
 for f in "${STATUSLINE_FILES[@]}"; do
     [ -f "$SCRIPT_DIR/claude/$f" ] && have_statusline=1 && break

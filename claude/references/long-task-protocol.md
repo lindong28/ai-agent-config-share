@@ -26,6 +26,26 @@
 
 ---
 
+### 声明 active plan（compaction 恢复的前提）
+
+启用 long-task mode 后**立即**声明本 session 正在执行哪个 plan：
+
+```bash
+~/.claude/bin/active-plan set <path/to/plan.md> --title "<一句话任务名>"
+```
+
+它在 `~/.claude/state/active-plan-<session_id>.json` 写一个 **marker**：记录 plan 路径与其所在目录（`state.md` / `journal.md` 在读取时按目录解析，因此晚于 plan 创建也能被认出）。
+
+**离开这个 plan 的任何时刻都要 `~/.claude/bin/active-plan clear`**——任务完成、取消或废弃、以及同一 session 转去做别的工作，都算离开。残留的 marker 会在后续 compaction 把一个已经结束的 plan 注回新 context，并让 `/custom:create-handoff` 误以为不需要交接。
+
+**为什么必须显式声明、而不是让工具去猜**：context compaction 唯一无法从摘要重建的事实，就是「我在执行哪个 plan 目录」。扫 `plans/` 取 mtime 最新的那个是错的——并发 session 可能刚改过别的 plan 文件。只有 agent 自己从上下文知道答案，所以由 agent 写。marker 与 compaction 快照都按 session id 隔离，并发 session 不会互相注入。
+
+声明之后，compaction 之后的新 context 里会由 `SessionStart(compact)` 注入一条 briefing，首条就是 plan / state / journal 三个路径。
+
+**这套机制保证的是"恢复得回来"，不是"来得及写"**：没有任何 hook 能在 compaction 前逼你写盘（PreCompact 虽能阻断 compaction，但它的 reason 到不了模型，拦了也等于静默取消）。所以真正的保证来自 §3——`state.md` 在**每次状态变化时**就写，而不是攒到 compaction 前补。持续写盘本来就比最后一刻抢存可靠。
+
+---
+
 ## 2. 核心机制：两个状态文件 + 一条交付前规则
 
 | 文件 | 性质 | 装什么 | 何时读 | 何时写 |
@@ -121,7 +141,7 @@ mutable 文件适合答"现在到哪了 / 还有什么没做"——你只需要�
 触发例（不限于此）：
 
 - **取下一动作前**：决定"接下来做什么"时先扫一眼 Tasks 和 Open Issues
-- **compact 后第一件事**：在恢复执行前必须重读，重建对当前进度的认知
+- **compact 后第一件事**：在恢复执行前必须重读，重建对当前进度的认知。post-compact briefing 会把 plan / state / journal 路径注在首条；若 briefing 里写着「No active long-task plan was declared」，说明「声明 active plan」那步漏了，先补上再继续
 - **声称完成前**：核对所有 Tasks 都 done、所有 Open Issues 都 resolved
 
 ### 为什么不要靠记忆
@@ -298,6 +318,9 @@ Agent 读自己正在执行的 plan.md 时看到这段就进入长任务模式�
 | 反模式 | 为什么不要 |
 |---|---|
 | compact 后凭记忆继续，不重读 state/journal | 这是协议存在的核心动机；省这步 = 退化为没协议 |
+| 启用 long-task mode 却不跑 `active-plan set` | compaction 后 briefing 找不到 plan 目录，只能靠「最后一条用户消息」恢复 |
+| 有 active plan 还额外写 handoff | 同一份信息两个副本，立刻开始漂移；plan 目录就是交接物 |
+| 离开某个 plan（完成 / 放弃 / 转做别的）却不 `active-plan clear` | 残留 marker 会把已结束的 plan 注回后续 context，并抑制本该写的 handoff |
 | 把待办事项写进 journal | journal 是 append-only，事项 done 后没法直接标记，下次扫不到状态 |
 | 把决策追溯写进 state.md | state 是 snapshot，会被覆盖，决策历史丢失 |
 | 跳过 verify 因为"改动很小" | 高反转成本判断没有"很小"档；不验证就别说完成 |

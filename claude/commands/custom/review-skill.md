@@ -1,6 +1,6 @@
 ---
-argument-hint: <skill-or-command-or-non-principles-reference-path> [optimize] [principle-prune-mode=disable/moderate/aggressive] [max-principle-per-subagent=3]
-description: 用于用户明确要求审查并按需修复单个 SKILL.md、command 或 reference（含 principles 文件）时；也覆盖这类 artifact 自身封装外部 program 的职责边界。
+argument-hint: <skill|command|agent-definition|rules-file|non-principles-reference-path> [optimize] [principle-prune-mode=disable/moderate/aggressive] [max-principle-per-subagent=3]
+description: 用于用户明确要求审查并按需修复单个 SKILL.md、command、agent 定义、`rules/` 下的规则文件或 reference（含 principles 文件）时；也覆盖这类 artifact 自身封装外部 program 的职责边界。
 ---
 
 # review-skill
@@ -20,7 +20,7 @@ description: 用于用户明确要求审查并按需修复单个 SKILL.md、comm
 | 类别 | 契约 |
 |---|---|
 | 必需外部输入 | `$ARGUMENTS` 与目标 artifact；用户目标 / 约束；`skill-review-principles.md`、`deep-discuss-style.md` 及当前 harness 的决策 / 委派契约 |
-| 条件外部输入 | 目标所依赖的权威契约；启用或触发时的 optimization / creation 规则与证据；任何 `fix set` 都需要的 `fix-skill-from-session.md`「验证」契约；原则文件的 handoff contract |
+| 条件外部输入 | **目标类型自己的 authoring 标准**（`~/.claude/rules/` 下按 `paths` 匹配该目标的那份——skill / command / agent 走 `skill-authoring.md`，`rules/` 文件走 `rules-authoring.md`）：通用原则集不覆盖各类型特有的质量轴，缺了它交出的「已覆盖」对那些轴零判别力；目标所依赖的权威契约；启用或触发时的 optimization / creation 规则与证据；任何 `fix set` 都需要的 `fix-skill-from-session.md`「验证」契约；原则文件的 handoff contract |
 | artifact-failure 专用输入 | 仅观察到 artifact-failure 时需要的 `fix-skill-from-session.md`「Fix 设计」、原始 failure 与 execution evidence |
 | 流程内部状态 | `snapshot packet`、`review manifest`，以及适用时的 `contract packet` |
 | 给用户与下一轮的产出 | 已核实的 `finding set`、用户决策、落地改动与重审结论；另列保留、延期和 out-of-scope finding |
@@ -29,7 +29,7 @@ description: 用于用户明确要求审查并按需修复单个 SKILL.md、comm
 
 | 参数 | 必需 | 类型 | 默认 | 说明 |
 |---|---|---|---|---|
-| artifact-path | ✓ | 字符串 | — | 待审 SKILL.md、command 或 reference 路径。principles 文件（`*-principles.md`）也走这里——见下方类型 gate 的能力说明 |
+| artifact-path | ✓ | 字符串 | — | 待审 SKILL.md、command、agent 定义、`rules/` 下的规则文件或 reference 路径。principles 文件（`*-principles.md`）也走这里——见下方类型 gate 的能力说明 |
 | optimize | ✗ | boolean | false | 显式强制叠加 optimize 审查（默认判定见「模式」） |
 | principle-prune-mode | ✗ | 字符串 | moderate | 原则裁剪强度：`disable / moderate / aggressive`；判据见「裁剪原则集」 |
 | max-principle-per-subagent | ✗ | 正整数（≥1） | 3 | 常规原则组的分组上限；行为保持型压缩原则组为保持联合判断固定覆盖 3 条原则 |
@@ -50,7 +50,7 @@ root 直接拥有调度、核实和决策，不引入 coordinator；out-of-scope
 | 节点 | 前进条件 | 阻断 / 回边 |
 |---|---|---|
 | 最小冻结 | 用户输入与目标的 `snapshot packet` 可读 | digest 不匹配则重建 |
-| 类型 gate | 目标是 SKILL.md、command 或 reference | principles 文件按 reference 审查；**但本仓未收录专审 meta-原则的 `/custom:review-principles`**，所以「这套原则本身是否立得住」这一维度不被覆盖——在报告中明确声明该维度未审，不要当作已审过 |
+| 类型 gate | 目标是 SKILL.md、command、agent 定义、`rules/` 下的规则文件或 reference | principles 文件按 reference 审查；**但本仓未收录专审 meta-原则的 `/custom:review-principles`**，所以「这套原则本身是否立得住」这一维度不被覆盖——在报告中明确声明该维度未审，不要当作已审过；均不匹配则如实报告不受理，不要当 reference 硬套 |
 | 模式判定 | 确定 review-only 或 review + optimize | 需要用户权衡时先 AskUserQuestion |
 | 扩展冻结与裁剪 | 其余 required 输入已冻结，原则集已定 | `aggressive` 裁剪先经用户确认 |
 | 契约预检 | 契约结果允许继续 | `blocked` 停止；来源漂移则重开 |
@@ -80,7 +80,7 @@ root 直接拥有调度、核实和决策，不引入 coordinator；out-of-scope
 | `needs-refreeze` | 新发现的必要来源 locator | root 纳入新 `snapshot packet` 并重跑预检，直到闭包稳定 |
 | `blocked` | 重新冻结后仍不可获得的必要契约 | 停止审查 |
 
-**分组 spawn**：将选中的原则按 `~/.claude/references/skill-review-principles.md` 的 `Principle clusters` 表就近分组（同簇尽量进同一 subagent，每组 ≤ `max-principle-per-subagent`），每组 spawn 一个 fresh isolated reviewer context 并行审查。契约预检原则组已覆盖的原则不重复 spawn；契约结果允许继续后，其余组与适用的追加审查可并行。
+**分组 spawn**：将选中的原则按 `~/.claude/references/skill-review-principles.md` 的 `Principle clusters` 表就近分组（同簇尽量进同一 subagent，每组 ≤ `max-principle-per-subagent`），每组 spawn 一个 fresh isolated reviewer context 并行审查。契约预检原则组已覆盖的原则不重复 spawn；契约结果允许继续后，其余组与适用的追加审查可并行。spawn 时**不传 `name`**——判据见 `~/.claude/references/delegation-policy.md` §Harness transport。
 
 每个隔离 reviewer 的 prompt 必须含：其 `review manifest` assignment、审查范围、相关用户裁决、完整 `snapshot packet` 的嵌入 metadata 或不可变可读 locator、适用的 harness / tool-routing 子集，以及下述返回契约。公共事实源是该 `snapshot packet` 与 `~/.claude/references/deep-discuss-style.md`；可在 prompt 内摘出与本维度相关的 `contract packet` entries，但完整 `contract packet` 仍须可按需读取。prompt 可补充任务指令，但事实或证据必须先冻结进 `snapshot packet`。原则组 reviewer 读取原则索引 / cluster 与获分配原则的完整正文，边界不清时按需追读相邻或完整原则文件；不得由 root 复述原则。diff-focused 时必须读取冻结的 hunks / base，且范围与裁剪依据一致。
 

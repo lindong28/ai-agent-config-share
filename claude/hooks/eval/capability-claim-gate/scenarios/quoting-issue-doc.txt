@@ -1,0 +1,6 @@
+# expect: ok
+# attempted:
+# note: 负判别器②——content-vs-action。本仓大量消息在转述含能力断言的文档，这是最大的误报面（sibling 的注释记录过小模型在同一轴上翻车）。
+查到了，`docs/issues/harness-issues.md:898` 已经有一条 **[open] HARNESS-104**「session 开场的 deferred-tools 快照会过期且无人撤回」。
+
+它的 Description 写着：实测两处与事实不符——`TaskStop` 在清单里但直接调用 6/6 成功；而清单要求使用的 `ToolSearch` 本身不在工具表里，即它规定的补救路径不可执行。Impact 段把根因点得很准：这是一条会被 agent 当作权威的否定性能力断言，且否定断言天然不会被"用用看"证伪。

@@ -1,0 +1,116 @@
+#!/usr/bin/env node
+/**
+ * active-plan — declare/clear the long-task plan this session is executing.
+ *
+ * Why this exists:
+ *   After context compaction the agent loses the one fact it cannot rederive:
+ *   WHICH plan directory it was working in. Scanning `plans/` and picking the
+ *   newest mtime is wrong — a concurrent session may have touched those files
+ *   seconds ago. The agent itself is the only reliable source, because it
+ *   knows from conversation context. So it declares it, here, explicitly.
+ *
+ *   The marker is keyed by session id, so concurrent sessions never read each
+ *   other's. `pre-compact.js` folds it into the compaction snapshot and
+ *   `post-compact-restore.js` injects it into the fresh context.
+ *
+ * Usage:
+ *   active-plan set <plan.md> [--title "..."]   # state.md / journal.md inferred as siblings
+ *   active-plan show
+ *   active-plan clear
+ *
+ * Session id resolution: $CLAUDE_CODE_SESSION_ID (what Claude Code exports to
+ * Bash, and the same value hooks receive as `session_id`), then
+ * $CLAUDE_SESSION_ID, then --session <id>.
+ * Exit 0 on success, 1 on usage/IO error.
+ */
+
+'use strict';
+
+const fs = require('fs');
+const path = require('path');
+const os = require('os');
+
+const STATE_DIR = path.join(os.homedir(), '.claude', 'state');
+
+function sessionId(argv) {
+  const i = argv.indexOf('--session');
+  if (i !== -1 && argv[i + 1]) return argv[i + 1];
+  // CLAUDE_CODE_SESSION_ID is what Claude Code exports into Bash and is the
+  // same value hooks receive as `session_id` -- verified equal in practice.
+  return process.env.CLAUDE_CODE_SESSION_ID || process.env.CLAUDE_SESSION_ID || null;
+}
+
+function markerPath(sid) {
+  return path.join(STATE_DIR, `active-plan-${sid}.json`);
+}
+
+function flag(argv, name) {
+  const i = argv.indexOf(name);
+  return i !== -1 && argv[i + 1] ? argv[i + 1] : null;
+}
+
+function die(msg) {
+  process.stderr.write(`active-plan: ${msg}\n`);
+  process.exit(1);
+}
+
+function main() {
+  const argv = process.argv.slice(2);
+  const cmd = argv[0];
+  const sid = sessionId(argv);
+
+  if (!cmd || !['set', 'show', 'clear'].includes(cmd)) {
+    die('usage: active-plan set <plan.md> [--title "..."] | show | clear');
+  }
+  if (!sid) {
+    die('no session id ($CLAUDE_CODE_SESSION_ID / $CLAUDE_SESSION_ID unset and --session not given)');
+  }
+  fs.mkdirSync(STATE_DIR, { recursive: true });
+  const mp = markerPath(sid);
+
+  if (cmd === 'clear') {
+    try { fs.unlinkSync(mp); } catch { /* already gone */ }
+    process.stdout.write(`cleared ${mp}\n`);
+    return;
+  }
+
+  if (cmd === 'show') {
+    if (!fs.existsSync(mp)) { process.stdout.write('no active plan declared\n'); return; }
+    process.stdout.write(fs.readFileSync(mp, 'utf8'));
+    return;
+  }
+
+  // set
+  const planArg = argv[1];
+  if (!planArg || planArg.startsWith('--')) die('set requires a path to plan.md');
+  const plan = path.resolve(planArg);
+  if (!fs.existsSync(plan)) die(`plan not found: ${plan}`);
+
+  const dir = path.dirname(plan);
+
+  // Record the DIRECTORY, not frozen absolute paths to the siblings. state.md
+  // and journal.md are often created after the plan (bootstrap order), and a
+  // marker that froze them as null would keep hiding them from every later
+  // recovery briefing even once they exist. Consumers resolve at read time.
+  const marker = {
+    session_id: sid,
+    declared_at: new Date().toISOString(),
+    title: flag(argv, '--title'),
+    plan,
+    dir,
+    state: path.join(dir, 'state.md'),
+    journal: path.join(dir, 'journal.md'),
+  };
+  fs.writeFileSync(mp, JSON.stringify(marker, null, 2));
+  process.stdout.write(`declared active plan -> ${plan}\n`);
+
+  const missing = ['state.md', 'journal.md'].filter((n) => !fs.existsSync(path.join(dir, n)));
+  if (missing.length) {
+    process.stdout.write(
+      `warning: ${missing.join(' and ')} not present yet in ${dir}\n` +
+      'long-task-protocol requires them; create them before relying on compaction recovery.\n'
+    );
+  }
+}
+
+try { main(); } catch (e) { die(e && e.message ? e.message : String(e)); }

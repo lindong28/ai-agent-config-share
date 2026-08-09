@@ -38,18 +38,21 @@ class WebStaticTests(unittest.TestCase):
     def test_sessions_retention_note_describes_mixed_source_retention(self):
         html = (ROOT / "web" / "sessions.html").read_text()
 
-        self.assertIn("Sessions 只显示仍存在的原始日志", html)
-        self.assertIn("Claude 通常约 30 天", html)
-        self.assertIn("Codex 可能更久", html)
-        self.assertNotIn("原始日志保留约 ~30 天", html)
+        # The invariant is that the note gives a different window per source
+        # rather than one figure covering both. The earlier wording carried it
+        # in mixed Chinese and English; the wording is now English throughout.
+        self.assertIn("Only sessions whose raw logs still exist are listed", html)
+        self.assertIn("roughly 30 days for Claude Code", html)
+        self.assertIn("often longer for Codex", html)
 
-    def test_explore_has_agent_project_model_filter_controls(self):
+    def test_g2_explore_has_four_single_select_filter_controls(self):
         html = (ROOT / "web" / "explore.html").read_text()
 
         for name, label, all_label in [
             ("agent", "Agent filter", "All agents"),
             ("project", "Project filter", "All projects"),
             ("model", "Model filter", "All models"),
+            ("machine", "Machine filter", "All machines"),
         ]:
             with self.subTest(name=name):
                 self.assertIn(f'<label for="{name}-filter">{label}</label>', html)
@@ -62,11 +65,12 @@ class WebStaticTests(unittest.TestCase):
         self.assertNotIn("size=\"4\"", html)
         self.assertNotIn("clear-filters", html)
         self.assertNotIn("filter-summary", html)
+        self.assertNotIn('data-filter-control="machine"', (ROOT / "web" / "index.html").read_text())
 
     def test_pivot_js_wires_filter_controls_to_url_and_api(self):
         js = (ROOT / "web" / "pivot.js").read_text()
 
-        self.assertIn('filterNames = ["agent", "project", "model"]', js)
+        self.assertIn('filterNames = ["agent", "project", "model", "machine"]', js)
         self.assertIn("applyFilterQuery()", js)
         self.assertIn("syncFilterQuery()", js)
         self.assertIn("selectedFilters()", js)
@@ -75,6 +79,33 @@ class WebStaticTests(unittest.TestCase):
         self.assertNotIn('query.getAll(name)', js)
         self.assertNotIn('url.searchParams.append(name, value)', js)
         self.assertIn("Object.assign({ x, group, metric, range", js)
+
+    def test_g4_status_surface_and_refresh_terminal_polling_are_present(self):
+        overview = (ROOT / "web" / "index.html").read_text()
+        explore = (ROOT / "web" / "explore.html").read_text()
+        app = (ROOT / "web" / "app.js").read_text()
+
+        for html in (overview, explore):
+            self.assertIn('aria-label="Machine sync status"', html)
+            self.assertIn('id="sync-coverage"', html)
+            self.assertIn('id="sync-machines"', html)
+        for token in (
+            "coverage ${coverage.admitted}/${coverage.declared}",
+            "Excluded from All",
+            "Included in All using the last generation",
+            "unreachable",
+            "never",
+            "stale",
+            "waitForSyncTerminal",
+        ):
+            self.assertIn(token, app)
+
+    def test_g7_sessions_and_network_are_marked_this_machine_only(self):
+        for filename in ("sessions.html", "network.html"):
+            html = (ROOT / "web" / filename).read_text()
+            with self.subTest(filename=filename):
+                self.assertIn("This machine", html)
+                self.assertIn("this machine only", html)
 
     def test_pivot_js_shortens_project_labels_but_keeps_full_title(self):
         js = (ROOT / "web" / "pivot.js").read_text()
@@ -87,8 +118,8 @@ class WebStaticTests(unittest.TestCase):
     def test_explore_explains_codex_cost_estimates(self):
         html = (ROOT / "web" / "explore.html").read_text()
 
-        self.assertIn("Codex cost is 推算 from GPT-5 pricing when exact billing is not present.", html)
-        self.assertIn("GLM-5.1/5.2 cost is 推算 from bundled GLM-5 pricing.", html)
+        self.assertIn("Codex cost is estimated from GPT-5 pricing when exact billing is not present", html)
+        self.assertIn("GLM-5.1/5.2 cost is estimated from bundled GLM-5 pricing", html)
 
     def test_pivot_js_renders_explicit_empty_states(self):
         js = (ROOT / "web" / "pivot.js").read_text()
@@ -98,6 +129,16 @@ class WebStaticTests(unittest.TestCase):
         self.assertIn("renderEmptyTable(table", js)
         self.assertIn("no data", js)
         self.assertIn("colspan", js)
+
+    def test_pivot_table_leads_with_the_newest_time_bucket(self):
+        js = (ROOT / "web" / "pivot.js").read_text()
+
+        # The server orders time buckets forward because the chart's axis needs
+        # them that way; the table reverses its own copy so the newest row is
+        # not several screens down. Reversing `data.rows` in place instead
+        # would drag the chart's axis backwards with it.
+        self.assertIn("timeDims.has(xDim) ? data.rows.slice().reverse() : data.rows", js)
+        self.assertIn("const body = orderedRows", js)
 
 
 if __name__ == "__main__":

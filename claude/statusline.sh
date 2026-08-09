@@ -1,6 +1,6 @@
 #!/bin/bash
 # tt-statusline.sh — Token Tracker style statusline with transcript observability
-# Line 1: project | 5h bar | 7d bar | context bar
+# Line 1: project | 5h bar | 7d bar | per-model bars (Fable, …)
 # Line 2: tokens | cached | cost
 # Line 3: duration | model
 # Line 4: env metadata (CLAUDE.md / rules / MCPs / hooks)
@@ -18,15 +18,18 @@ input=$(cat)
 CLAUDE_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 STATUS_FILE="$HOME/.claude/tt-status.json"
 SPEED_CACHE="$HOME/.claude/statusline-cache/.speed.json"
+# Per-model quotas are absent from the harness payload, so statusline-usage.py
+# polls them in the background and leaves them here for the render to pick up.
+USAGE_CACHE="$HOME/.claude/statusline-cache/.usage.json"
 # The helper ships beside this script, so resolve it from here rather than from
 # $HOME/.claude — that path only happens to work because of the install symlink,
 # and it makes the script unusable when run straight from a checkout.
 SELF_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-PROJECT_DIR=""; MODEL="?"; EFFORT=""; COST=0; DURATION_MS=0; TRANSCRIPT=""
+PROJECT_DIR=""; MODEL="?"; EFFORT=""; COST=0; DURATION_MS=0; TRANSCRIPT=""; SESSION_ID=""
 CTX_PCT=0; CTX_SIZE=0; TOTAL_IN=0; TOTAL_OUT=0
 CUR_IN=0; CUR_OUT_FIELD=0; CACHE_READ=0; CACHE_CREATE=0
-USAGE_5H=""; RESET_5H=""; USAGE_7D=""; RESET_7D=""
+USAGE_5H=""; RESET_5H=""; USAGE_7D=""; RESET_7D=""; MODEL_LIMIT_LINES=""
 SPEED=""; HAS_TDATA=0
 ST_IN=0; ST_OUT=0; ST_CACHE=0; ST_TOTAL=0; SST=""
 TOOLS_RUNNING_LINES=""; TOOLS_DONE_LINES=""; AGENT_LINES=""; SKILL_LINES=""
@@ -35,6 +38,7 @@ MCP_COUNT=0; HOOKS_COUNT=0
 
 eval "$(printf '%s' "$input" \
   | STATUS_FILE="$STATUS_FILE" SPEED_CACHE="$SPEED_CACHE" CLAUDE_DIR="$CLAUDE_DIR" \
+    USAGE_CACHE="$USAGE_CACHE" \
     python3 "$SELF_DIR/statusline-fields.py" 2>/dev/null)"
 
 PROJECT_NAME=$(basename "$PROJECT_DIR" 2>/dev/null)
@@ -170,6 +174,24 @@ if [ -n "$USAGE_7D" ]; then
   line1=$(join_seg "$line1" "$seg7d")
 fi
 
+# Per-model bars, one per model-scoped window the account has (today: Fable).
+# Labelled from the API's own display_name rather than a hard-coded list, so a
+# quota scoped to another model later appears here without a change.
+while IFS= read -r limit_entry; do
+  [ -z "$limit_entry" ] && continue
+  limit_name="${limit_entry%%|*}"
+  limit_rest="${limit_entry#*|}"
+  limit_pct="${limit_rest%%|*}"
+  limit_reset="${limit_rest##*|}"
+  seg_model="${C_BLUE}${limit_name}${C_RESET}:$(build_bar "$limit_pct")"
+  # `|| true`: fmt_reset signals "nothing to show" with a non-zero status, which
+  # under an inherited `errexit` would abort the whole render before line 1 ever
+  # prints — taking the project name and every other bar down with it.
+  reset_model=$(fmt_reset "$limit_reset") || true
+  [ -n "$reset_model" ] && seg_model="${seg_model} ${C_DIM}(${reset_model})${C_RESET}"
+  line1=$(join_seg "$line1" "$seg_model")
+done <<< "$MODEL_LIMIT_LINES"
+
 [ -n "$line1" ] && printf '%b\n' "$line1"
 
 # ══════════════════════════════════════════════════════════════
@@ -241,6 +263,54 @@ else
   MODEL_DISPLAY="${C_DIM}${C_MAGENTA}${MODEL_NAME}${C_RESET}"
 fi
 line3=$(join_seg "$line3" "$MODEL_DISPLAY")
+
+# Session id, first group only. Its job is to tell one window from another —
+# notably to match the peer named in a writer-registry conflict message, whose
+# id starts with these same characters. The full 36-char id would cost this line
+# half its width for characters the eye never compares.
+# Guard the shortened value, not the raw one: an id that starts with `-` passes
+# a check on the full string but shortens to nothing, leaving a bare label.
+SHORT_SID="${SESSION_ID%%-*}"
+if [ -n "$SHORT_SID" ]; then
+  line3=$(join_seg "$line3" "${C_DIM}session-id ${SHORT_SID}${C_RESET}")
+fi
+
+# PID of the Claude Code process behind this window, so the session that
+# session-id above only names can also be reached — found in `ps`, signalled,
+# told apart from the other sessions on this machine.
+# The statusline was measured to run as a direct child of that process; the walk
+# exists so that an interposed wrapper shell reports the session rather than the
+# wrapper, and at the observed depth it costs a single `ps`. Per-hop rather than
+# one full-table snapshot: the table costs the same fork plus enumerating every
+# process on the host, on every render of every session.
+# Each `ps` is guarded by `|| break` rather than left bare, because an inherited
+# `errexit` would otherwise abort the render before line 3 ever prints — the
+# same hazard the `fmt_reset` call above guards against.
+CLAUDE_PID=""
+walk_pid="$PPID"
+for _ in 1 2 3 4 5 6 7 8; do
+  [ "$walk_pid" -gt 1 ] 2>/dev/null || break
+  walk_row=$(ps -o ppid=,comm= -p "$walk_pid" 2>/dev/null) || break
+  [ -n "$walk_row" ] || break
+  walk_row="${walk_row#"${walk_row%%[![:space:]]*}"}"
+  # Compare the basename, so that neither an install path containing spaces nor
+  # a process that rewrote its own title (`claude bg-pty-host`) is mis-split.
+  walk_comm="${walk_row#* }"
+  case "${walk_comm##*/}" in
+    claude|claude\ *) CLAUDE_PID="$walk_pid"; break ;;
+  esac
+  walk_pid="${walk_row%% *}"
+done
+
+# Nothing in the ancestry called itself `claude` — a `node …/cli.js` invocation,
+# say. The parent is still where this script was observed to be spawned from, so
+# it is the best available answer, but it is a guess: mark it, or the user reads
+# an unconfirmed pid as a confirmed one and signals whatever now holds it.
+if [ -n "$CLAUDE_PID" ]; then
+  line3=$(join_seg "$line3" "${C_DIM}pid ${CLAUDE_PID}${C_RESET}")
+else
+  line3=$(join_seg "$line3" "${C_DIM}pid ${PPID}?${C_RESET}")
+fi
 
 printf '%b\n' "$line3"
 

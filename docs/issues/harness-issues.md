@@ -32,24 +32,43 @@
 - **状态**: **本次 waive**。guard 的文件头注释已把这一形态列为**已接受的残留**（"a backgrounded `… &` whose implicit /dev/null stdin the guard can't see — adding `</dev/null` is harmless"），且上游记录了多轮 Codex 审查的结论：每加一层 lexing 都引入自己的 false block（该文件自身对轮次数的两处表述不一致，故此处不引具体轮数）。在 share 单方面"修好"很可能造出上游正在规避的误拦。
 - **候选优化**: 归属上游（`ai-agent-config`）。若要修，应识别作用于 wrapper statement 的异步 `&` 并放行，同时补一条精确的回归用例——现有测试只覆盖了"前一个命令后台、wrapper 前台"。
 
-## [open] HARNESS-003 CLAUDE.md 并发隔离节的入口句仍绑在 "执行 plan" 上
+
+## [open] HARNESS-005 install.sh 在没有 Homebrew 的主机上会中途整体中断
 
 - **Type**: bug
 - **Priority**: medium
-- **Discovered**: 2026-07-30
-- **Component**: `claude/CLAUDE.md`「并发写入者隔离」/ `claude/references/concurrent-plan-isolation.md`
-- **Description**: 该节第一句只覆盖「多个 agent session 可能并发在同一 repo 上执行 plan 时」，但它引的 reference 首行已经改成「多个决策者可能并发写同一个 repo 时」——protocol 治理面比路由句宽。两个普通的无 plan session 并发改同一棵工作树，按路由句读不到隔离义务，只能等出现外部修改反证后补救。
-- **影响**: 最需要这条协议的恰是自由 session（上游 CHANGELOG 记录的真实事故就是一个自由 session 把并发写入者约 110 行改动一并 commit）。
-- **状态**: **本次 waive**，因为该段在 share 是逐字节同步上游的；单方面改会造成需长期手工调和的分叉。
-- **候选优化**: 归属上游。上游 commit `02a2adf` 标题即 "key concurrent-writer isolation on state, not on being in a plan"——它改了 reference 却漏了 CLAUDE.md 的路由句。入口条件应改成「多个决策者可能并发写同一 repo 时」，把执行 plan 仅列为常见实例。
+- **Discovered**: 2026-08-09
+- **Component**: `install.sh`（uv 依赖那一段）
+- **Description**: 缺 `uv` 时该行是无守卫的 `command -v uv >/dev/null 2>&1 || brew install uv`，而脚本开头是 `set -euo pipefail`。没有 Homebrew 的主机（多数 Linux）上 `brew` 不存在，这一行非零退出即中止整轮安装——且它排在 statusLine 写入之前，所以那一步也拿不到。README 现在明说"在 Linux 上跑之前先自己备好这三个"，属文档缓解，不是修复。
+- **影响**: 本轮把 codeagent-wrapper 扩到 linux-amd64、README 也开始把 Linux 当受支持宿主，这条就从"理论问题"变成了新受众第一次跑就会撞上的问题。
+- **候选优化**: 缺 brew 时降级为 `[WARN]` 并跳过 uv（venv 相关功能随之标 skipped），而不是让整轮安装失败；或在脚本开头就做一次平台/包管理器探测，把所有"macOS 专属"步骤统一走 skipped 分支。
 
-## [open] HARNESS-001 "单文件改动要不要 plan" 在规则栈内有两种说法
+## [open] HARNESS-006 ask-recommend-gate 依赖一个本仓不提供、也不检查的脚本
 
 - **Type**: bug
 - **Priority**: low
-- **Discovered**: 2026-07-30
-- **Component**: `claude/commands/custom/create-plan.md` / `docs/command-guide.md`
-- **Description**: `create-plan.md:3` 的 description 明确写「单文件改动或已存在 plan 的场景**不用**」；而 `docs/command-guide.md:73`（工作流 B「不需要 spec 的快速 plan」）把「单文件改动」列为该流程的**典型适用**场景，`:127` 又说「单文件 trivial 改动直接做」。三处对同一判据给出不同答案。
-- **影响**: description 决定该 command 会不会被模型自动触发，所以这不只是文档不一致——agent 读到哪一份就走哪条路。
-- **候选优化**: 统一判据。description 是更强的载体（它进 skill 索引、影响触发）；若真实意图是「单文件但非 trivial 仍值得 quick plan」，应改 description，而不是让 command-guide 单方面扩张适用面。
-- **Notes**: 本次上游同步中 README 新增「这套配置适合谁」时撞上此冲突——原稿据 `create-plan.md` 写成"单文件改动不用"，被 review 指出与 command-guide 冲突，最终改为 README 不复述该判据、只指向 command-guide，把冲突留在此处待裁。
+- **Discovered**: 2026-08-09
+- **Component**: `claude/hooks/ask-recommend-gate.js`
+- **Description**: 该 hook 引用 `ghostty-tab-title.sh`，而本仓不收录它、`install.sh` 不装它、`verify.sh` 也不查它。
+- **影响**: 采用者装完后这条路径取不到该脚本。gate 主体功能不受影响，但存在一条永远走不通的分支。
+- **候选优化**: 要么把该脚本纳入收录范围并进安装/验证清单，要么把这条依赖从 hook 里摘掉。判定前先确认它在上游承担什么职责。
+
+## [open] HARNESS-007 create-eval-harness 指向本仓不存在的 eval 目录
+
+- **Type**: bug
+- **Priority**: low
+- **Discovered**: 2026-08-09
+- **Component**: `claude/commands/custom/create-eval-harness.md`
+- **Description**: 该 command 引用 `claude/hooks/eval/stop-gate/` 作为范例，但本仓未收录 `stop-gate.js` 及其 eval 目录（本轮收录的是 capability-claim / continuation-claim / prose-choice / reverse-assertion 四套）。
+- **影响**: 按该 command 去找范例的读者会扑空。
+- **候选优化**: 把范例改指本仓实际存在的四套之一（`reverse-assertion-gate` 的场景集最完整，18 条）。
+
+## [open] HARNESS-008 tt-web 子安装器失败会连带掐掉 statusLine 接线
+
+- **Type**: bug
+- **Priority**: low
+- **Discovered**: 2026-08-09
+- **Component**: `install.sh`（调 `tt-web/install.sh` 与 `wire_statusline_settings` 的先后）
+- **Description**: tt-web 子安装器在 statusLine 写入之前被调用，且其失败会在 `set -euo pipefail` 下中止整轮。于是一个可选子项目（本地 dashboard）的失败，会让一个无关且更基础的步骤（statusline 接线）拿不到。
+- **影响**: 采用者得到一个部分安装且没有 statusline 的环境，而失败原因来自他可能根本不打算用的组件。
+- **候选优化**: 把子安装器调用包成"失败记 WARN 并继续"，或把 statusLine 接线移到它前面。

@@ -1,0 +1,9 @@
+# expect: ok
+# note: 汇报已完成改动的清单——有列表但不是选择题，用户不必从中挑一个。主误报守卫（这是最常见的收尾形态）。
+这轮的三处改动都落地了：
+
+- `lib/parser.ts` —— 把 token 边界判定从正则换成状态机，修掉了嵌套引号被截断的 bug
+- `lib/parser.test.ts` —— 补了 6 个用例，覆盖嵌套引号、转义、未闭合三种输入
+- `CHANGELOG.md` —— 记了这条 fix
+
+全量测试 128 passed，lint 与 typecheck 均干净。

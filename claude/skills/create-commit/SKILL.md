@@ -16,6 +16,8 @@ description: >-
 
 1. **了解当前状态**：`git branch --show-current`、`git status --short`、`git diff --stat`、`git log --oneline -5`。读核心 diff 理解改动性质。
 
+   同时核实**将写进本次 commit 的作者身份**：读 `git config user.name` 与 `git config user.email` 本身——**不要拿 `git log` 的历史作者代替**。历史作者是代理判据：连续多个 commit 用错身份时它已被同一个错值填满、会自洽地"通过"，多人仓库里它又每次都与你不同、只会制造误报；两种情况下它的输出在身份对与错时都不可区分。取到值后与该仓库预期的身份核对（remote 主机与组织、既有协作者的邮箱域、用户此前的交代）。不一致或判断不了就停下问用户，不要先提交再说：身份错在本地还能 amend，push 之后就是不可逆的公开归属错误，而 agent 侧全程零反馈信号——commit 成功、测试全绿、review gate 照过。多仓库、或公司与个人机器混用时尤其容易发生。
+
 2. **决定 staging 范围**：
 
    | 来源 | 范围 |
@@ -34,11 +36,15 @@ description: >-
 
    **粒度 = 一次任务执行，不按 artifact 类型拆**：一个任务目标下产出的代码、测试、文档、experiences、配置属于同一次执行，进同一个 commit（如一个 PR 不会把代码/测试/文档拆成多个）；多个模块的改动仍是一个 commit（用 message bullets 表达），不是拆 commit 的信号。若 working tree 混入了另一个无关任务的改动，先与用户确认，本次只 stage / commit 当前任务的改动。
 
-3. **文档同步 checkpoint**：staging 范围定后，判断本次改动是否产生**用户可感知变化 / 服务增删改 / 公共接口变化**（判据见 `~/.claude/references/docs-organization-protocol.md`）。是 → 对应 [User] 档（README / CHANGELOG / operations）必须一并同步进本次 staging，未同步则先补齐再继续；开发者档（architecture / adr / experiences）与 ux-contract 按协议各自路径、不在此强制。例外：本次 commit 由已声明会集中同步文档的 caller（execute-plan / execute-ux-contract 的完整 recipe）驱动时，尊重其编排、不在此重复要求。
+3. **文档同步 checkpoint**：staging 范围定后，判断本次改动是否产生**用户可感知变化 / 服务增删改 / 公共接口变化**（判据见 `~/.claude/references/docs-organization-protocol.md`）。是 → 对应 [User] 档（README / CHANGELOG / operations）必须一并同步进本次 staging，未同步则先补齐再继续；开发者档（architecture / adr / experiences）与 ux-contract 按协议各自路径、不在此强制。追加项落在第 2 步已由用户或 caller 裁定的范围之外时，先回述这个 delta——有人值守经确认后再 stage，无人值守流照常同步但在结果中列出偏离；否则每个经批准的范围都会在 commit 落地时静默地与批准时不同。用户明文排除过该文件时，无人值守流不得径直同步：不 stage，在结果中标为阻塞项——事后列出不等于用户同意；有人值守则把这个冲突并入上面那次回述交用户裁决。例外：本次 commit 由已声明会集中同步文档的 caller（execute-plan / execute-ux-contract 的完整 recipe）驱动时，尊重其编排、不在此重复要求。
 
 4. **生成 commit message**：格式见下方。
 
-5. **执行**：用 `git add <specific files>` stage 第 2 步选定的范围**及第 3 步补齐的 [User] 档**（**禁止** `git add -A` / `git add .`），然后 `git commit`。
+5. **执行**：用 `git add <specific files>` stage 第 2 步选定的范围**及第 3 步补齐的 [User] 档**（**禁止** `git add -A` / `git add .`），然后 `git commit --only <同一组路径>`。
+
+   `--only` 不是可选的谨慎写法：`git add <specific>` 限定不了 commit 范围，它只是往索引里追加，而 `git commit` 落的是**整个索引**——包含开工前就躺在里面、别人 stage 的内容。于是"我只 add 了这几个文件"读起来像范围声明、实际不是，且两者不一致时没有任何回显提示，除非你恰好认出 commit 输出里多出来的文件名。第 2 步定的范围要真正生效，得由 `--only` 兑现。
+
+   两处语义要记住：`--only <paths>` 提交的是这些路径的**工作树内容**，会覆盖你为它们 `git add` 过的版本——所以刻意 stage 过部分改动（`git add -p`、或按行归属重建过索引）时不能用它，那份工作会被丢掉，此时先把想提交的内容写回工作树。而 `git add` 那步仍不能省：`--only` 只认 git 已知的路径，新文件不先 add 会直接报 `did not match any file(s) known to git`。
 
 ## Commit Message 格式
 
@@ -48,7 +54,7 @@ description: >-
 | 单改动，有 notable detail | `<type>(scope): <desc>` | detail 作为 bullets |
 | 多改动（性质不同的改动；一件事的多个侧面算单改动） | 自由文本总结 | 每个改动一条 `<type>(scope): <desc>` bullet |
 
-- Subject ≤72 chars
+- Subject 与 body 行均 ≤72 chars——`git log` 左缩进 4 空格后仍在 80 列内
 - 语言：整条 message（subject + body）默认英文；仅在用户明确要求、仓库近期 commit 多为中文、或某专有概念无准确英文对应时用中文（末者只该词保留中文）
 - Types: `feat` `fix` `refactor` `docs` `test` `chore` `perf` `ci` `style` `build` `revert`
 - Body 仅在 subject + diff 不足以让 reviewer 推出非显然设计决策时加
@@ -62,7 +68,7 @@ description: >-
 
 单改动，无 body：
 ```bash
-git commit -m "refactor(commands): organize slash commands into namespaced subdirectories"
+git commit -m "refactor(commands): organize slash commands into namespaced dirs"
 ```
 
 单改动，有 body：

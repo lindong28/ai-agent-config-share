@@ -36,6 +36,16 @@
         </div>
       </header>
       <main class="main">
+        <details id="sync-panel" class="sync-panel" aria-label="Machine sync status">
+          <summary class="sync-panel-head">
+            <div>
+              <strong>All machines</strong>
+              <span id="sync-coverage" class="status-line">coverage —/—</span>
+            </div>
+            <span id="sync-summary" class="status-line" aria-live="polite">Checking generations…</span>
+          </summary>
+          <div id="sync-machines" class="sync-machines"></div>
+        </details>
         <section class="controls" aria-label="Pivot controls">
           <div class="field">
             <label for="x-dim">X axis</label>
@@ -91,6 +101,12 @@
             </select>
           </div>
           <div class="field">
+            <label for="machine-filter">Machine filter</label>
+            <select id="machine-filter" data-filter-control="machine" aria-label="Machine filter">
+              <option value="">All machines</option>
+            </select>
+          </div>
+          <div class="field">
             <label>Status</label>
             <div id="pivot-status" class="status-line">Ready</div>
           </div>
@@ -105,10 +121,14 @@
         <section class="panel">
           <div class="panel-head">
             <h2>Pivot chart</h2>
-            <span class="estimate-note">Cost cells can be — when model pricing is unknown.</span>
           </div>
-          <p class="estimate-note">Codex cost is 推算 from GPT-5 pricing when exact billing is not present. GLM-5.1/5.2 cost is 推算 from bundled GLM-5 pricing.</p>
+          <details class="note-disclosure">
+            <summary>How these cost figures are computed</summary>
+            <p>Codex cost is estimated from GPT-5 pricing when exact billing is not present, and GLM-5.1/5.2 cost is estimated from bundled GLM-5 pricing.</p>
+            <p>A cost cell reads — when the model's pricing is unknown to tt-web.</p>
+          </details>
           <div class="chart-box"><canvas id="pivot-chart"></canvas></div>
+          <p id="pivot-series-note" class="estimate-note" hidden></p>
         </section>
         <section class="panel">
           <div class="panel-head">

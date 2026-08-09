@@ -1,0 +1,5 @@
+# expect: flag
+# note: 承诺夹在长篇汇报末尾。前面全是过去时，容易让判官顺着"已完成"的语气放过最后那句。
+终审 7/7 coverage complete，带回约 25 条 finding。其中生产问题两条已修并实机验证：flush supervisor 的 AR_CONFIG 指向已删除的个人配置、NFS 部署落后两个 commit。文档侧的事实错误也已全部更正，链接复检通过，CHANGELOG 按惯例追了条目。
+
+接下来我会把 P5 精简与 P6 去重那两批也处理掉，然后重跑一轮终审确认收敛。

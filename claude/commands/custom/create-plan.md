@@ -1,6 +1,6 @@
 ---
 name: create-plan
-description: 用户给一个模糊任务描述（设计/重构/新增功能/规划 xxx）、需要先产出 plan.md 再实现时使用。单文件改动或已存在 plan 的场景不用。
+description: 把一个模糊任务（设计/重构/新增功能/规划 xxx）写成 plan.md，交给新的 implementer context 独立接手时使用——判据是方案要不要交接，与改动大小无关。已存在 plan、或方案只在本轮对话内用完即弃的场景不用。
 argument-hint: <task description> [可附 "给我 N 份方案" 启用 Best-of-N]
 origin: 2026-04-30
 ---
@@ -10,8 +10,13 @@ origin: 2026-04-30
 入口 command：从模糊任务描述出发，访谈用户对齐关键决策，写出可被另一个 session 落地实现的 plan.md。
 
 ## 何时使用
+
+主判据只有一条：**是否有意把方案交给新的 implementer context 独立接手**——另一个 session，或本 session 主动 handoff 后换 context 接着做。是就走本 command（它那套契约：落盘、long-task banner、并发隔离声明、reviewer gate 都是为这个交接服务的），不是就别走。普通的 auto-compaction 风险不等于计划中的交接，别据此触发。
+
 - 显式 `/create-plan <task description>`
-- 任何"先有 plan，后实现"的工作流入口
+- 任何"先有 plan，后实现"**且方案要交接**的工作流入口
+
+**不用**：改动只涉及单文件**且**不交接；已存在 plan（改走 `/custom:execute-plan`，或直接改那份 plan）；方案只在本轮对话内用完即弃。这些场景照常在对话里给方案或用 harness 自带 plan 模式跟用户对齐，不必落盘。
 
 ## 参数
 
@@ -28,7 +33,7 @@ origin: 2026-04-30
 
 单趟 pipeline，分支点用【】标（L1/L2/L3 = §1 三层产物意识）：
 
-align（§2 各 facet：L1 → 取舍偏好 → L2 → L3 + 横切）→【spec 覆盖的 facet 跳过 align，plan 引用 spec】→【Best-of-N：align 收敛后 fan-out N 个 writer、用户挑选】→ 写 plan.md（§3）→ 审查（独立 Codex reviewer；见「审查」）→【long-task 默认启用：定稿后 bootstrap state.md / journal.md + banner】→ handoff。
+align（§2 各 facet：L1 → 取舍偏好 → L2 → L3 + 横切）→【spec 覆盖的 facet 跳过 align，plan 引用 spec】→【Best-of-N：align 收敛后 fan-out N 个 writer、用户挑选】→ 写 plan.md（§3）→【外部阻塞分支拆出去；见「送审前」】→ 审查（独立 Codex reviewer；见「审查」）→【long-task 默认启用：定稿后 bootstrap state.md / journal.md + banner】→ handoff。
 
 align 是深度活、不并行；审查是 gate——未收敛不进 bootstrap / handoff；三个【】分支各在 §2 决策、§3 执行。
 
@@ -42,7 +47,7 @@ plan.md 由 implementer（新 claude code session）+ reviewer（按当前 harne
 
 判据：facts inline 进 plan 会节省 N 次 implementer 跳转 → 含（典型如 API 调用模板、外部规范摘录、可复用代码具体定位）；planner 研究过程 / alignment 草稿 / 推翻方案中间路径 → 不含。
 
-**并发隔离声明**：若本 plan 可能与其它 agent session 并发落地，按 `~/.claude/references/concurrent-plan-isolation.md` 在 plan 里声明隔离方案；不确定是否并发时默认声明。
+**并发隔离声明**：若本 plan 可能与其它决策者并发落地，按 `~/.claude/references/concurrent-plan-isolation.md` 在 plan 里声明隔离方案；不确定是否并发时默认声明。plan 若要声明"单 session 独占"（execute-plan 据此免建 worktree），需给出依据——"没检测到别的 session"或"写入者登记为空"不构成依据（登记只看得见按本协议工作的对手方，人、外部工具与另一 harness 都不会出现在里面）。
 
 ---
 
@@ -288,18 +293,36 @@ plan 不留 open question。任何 OQ 必须先走升级：
 
 允许在 plan 里留：
 
-- **TODO**：implementer 实施时要做但 plan 不指定 how 的工作
+- **TODO**：implementer 实施时要做但 plan 不指定 how 的工作。plan 给它们一个具名容器——**bounded TODO 清单**，每条注明它细化的是 plan 里的哪一处；`review-plan` 的同名去向落在这里
 - **risk**：planner 判断有风险（实现可能跑偏、外部依赖可能失效）的点 + 缓解策略。但可客观验证的 load-bearing 假设（plan-review-principles「Risk Surfacing and Response」的 objectively-verifiable 类，典型只读即可证实，如 grep / 跑只读命令）应在定稿前 probe 成事实写进 plan、不留作 risk；只有真正不确定、或 probe 需真实副作用 / 高成本的，才留作 risk
 
 不要为了"看起来完整"而幻觉细节，但也不要用 OQ 替代调研。
+
+### 送审前：把阻塞在外部事实上的分支拆出去
+
+审查的代价随 plan 的**面 × 耦合**增长，而阻塞在你拿不到的事实上的分支**不会收敛**——它的 finding 每轮以"这里还没定"的形态重新出现，同时拖住本可收敛的其余部分。
+
+逐个分支问：**它依赖的事实里，有没有只能由外部提供的**（他人拥有的设施、外部仓 owner 的接纳、一次尚未发生的运行、你无权查证的身份）。有、且此刻不在手上 → **拆成独立 plan**，其第一阶段是取得那些事实，而不是继续写它的验收。
+
+判据是**事实可得性**，不是分支大小或重要性。自己能查证的（读代码、跑只读命令）不算——那属于上一节要求当场 probe 掉的。
+
+**与上一节 risk 留置的分界**：上一节允许把"真正不确定、或 probe 需真实副作用 / 高成本"的点留作 risk。分界在**这条不确定性会不会让该分支的验收写不出来**：写得出验收、只是可能不成立 → 留 risk，不拆；连"算不算完成"都取决于外部才会给出的事实 → 拆。同一个事实两条都命中时**拆优先**——risk 是留给可执行 plan 里的不确定，不是给不可执行的分支发通行证。
+
+**判据尽早生效**：本节挂在送审前是因为它是进入审查的前置，但同样的问题在 §2 对齐 L1 / 范围时就该问一次——那时拆，成本是没写；到送审前才拆，那一支的验收已经白写了。
+
+**拆出去的那份不是废纸，必须有去处**：按本节「落点逻辑」给它一个真实路径、把已取得的分析与未闭 finding 完整搬过去、并在文件顶部标明它未定稿不得直接进 execute-plan；然后在 handoff 里连同主 plan 一起交给用户，写清它阻塞在哪几个外部事实上、由谁推进。缺这一步时最省事的执行是把阻塞分支静默删掉，而那正是本节要避免的反面。
+
+实测代价：一次把外部阻塞分支与可交付分支捆在同一份 plan 的审查，前三轮多数 finding 落在阻塞支上；拆分后同一快照的成立 violation 从约 16 条降到 5 条，前三轮产出随拆分作废。
 
 ### 审查
 
 自检通过后、handoff 之前，按 `~/.claude/skills/review-gate/SKILL.md`「分档执行」和「gate 裁决」的 harness-aware transport / lifecycle 规则调度独立 Codex reviewer；只复用独立 context、续用、失败与不可续处置，不继承该 gate 的 severity、复核范围或终止语义。workdir 使用本次 plan 对应的项目根（即调用 create-plan 时适用项目指令的根）。
 
-reviewer prompt 给出 plan 的绝对路径，并显式调用 Codex bridge `$custom-review-plan`（共享 `/custom:review-plan` 的 review-plan 契约）；review 内容、severity、修复与重审仅由该契约定义。prompt 另须传入 caller 边界：独立 reviewer 不得直接向用户发 AskUserQuestion；需要用户决策时，返回原 finding 标识、可直接发问的选项与取舍后暂停。续用 prompt 带回同一 finding 标识与用户原始选择，再继续 review-plan 控制流。原 reviewer 不可续时，新 reviewer 的 prompt 重含 plan 路径、bridge、caller 边界与全部已决策事实（finding 标识 + 用户原始选择），并从 review-plan 起点完整重审到终止判据。
+reviewer prompt 给出 plan 的绝对路径，并显式调用 Codex bridge `$custom-review-plan`（共享 `/custom:review-plan` 的 review-plan 契约）；review 内容、severity、修复与重审仅由该契约定义。prompt 另须传入 caller 边界：独立 reviewer 不得直接向用户发 AskUserQuestion；需要用户决策时，返回原 finding 标识、可直接发问的选项与取舍后暂停。prompt 同时声明 reviewer 沙箱的写能力：只读 transport 下，落地由主 session 按 reviewer 返回的拟议 remediation 清单（逐 finding 的拟议 edit；落地后即 review-plan 的 remediation diff）执行，reviewer 不得把写入受阻上报为 blocker。续用 prompt 带回同一 finding 标识与用户原始选择（如有），及已落地的 remediation diff（如本轮已落地），再继续 review-plan 控制流。原 reviewer 不可续时，新 reviewer 的 prompt 重含 plan 路径、bridge、caller 边界、沙箱写能力声明与全部已决策事实（finding 标识 + 用户原始选择），并从 review-plan 起点完整重审到终止判据。
 
 外层控制流：启动独立 Codex reviewer →【review-plan 需要用户决策（含收敛停滞熔断触发的"定稿 vs 继续深审"决策）：主 session 用 AskUserQuestion 拍板、按同一 transport / lifecycle 续用 reviewer ↺】→ reviewer 明确报告 review-plan 的终止判据已满足（severity 门控 + 收敛预算，见 review-plan「终止判据」与「收敛预算与停滞熔断」，非"零发现"、非"反证再挑不出更细项"）→ long-task bootstrap / handoff。transport 调用成功不等于审查终止；任何未明确满足终止判据的结果都留在审查 gate 内。收敛停滞时终止由用户拍板"定稿"达成，循环不得因目标反证仍能规格化出更细项而自我延续。正常路径由 reviewer 报终止；此外主 session 给这个 review 循环挂一个**独立轮次计数**作熔断兜底：每向 reviewer 发起或续用一轮就 +1（无论该轮是否需要用户决策——这是主 session 可观测的动作、不依赖 reviewer 自报，才兜得住 reviewer 只顾规格化更细 findings、不进用户决策分支的 momentum 场景）。计数达到 review-plan「收敛预算与停滞熔断」定义的收敛预算（其粒度下即等量的 reviewer 往返轮数；对不齐时宁可偏早）时，即便 reviewer 仍在报更细的新 findings 未报终止，主 session 也直接发起"定稿 vs 继续深审"的 AskUserQuestion（选"继续深审"即重置计数、开新预算窗口），不等 reviewer 自报停滞。
+
+**计数熔断发问前先补齐它的输入**：计数触发的前提正是 reviewer 既未请求决策也未报终止，故主 session 手上既没有它的残余分类、也没有可落盘的文本——发问前先向 reviewer 索取按 review-plan 分类的累积残余清单，以及其中 bounded TODO 的拟议 edit——reviewer prompt 段声明的写入通道只接受"逐 finding 的拟议 edit"这一形态。据此按 review-plan「收敛预算与停滞熔断」定默认推荐与随之而来的落盘：该节规则只写在 review-plan 里由 reviewer 执行，而计数熔断这条路径不经 reviewer；不显式继承，同一情形下它与 reviewer 判停滞那条路径就会给出相反默认。索取不到时按该节「本轮 remediation 尚未经任何 gate 复审」处置，不得自拟默认。
 
 ### 长任务模式 bootstrap
 
@@ -321,8 +344,8 @@ spec:    /abs/path/to/plans/<date>-<name>/spec.md       # 若有 spec
 state:   /abs/path/to/plans/<date>-<name>/state.md      # 长任务默认启用
 journal: /abs/path/to/plans/<date>-<name>/journal.md    # 长任务默认启用
 
-下一步：在新 session 里跑 `claude '实现 <path-to-plan.md>'`
-（implementer 会自动按 plan banner + 全局 CLAUDE.md 长任务协议读 state/journal；spec.md 由 plan 内引用）
+下一步：在新 session 里跑 `claude '/custom:execute-plan <path-to-plan.md>'`
+（显式调用 execute-plan——裸描述"实现 xxx"依赖 skill auto-trigger、非确定；implementer 会按 plan banner + 全局 CLAUDE.md 长任务协议读 state/journal；spec.md 由 plan 内引用）
 ```
 
 **平铺单 plan**（opt-out 长任务 + 无 spec）打印：
@@ -330,7 +353,7 @@ journal: /abs/path/to/plans/<date>-<name>/journal.md    # 长任务默认启用
 ```
 plan written: /abs/path/to/plans/<date>-<name>.md
 
-下一步：在新 session 里跑 `claude '实现这份 plan：<path>'`
+下一步：在新 session 里跑 `claude '/custom:execute-plan <path>'`
 ```
 
 **Best-of-N**（fan-out 完成后）先打印对比表：

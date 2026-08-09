@@ -87,6 +87,40 @@
         ],
         "description": "Block (exit 2) a codeagent-wrapper dispatch with no stdin source: the wrapper reads its own stdin before launching the backend, so with no EOF it hangs silently for ~20 minutes with zero output and no completion callback. Fix is `</dev/null` (prompt is an argument) or a heredoc / pipe / `-` form. Allow-biased: any `<` anywhere, any help/version flag, and every ambiguous shell form fail open. Set CODEAGENT_STDIN_GUARD=0 to disable. Enforces references/background-agent-monitoring.md '派发前自限'.",
         "id": "pre:bash:codeagent-stdin-guard"
+      },
+      {
+        "matcher": "Edit|Write|MultiEdit|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$HOME/.claude/hooks/run-with-flags.js\" writer-registry-gate writer-registry-gate.js",
+            "timeout": 15
+          }
+        ],
+        "description": "Register the writer and block overlapping concurrent edits (references/concurrent-plan-isolation.md 「轻量登记」). The registry lives in the git common-dir, not the worktree, so entries written from one worktree are visible from every other; the hook writes, reads AND expires entries, because the observed failure was not 'nobody registers' but 'entries are written, never read, never cleaned'.",
+        "id": "pre:edit:writer-registry-gate"
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$HOME/.claude/hooks/run-with-flags.js\" block-broad-kill block-broad-kill.js"
+          }
+        ],
+        "description": "Block pattern-matched process killing (pkill / killall): they select victims by name or command line, so one call reaches processes owned by other concurrent agent sessions, and the caller sees nothing wrong. `kill <pid>` has no such reach and stays allowed. Motivating incident (2026-08-07): `pkill -f agent-browser` killed every agent-browser daemon on the box, not just the wedged one.",
+        "id": "pre:bash:block-broad-kill"
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$HOME/.claude/hooks/run-with-flags.js\" commit-message-language commit-message-language.js"
+          }
+        ],
+        "description": "Enforce create-commit's commit-message language rule (English by default; exceptions are an explicit user request, a repo whose recent history is Chinese, or a term with no accurate English equivalent). Purely deterministic (scan characters + read git log). It exists because the rule was in context and still lost once: the turn that wrote the message followed a long stretch of editing Chinese docs and the body drifted along with it.",
+        "id": "pre:bash:commit-message-language"
       }
     ],
     "Stop": [
@@ -101,6 +135,65 @@
         ],
         "description": "Desktop notification when Claude finishes responding: Ghostty OSC9 (clicking focuses the originating tab) with terminal-notifier as fallback elsewhere. Replaces the ECC plugin's stop:desktop-notify (disabled via ECC_DISABLED_HOOKS) so the logic lives in version control, not a third-party plugin cache.",
         "id": "stop:desktop-notify-local"
+      },
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$HOME/.claude/hooks/continuation-claim-gate.js\"",
+            "timeout": 30
+          }
+        ],
+        "description": "Block a stop whose closing line promises a follow-up action (「接下来我做 X」) while nothing is actually running — no task, monitor, or subagent. To the caller that sentence is simply false. The existing gates cannot see it: stop-gate.js judges whether the USER was asked to act, and this failure asks nothing of the user, so it falls outside that axis entirely.",
+        "id": "stop:continuation-claim-gate"
+      },
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$HOME/.claude/hooks/prose-choice-gate.js\"",
+            "timeout": 28
+          }
+        ],
+        "description": "Block a stop that hands the user a set of parallel options as a prose list instead of via AskUserQuestion — the carrier half of CLAUDE.md 'Surface Choices'. ask-recommend-gate structurally cannot fire here (it is PreToolUse on AskUserQuestion, and the whole failure is that the call never happened), and stop-gate correctly passes it, since 'asking the user to decide' is an explicit ok clause in its rubric.",
+        "id": "stop:prose-choice-gate"
+      },
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$HOME/.claude/hooks/capability-claim-gate.js\"",
+            "timeout": 45
+          }
+        ],
+        "description": "Block a stop asserting that a named tool is unavailable / uncallable in this session when it was never actually called. The session-opening deferred-tools snapshot is a NEGATIVE capability claim that expires and is never retracted, and negative claims are not self-falsifying — whoever believes it will not try the call. Real consequences twice: an unverified 'cannot TaskStop' left 6 dead teammates unreclaimed and shipped that reason to the user.",
+        "id": "stop:capability-claim-gate"
+      },
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$HOME/.claude/hooks/reverse-assertion-gate.js\"",
+            "timeout": 28
+          }
+        ],
+        "description": "Block a stop that delivers a reverse assertion (X does not exist / is not authorized / is unavailable / is a dead end) when the reading behind it would look identical were the claim false. Accepting one deletes the checks that should have followed: a positive misjudgment gets caught downstream, a reverse one has no downstream. Real case (2026-08-07): 'this host's SSH key is not authorized' — the actual cause was a non-interactive shell missing SSH_AUTH_SOCK.",
+        "id": "stop:reverse-assertion-gate"
+      },
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$HOME/.claude/hooks/bg-shell-reclaim-check.js\""
+          }
+        ],
+        "description": "Before stopping, put long-unaccounted-for background shells in front of the agent. From a real incident: three `until ! pgrep -f pytest` loops spun for 15 hours (pgrep -f matched the loop's own command line, so the condition never cleared) while the agent repeatedly announced 'cleanup complete, nothing pending'. stop-gate.js has the right timing but reads only the last assistant message, so it sees zero process facts.",
+        "id": "stop:bg-shell-reclaim-check"
       }
     ]
   },

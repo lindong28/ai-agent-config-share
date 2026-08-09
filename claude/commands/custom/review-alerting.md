@@ -27,10 +27,11 @@ grep 出该项目**决定 fire、格式化消息、配置阈值、文档化告�
 
 ### 1. 审查（per-principle 并行 subagent）
 
-`alerting-review-principles.md` 的**每条原则各 spawn 一个 general-purpose subagent 并行**审查整个告警面，确保每条原则获得充分注意力。
+`alerting-review-principles.md` 的**每条原则各 spawn 一个 general-purpose subagent 并行**审查整个告警面，确保每条原则获得充分注意力。spawn 时**不传 `name`**——判据见 `~/.claude/references/delegation-policy.md` §Harness transport。
 
 每个 subagent 的输入：
 - `~/.claude/references/alerting-review-principles.md`（完整——相邻原则提供边界；明确告知只应用指定那一条）
+- `~/.claude/references/human-facing-message-principles.md`——**审 P3 / P4 的 subagent 必给**：这两条的通用判据住在该档，只给 alerting 档它们会拿到空壳
 - `~/.claude/references/service-operations-protocol.md` 的 §6（边界上下文，避免把投递层问题误报为设计问题）
 - `~/.claude/references/deep-discuss-style.md`
 - 第 0 步的告警面文件清单 + 第 0.5 步的真实生产输入与前提基线核查结论（让 subagent 对真实数据判定，而非合成推理）

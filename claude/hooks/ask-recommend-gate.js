@@ -12,24 +12,88 @@
  * 整体喂判官，不依赖具体字段名（真实 payload = {questions:[{question,header,multiSelect,options:[{label,
  * description}]}]}；官方 docs 的扁平 options:[string] 已过时，故不硬编码）。
  *
- * 判据权威源 = CLAUDE.md「Surface Choices (Real Ones), Recommend One」(BINDING) + memory
- * `feedback_recommendation-reason-in-every-choice`（"every AskUserQuestion must carry an explicit
- * comparative why-recommended, not just a marked pick"）。下面 judge 的 rubric 只是该规则为小模型（GLM）
- * 压缩成二元 ok/flag 的派生 smell-test；规则实质变更时同步瞄一眼 judge prompt。
+ * 判据权威源 = CLAUDE.md「Surface Choices (Real Ones), Recommend One」(BINDING) + 其判据细则
+ * `~/.claude/references/surface-choices-rubric.md`（类 A/B 分类、合格标注形态、理由门槛、软措辞负判别器）。
+ * 下面 judge 的 rubric 只是它们为小模型（GLM）压缩成二元 ok/flag 的派生 smell-test；规则实质变更时
+ * 同步瞄一眼 judge prompt。曾把一条 memory 列为权威源之一，那条 memory 要求"comparative why"，与本
+ * rubric 现行的"不强求比较式"直接冲突（HARNESS-030 放宽时未同步），已改由上述 reference 单一承载。
  *
  * 判官后端：GLM-4.6 → Anthropic API → claude -p 订阅（分层，见 lib/llm-judge）；任一可用即用。
  * 不变量：非 AskUserQuestion / 无 questions / 无后端 / 判官出错或不可用 → fail-open（exit 0，绝不吞掉
  * 用户的提问）。防递归：tier-3 spawn 的 claude -p 经 NEST_GUARD 哨兵令本 hook 嵌套时直接放行。
+ * 兼任「等你选择」桌面通知的发射点（desktop-notify.js 的 AskUserQuestion 分支）。通知不单独注册成
+ * PreToolUse hook：独立注册的通知不受本 gate 裁决约束，可能在裁决前就发出去——
+ * 而本 gate 可以 exit 2 拒掉这次调用，用户被叫到终端前却根本没有问题弹出来，只看到 agent 还在跑。
+ * 放在 allow 路径上，通知与"这个问题确实会展示给用户"同真同假。判官耗时不构成额外延迟：
+ * PreToolUse 的工具本来就要等所有 hook 返回才执行。
+ *
  * 循环防护：PreToolUse 无 stop_hook_active 等价物，靠 fail-open + 判官"拿不准偏 ok"的宽松取向
- * + 可操作的 block 文案——agent 补上推荐后通常一次过。判官走 temp=0（见 judge() 调用）：同一 payload
- * 判定确定，agent 改进内容后再判靠的是内容真的变好、而非重掷骰子；故确定性 FP 须靠 eval 改 rubric 治本，
- * 不靠温度噪声给逃生口（实测合规 payload temp=0 下均稳定通过，未见此类）。
+ * + 可操作的 block 文案——agent 补上推荐后通常一次过。判官走 temp=0（见 judge() 调用）：它压低方差
+ * 但**不消除**——可迁移的结论只有这一条：后端与 sibling 共用，而 sibling `prose-choice-gate` 上已实测
+ * 到 temp=0 下同一输入出现反向判定，故"temp=0 保证确定"在本 gate 同样不成立。**那次 1/15 的发生率不适用
+ * 于本 gate**：它是 prose 那条特定输入上的观测，本 gate 自身未做该测量（见 `lib/llm-judge.js` 的
+ * `callJudge` 注释）。所以"重判一次就过了"既可能
+ * 是内容真的变好、也可能是重掷骰子恰好翻面。取向不变：稳定复现的 FP 须靠 eval 改 rubric 治本，
+ * 不把温度噪声当逃生口。
+ *
+ * 造闸的跨闸不变量（输入来源 / 逃生口留痕 / fail-open / verdict 取值域 / 递归守卫 /
+ * 判官协议 / eval 变异纪律 / 升级门槛）见 `~/.claude/references/judge-gate-authoring.md`。
  */
 "use strict";
 const fs = require("fs");
 const { callJudge, NEST_GUARD } = require("./lib/llm-judge");
+// 裁决落盘。本 gate 只在 block 时说话，于是"没被拦"同时对应"判 ok"与"判官不可用"两件事。
+// 三态 verdict 见 lib/judge-log.js。
+const { logVerdict } = require("./lib/judge-log");
 
+const GATE = "ask-recommend-gate";
 const allow = () => process.exit(0);
+
+/**
+ * 放行 + 发「等你选择」桌面通知 + 点亮所在 tab 的 🔔。只用在判官放行这一条路径上——其余 allow()
+ *（非 AskUserQuestion、无 questions、NEST_GUARD、解析失败）都不代表"用户即将看到一个问题"。
+ * run() 自己吞掉发射错误，这里的 try 只兜 require 失败：通知永远不该拦住用户的提问。
+ *
+ * 两个发射器针对的是两种"不在场"：桌面通知把人从别的 app 叫回来；tab 🔔 留在这个 tab 上，
+ * 供人扫一眼一排 tab 时判断"哪个在等我"——通知一闪即逝且不区分 tab，而 🔔 由 Ghostty 维持到
+ * 该 surface 被聚焦或按键为止（ghostty-tab-title.sh 头注的三态表）。等待用户回答本就是
+ * "已停下且未读"，与 Notification/idle_prompt、permission_prompt 同态，故复用同一 alert 通道。
+ *
+ * 同步发射，故本 hook 的 settings timeout 必须同时容纳判官与它（见 lib/llm-judge 的 CLI_TIMEOUT_MS 注释）。
+ *
+ * 已知残余：本 gate 放行 ≠ 整个 PreToolUse 事件放行——另一个匹配 AskUserQuestion 的 hook 若 exit 2，
+ * 通知与 🔔 仍会先于该否决发出，用户被叫到终端却看不到任何问题。harness 没有"工具确实要执行了"
+ * 的事件可挂，所以这条只能靠"没有别的否决者"成立。**这个前提已经不再牢固**：全局启用的 Hookify
+ * 插件注册了无 matcher 的 PreToolUse hook，并支持用 `permissionDecision: deny` 否决任意工具，
+ * 任何项目加一条命中 AskUserQuestion 的规则即可触发（本仓两个审查根目录下暂无此类规则）。见
+ * docs/issues/harness-issues.md 的 HARNESS-111。本仓自己的另一个匹配者 ghostty-tab-title.sh busy
+ * 不构成风险：它对 PreToolUse/AskUserQuestion 原样放行、不改标题，正是为了不与这里抢。
+ */
+function notifyAndAllow(raw) {
+  try {
+    require("./desktop-notify").run(raw);
+  } catch (err) {
+    process.stderr.write(`[ASK-GATE] desktop notify unavailable: ${err.message}\n`);
+  }
+  try {
+    const { spawnSync } = require("child_process");
+    // spawnSync reports a failed spawn, a non-zero exit and a timeout kill through
+    // the RESULT (error/status/signal) — it does not throw. A bare try/catch here
+    // would swallow every one of those and leave the bell silently missing, which
+    // is indistinguishable from "no question is pending" precisely when one is.
+    const r = spawnSync("bash", [`${require("os").homedir()}/.claude/hooks/ghostty-tab-title.sh`, "alert"], {
+      input: raw,
+      stdio: ["pipe", "ignore", "inherit"],
+      timeout: 5000,
+    });
+    if (r.error) throw r.error;
+    if (r.signal) throw new Error(`killed by ${r.signal} (timeout?)`);
+    if (r.status !== 0) throw new Error(`exit ${r.status}`);
+  } catch (err) {
+    process.stderr.write(`[ASK-GATE] tab bell unavailable: ${err.message}\n`);
+  }
+  return allow();
+}
 
 // 返回 block 的理由字符串；ok 返回 ''；判官不可用返回 null（→ 调用方 fail-open）。后端选择见 lib/llm-judge。
 function judge(toolInputJson) {
@@ -55,7 +119,7 @@ function judge(toolInputJson) {
     "只回一行：\nok\n或\nflag: <一句话指出哪个问题缺推荐或缺理由>\n\n" +
     `<AskUserQuestion参数>\n${toolInputJson}\n</AskUserQuestion参数>`;
 
-  const text = callJudge(prompt, 0); // temp=0：判官走确定性，消除近阈值方差导致的偶发误判 + resend 抽奖
+  const text = callJudge(prompt, 0); // temp=0：压低但不消除方差（sibling prose-choice-gate 实测 1/15；见 lib/llm-judge.js 的 callJudge）
   if (text === null) return null; // 后端不可用 / 出错 / 超时 → fail-open
   if (/^flag/i.test(text))
     return text.replace(/^flag\s*:?\s*/i, "").trim() || "（未给理由）";
@@ -64,9 +128,10 @@ function judge(toolInputJson) {
 
 function main() {
   if (process.env[NEST_GUARD]) return allow(); // 在嵌套判官调用内——防递归，直接放行
-  let input;
+  let raw, input;
   try {
-    input = JSON.parse(fs.readFileSync(0, "utf8"));
+    raw = fs.readFileSync(0, "utf8");
+    input = JSON.parse(raw);
   } catch {
     return allow();
   }
@@ -77,13 +142,27 @@ function main() {
     return allow();
 
   const concern = judge(JSON.stringify(ti));
-  if (concern === null || concern === "") return allow(); // 判官不可用 或 判 ok
+  if (concern === null) {
+    logVerdict(GATE, "judge_unavailable", null, input);
+    return notifyAndAllow(raw);
+  }
+  if (concern === "") {
+    logVerdict(GATE, "ok", null, input);
+    return notifyAndAllow(raw);
+  }
 
+  logVerdict(GATE, "flag", concern, input);
   process.stderr.write(
     `[ASK-GATE] 这次 AskUserQuestion 缺【显式】推荐或缺理由（光给选项、或推荐只藏在“最干净/零风险”这类形容词里、或标了推荐却没理由）：${concern}\n` +
-      "按 CLAUDE.md「Surface Choices (Real Ones), Recommend One」：每个让用户取舍的问题，都要标出推荐项" +
-      "（推荐项放第一个、label 末尾加「(推荐)」）并在它的 description 里写清【为什么推荐它】。\n" +
-      "带上推荐和理由重新发起 AskUserQuestion。\n",
+      "按 CLAUDE.md「Surface Choices (Real Ones), Recommend One」：每个让用户【取舍 / 决策】的问题，都要显式" +
+      "标出推荐项——label 含「(推荐)」**或** description 里有显式推荐动作词（“推荐选此项”/“建议选它”/“首选此项”）" +
+      "——并写清【为什么推荐它】（为何它在此情境下值得选，不必逐一论证优于其它项）。" +
+      "选项顺序不影响判定。multiSelect 则每个 option 都要标荐/不荐并各带理由。\n" +
+      "例外：纯征询只有你才掌握的【既存事实】（用哪个账号 / 你当前在哪个环境 / 你指的是哪一个）无需推荐；" +
+      "取舍与审美不属此列，照样要推荐。判据细则见 ~/.claude/references/surface-choices-rubric.md。\n" +
+      "重发时：属取舍/决策的，带上推荐和理由；确属上述事实征询而被误判的，**不要**硬凑推荐，改为把" +
+      "该问题的事实性写进 question / option 文本本身（本 gate 只看 AskUserQuestion 的参数，正文里写给用户的" +
+      "解释它看不到；temp=0 下判定近确定但非确定，原样重发大概率仍被拦——别把它当逃生口）。\n",
   );
   process.exit(2);
 }

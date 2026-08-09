@@ -1,6 +1,7 @@
 import json
 import tempfile
 import unittest
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 from unittest import mock
@@ -20,6 +21,31 @@ class CostTests(unittest.TestCase):
         cost = calculate_cost(entry, pricing=self.pricing())
         self.assertIsNotNone(cost)
         self.assertGreater(cost, 0)
+
+    def test_one_hour_cache_creation_uses_the_higher_rate(self):
+        pricing = self.pricing()
+        # entry(): 10 input, 2 output, 1 cache creation, 2 cache read.
+        all_1h = replace(self.entry("claude-opus-4-7"), cache_creation_1h_tokens=1)
+        cost = calculate_cost(all_1h, pricing=pricing)
+        self.assertAlmostEqual(cost, 10 * 15e-6 + 2 * 75e-6 + 30e-6 + 2 * 1.5e-6, places=12)
+
+    def test_one_hour_cache_creation_falls_back_to_five_minute_rate(self):
+        pricing = {"no-1hr-rate": {k: v for k, v in self.pricing()["claude-opus-4-7"].items()}}
+        del pricing["no-1hr-rate"]["cache_creation_input_token_cost_above_1hr"]
+        base = self.entry("no-1hr-rate")
+        all_1h = replace(base, cache_creation_1h_tokens=base.cache_creation_tokens)
+        self.assertEqual(
+            calculate_cost(all_1h, pricing=pricing), calculate_cost(base, pricing=pricing)
+        )
+
+    def test_one_hour_split_cannot_exceed_the_cache_creation_total(self):
+        pricing = self.pricing()
+        base = self.entry("claude-opus-4-7")
+        overstated = replace(base, cache_creation_1h_tokens=base.cache_creation_tokens + 500)
+        capped = replace(base, cache_creation_1h_tokens=base.cache_creation_tokens)
+        self.assertEqual(
+            calculate_cost(overstated, pricing=pricing), calculate_cost(capped, pricing=pricing)
+        )
 
     def test_unknown_model_returns_none_not_zero(self):
         entry = self.entry("fake-model-xyz")
@@ -93,6 +119,7 @@ class CostTests(unittest.TestCase):
                 "input_cost_per_token": 15e-6,
                 "output_cost_per_token": 75e-6,
                 "cache_creation_input_token_cost": 18.75e-6,
+                "cache_creation_input_token_cost_above_1hr": 30e-6,
                 "cache_read_input_token_cost": 1.5e-6,
             },
             "gpt-5": {

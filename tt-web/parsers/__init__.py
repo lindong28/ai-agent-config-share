@@ -18,10 +18,17 @@ class UsageEntry:
     project: str
     agent_id: str
     message_count: int = 1
+    # Subset of cache_creation_tokens written with a 1-hour TTL, which Anthropic
+    # bills at a higher rate than the 5-minute default. Cost-only: the total
+    # stays in cache_creation_tokens so token counters are unaffected.
+    cache_creation_1h_tokens: int = 0
 
     @property
     def dedup_key(self):
-        return "%s:%s:%s" % (self.agent_id, self.session_id, self.message_id)
+        # Keyed on the API call, not the transcript it lives in: Claude Code
+        # copies whole transcripts into a new session file on resume/fork, so a
+        # session-scoped key counts one call once per copy.
+        return "%s:%s:%s" % (self.agent_id, self.message_id, self.request_id)
 
 
 @dataclass(frozen=True)

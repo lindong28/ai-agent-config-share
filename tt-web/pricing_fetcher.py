@@ -20,7 +20,7 @@ _FUZZY_LOGGED = set()
 _UNKNOWN_LOGGED = set()
 
 
-def get_pricing(cache_path=CACHE_PATH, fetcher=None, now=None):
+def get_pricing(cache_path=CACHE_PATH, fetcher=None, now=None, persist=True):
     now_fn = now or time.time
     cache_path = Path(cache_path)
     cached = _read_fresh_cache(cache_path, now_fn())
@@ -30,7 +30,8 @@ def get_pricing(cache_path=CACHE_PATH, fetcher=None, now=None):
     fetch = fetcher or _fetch_litellm_pricing
     try:
         data = fetch()
-        _write_cache(cache_path, data, now_fn())
+        if persist:
+            _write_cache(cache_path, data, now_fn())
         return _with_bundled_supplements(data)
     except Exception as exc:
         logger.warning("Pricing fetch failed, using bundled fallback: %s", exc)
@@ -53,10 +54,19 @@ def calculate_cost(entry, pricing=None):
     cache_creation_cost = info.get("cache_creation_input_token_cost", input_cost * 1.25)
     cache_read_cost = info.get("cache_read_input_token_cost", input_cost * 0.1)
 
+    # Anthropic bills a 1-hour cache write above the 5-minute default rate. Fall
+    # back to the 5-minute rate rather than a guessed multiplier when the table
+    # has no 1-hour entry; providers without a 1-hour TTL report zero here.
+    cache_creation_1h = min(entry.cache_creation_1h_tokens, entry.cache_creation_tokens)
+    cache_creation_1h_cost = info.get(
+        "cache_creation_input_token_cost_above_1hr", cache_creation_cost
+    )
+
     return (
         entry.input_tokens * input_cost
         + entry.output_tokens * output_cost
-        + entry.cache_creation_tokens * cache_creation_cost
+        + (entry.cache_creation_tokens - cache_creation_1h) * cache_creation_cost
+        + cache_creation_1h * cache_creation_1h_cost
         + entry.cache_read_tokens * cache_read_cost
     )
 

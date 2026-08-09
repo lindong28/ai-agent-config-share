@@ -74,7 +74,7 @@ Caller 可以为自己已拥有的领域声明 delta，但不得削弱完整 rec
 - append-only / 归档历史按该类型的 Format 与 lifecycle 选择新增、迁移或 superseding 形状，不把当前态纠偏解释为改写历史的许可；
 - 每个候选文件（含索引）按自身文档类型判断；协议无法确定权限时，上交 §2.2 决策而不修改。
 
-每批落地前用这个 map 检查 planned diff；不满足契约时先改写修复形状，不能等 review subagent 事后兜底。
+每批落地前用这个 map 检查 planned diff；不满足契约时先改写修复形状，不能等 review subagent 事后兜底。本批把已有内容重新分配到多个去处时，diff 检查之外另按协议 §2「内容重新分配」核一遍源文件全文——缝里丢掉的内容不出现在任何一份 diff 里，这道闸看不见它。
 
 ### 0.2 非文档改动边界
 
@@ -112,7 +112,7 @@ docs/ 未初始化的 bootstrap（含无「改了什么」时）：以 repo 现�
 | 文档类型 | seed 处理 | 条件 / 备注 |
 |---|---|---|
 | 各文档类型 | 按协议 §4「各文档的读写规则」建议格式起草 | — |
-| contracts/ | 只初始化目录结构 | 内容由协议 §4.6「contracts/」的执行路径建立（plan 工作流主路径 / 专用 command fallback），seed 不起草 |
+| contracts/ | 只初始化目录结构 | UX 两文件的内容由协议「contracts/」节的执行路径建立（plan 工作流主路径 / 专用 command fallback）；其他作用域的契约按该节要求各自声明性质 / 消费者 / 写入权威。两类 seed 都不起草内容 |
 | data/ | 按项目需要可选 | 协议 §4.13「data/」 |
 | README + operations | 服务有增删改 / 部署方式变化时联动更新 | 按 `~/.claude/references/service-operations-protocol.md` 检查生命周期脚本齐备；缺失则提示补脚本，不自动写 |
 

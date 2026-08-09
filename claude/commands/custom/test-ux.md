@@ -84,6 +84,8 @@ description: 模拟真实用户试用产品（web / desktop / mobile / 任何可
 | 功能完整性 | "预期文档承诺的功能真的都在并按承诺工作吗？非正常路径会不会塌？" | 文档承诺的功能是否齐全且按预期工作；错误 / 空状态 / 边界处理 |
 | 内容质量 | "如果这条内容是用户真要消费的——他会信吗、觉得有用吗、是不是过时？" | 准确性、相关性、新鲜度、覆盖度 |
 
+**Web 产品的观察方法是 BINDING 前置**：视觉效果与响应式两维要按 `~/.claude/references/web-ui-observation.md` 观察——它规定了「值 / 关系 / 结构」三层里关系层必查（对齐、留白对称、阅读顺序）、字形盒 vs 元素盒的测量差异、缩放轴的取点密度，以及**有参照产品时的同条件成对测量与反向完备性**。按值逐项核对全绿而页面看起来不对，是该文件的动机案例。
+
 产品类型特化——按产品类型补充，同样以 lens 自问发散：
 
 - AIGC 产品："输出质量是否符合用户预期？失败时对用户可解释吗？"
@@ -104,6 +106,7 @@ Web 产品默认要覆盖：
 - 由显式控件产生的稳定深链接或 query URL；不要只点默认页。
 - 自然点击目标：标题、图片、卡片主操作、返回/前进、清空/重置、外部链接。
 - 典型正向路径 + 至少一个边界路径：空结果、无效参数、最后一页、移动窄屏、放大缩放。
+- 缩放不是"顺手看一眼"：按 `web-ui-observation.md` §必须覆盖的轴，缩放要覆盖 100/125/150/200%，且在每个断点的 B-1 / B / B+1 各取一点——只取整数档会跳过断点中段。
 
 覆盖规则：
 
@@ -135,9 +138,9 @@ Bash({
 })
 ```
 
-- `<WORKDIR>` 来自 Bash `pwd`——**禁止从 `$HOME` / 环境变量推断**。
+- `<WORKDIR>` 来自 Bash `pwd`——**禁止从 `$HOME` / 环境变量推断**。**取到就地记下来**（它是下条留存清单的第一项）：resume 时要用的是**启动那一刻**的这个值，届时重跑 `pwd` 可能已经不是它了。
 - `run_in_background: true` 是硬约束（不可阻塞主 session）。
-- 每个 session 从 wrapper banner（stdout 文本流）捕获 `session id`（resume 依赖它），从**后台 Bash 任务结果**捕获 `.output` 路径（即下文 `<output-file>`；harness 对该任务 stdout+stderr 的完整捕获，**不是** banner 里 `Log:` 指向的 `codeagent-wrapper-<PID>.log`）。捕不到 session id 视为 wrapper / 适配层问题——排查 stderr / 退出码，不直接交用户。
+- 每个 session 捕获并留存三样：`<WORKDIR>` 的实际取值（上条；resume 依赖它）、wrapper banner（stdout 文本流）里的 `session id`（resume 依赖它），以及从**后台 Bash 任务结果**取得的 `.output` 路径（即下文 `<output-file>`；harness 对该任务 stdout+stderr 的完整捕获，**不是** banner 里 `Log:` 指向的 `codeagent-wrapper-<PID>.log`）。捕不到 session id 视为 wrapper / 适配层问题——排查 stderr / 退出码，不直接交用户。
 
 ### test-prompt 内容
 
@@ -181,7 +184,7 @@ Bash({
 据此分三种结局：
 
 - **过关**（两项都满足）→ 进 Handoff。
-- **未覆盖完 / 早停 / 核心路径未真实跑通**（session 仍可信）→ **resume 同一 session**（前缀改为 `resume <SESSION_ID>`，其余环境变量 / flag / 后台 / timeout 同启动）续跑，**不为这种正常早停启新 session 重测**（丢上下文、双倍 token）；指出缺哪几项 + 已观察到的线索，回到本段重新裁决。
+- **未覆盖完 / 早停 / 核心路径未真实跑通**（session 仍可信）→ **resume 同一 session**（**`<WORKDIR>` 传启动时记下的那个值、不重跑 `pwd`**——它决定续跑的 agent 在哪个目录下工作，而 resume 时的 cwd 可能已经不是启动时那个了；传错不报错，只会静默作用在别处。其余：前缀改为 `resume <SESSION_ID>`，环境变量 / flag / 后台 / timeout 同启动）续跑，**不为这种正常早停启新 session 重测**（丢上下文、双倍 token）；指出缺哪几项 + 已观察到的线索，回到本段重新裁决。
 - **session 异常退出 / `.output` 截断 / resume 后不可信**（进程残缺，非「正常早停」）→ 先排查 stderr / 退出码 + `git status`，再把诊断 + 候选 [resume 同 session / 重启新 session / 放弃交还用户] 经 `AskUserQuestion` 让用户拍板——反转成本高（重启丢全部上下文 / resume 损坏 session 不可信），主 session 不 silent decide。
 
 读完最终输出后若想核对执行中段细节（证据真实性、覆盖是否真做），可再 `Read` 同一 `<output-file>`（含完整执行过程）——可选，不强制。

@@ -13,9 +13,13 @@ class MtimeCache:
         self._entries_by_path = {}
         self._lock = threading.RLock()
 
-    def load(self):
+    def load(self, source_errors=None):
         with self._lock:
-            paths = [Path(path) for path in self.path_provider()]
+            try:
+                paths = [Path(path) for path in self.path_provider()]
+            except OSError as exc:
+                self._record_error(source_errors, None, "scan", exc)
+                paths = []
             current = {str(path): path for path in paths}
 
             for cached_path in list(self._entries_by_path):
@@ -25,7 +29,8 @@ class MtimeCache:
             for key, path in sorted(current.items()):
                 try:
                     stat = path.stat()
-                except OSError:
+                except OSError as exc:
+                    self._record_error(source_errors, path, "stat", exc)
                     self._entries_by_path.pop(key, None)
                     continue
 
@@ -38,6 +43,7 @@ class MtimeCache:
                     entries = list(self.parser(path))
                 except Exception as exc:
                     logger.warning("Could not parse %s: %s", path, exc)
+                    self._record_error(source_errors, path, "parse", exc)
                     entries = []
 
                 self._entries_by_path[key] = {"signature": signature, "entries": entries}
@@ -46,6 +52,18 @@ class MtimeCache:
             for key in sorted(self._entries_by_path):
                 merged.extend(self._entries_by_path[key]["entries"])
             return merged
+
+    @staticmethod
+    def _record_error(source_errors, path, stage, exc):
+        if source_errors is None:
+            return
+        source_errors.append(
+            {
+                "path": str(path) if path is not None else None,
+                "stage": stage,
+                "error": "%s: %s" % (type(exc).__name__, exc),
+            }
+        )
 
     def clear(self):
         with self._lock:

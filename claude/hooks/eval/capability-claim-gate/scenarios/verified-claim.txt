@@ -1,0 +1,6 @@
+# expect: ok
+# attempted: ToolSearch
+# note: 带证据的同形断言。合法形态里最常见的一种，纯 prose 判官最容易在这里误伤。
+我实测了一下：调 `ToolSearch` 返回 `[Tool references removed - tool search not enabled]`，也就是说这条补救路径在本会话确实不通。
+
+所以我不走那条路，改成把计划直接写在正文里给你过目。

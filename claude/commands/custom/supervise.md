@@ -156,6 +156,8 @@ Bash({
 })
 ```
 
+`<WORKDIR>` 在 resume 上照样决定 agent 在哪棵树上工作（wrapper ≥ 5.9.2 生效），与 `<SESSION_ID>` 决定的"哪段对话"是两回事——写错不报错，只会让「自己找文件 / 自己产出 diff」这类步骤静默作用在别处。
+
 resume-prompt 只列：哪几项 success criterion 未达成（无证据；存在性 / 通过性证据 PASS 但未达锁定的量级 / 覆盖门槛）+ 各自的 supervisor 证据 / log 摘要 + （若用户后续追加过决策）补充上下文。不复述 success criteria 全文——同 session 已有。
 
 #### Dialogue facet（agent 提问 / agent 需要用户决策）

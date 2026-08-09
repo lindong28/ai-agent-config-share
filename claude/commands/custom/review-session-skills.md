@@ -11,8 +11,9 @@ disable-model-invocation: true
 | 项目 | 契约 |
 |---|---|
 | 必需输入 | 当前 session 中可复核的执行记录；按实际发生情况取用对话、工具结果、用户纠正、失败/返工与 artifact diff |
-| 审查对象 | 本次任务中实际参与执行的 skill、command、reference、agent 定义、hook 或 harness 适配层 |
+| 审查对象 | 本次任务中实际参与执行的 harness artifact——skill、command、reference、agent 定义、hook、CLAUDE.md / rules、settings、script 或适配层 |
 | 输出 | 证据覆盖说明（实际复核的 session / artifact 范围与已知缺口），以及证据不足（无法可靠判断）、clean（未发现显著问题）或 findings（由通过全部判定门的异常行为或不必要成本组成、等待用户选择的清单）之一 |
+| 委派检测模式 | 被上层 harness 复盘流程委派时，检测在隔离 readonly context 执行，证据源为该 session 的 transcript 文件；findings 返回调用方，文内所有用户选择与 fix 交接（含决策路径第 4 步与「收敛与后续」）由调用线程承接 |
 | 下游 | 用户选中的 finding 交给 `/custom:fix-skill-from-session` 做 source-level 修复 |
 
 ## Finding 判定门
@@ -25,7 +26,7 @@ disable-model-invocation: true
 |---|---|
 | 执行证据 | 本次 session 中发生了什么可指认的行为、失败或不必要成本？ |
 | Harness 归因 | 归属 artifact 的指令、边界、适配或缺失契约如何导致或放大了它？ |
-| 显著性 | 它是否可能在未来调用中复现，并造成实质性的正确性、效率或可维护性损失？ |
+| 显著性 | 它是否可能在未来调用中复现，并造成实质性的正确性、效率、安全性或可维护性损失？ |
 | 当前可行动 | 问题是否仍未被本次 session 完整 source-level 修复并验证？ |
 
 决策路径：

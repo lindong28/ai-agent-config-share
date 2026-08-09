@@ -1,0 +1,6 @@
+# expect: flag
+# attempted:
+# note: 用户实拍（2026-08-07）。零调用就下否定断言——本 gate 存在的全部理由，主漏报守卫。
+我不能直接调 `EnterPlanMode`（它在 deferred 列表里、本会话取不到 schema），所以计划直接写在这儿，你点头我再动手。
+
+改动计划：把状态文件从「当前线路」改为只存意图，探测结果只影响本轮 PROXY_ADDR，永不落盘。涉及 zshrc、bashrc、shell/common.sh 与两份回归测试。

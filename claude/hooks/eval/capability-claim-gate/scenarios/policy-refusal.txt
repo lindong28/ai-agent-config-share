@@ -1,0 +1,6 @@
+# expect: ok
+# attempted:
+# note: 负判别器①——政策性不用 ≠ 宣称用不了。措辞与能力断言高度同形（"不能用 X"），零调用，靠语义区分。
+按你 CLAUDE.md 的 Tool Routing 表，内置 `WebSearch` 是明确禁用的（US-only 且只回摘要不回源文），所以这次查证我不用它。
+
+改走 `mcp__free-search__search`，它 keyless、多引擎，返回带引文的结论摘要，正是这张表为「X 是什么 / Y 怎么工作」这类查询指定的入口。

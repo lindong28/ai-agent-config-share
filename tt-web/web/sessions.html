@@ -43,11 +43,30 @@
       <main class="main">
         <section class="panel">
           <div class="panel-head">
-            <h2>Session details</h2>
+            <h2>Session details <span class="scope-badge">This machine</span></h2>
             <span id="session-count" class="status-line">— sessions</span>
           </div>
-          <p class="estimate-note">Rows with unknown pricing show —. Codex and GLM-5.1/5.2 rows marked 推算 are estimated. Sessions 只显示仍存在的原始日志（Claude 通常约 30 天，Codex 可能更久）；更久的聚合统计见 Explore。</p>
-          <div class="table-wrap">
+          <p class="scope-note">Data scope: this machine only. Cross-machine aggregate usage is available in Overview and Explore.</p>
+          <details class="note-disclosure">
+            <summary>What this list covers</summary>
+            <p>Rows with unknown pricing show —. Codex and GLM-5.1/5.2 rows marked <em>estimated</em> use bundled pricing rather than exact billing.</p>
+            <p>Only sessions whose raw logs still exist are listed — roughly 30 days for Claude Code, often longer for Codex. Explore keeps the aggregated history beyond that.</p>
+          </details>
+          <div class="controls sessions-controls">
+            <div class="field">
+              <label for="filter-agent">Agent</label>
+              <select id="filter-agent"><option value="">All agents</option></select>
+            </div>
+            <div class="field">
+              <label for="filter-project">Project</label>
+              <select id="filter-project"><option value="">All projects</option></select>
+            </div>
+            <div class="field">
+              <label for="filter-model">Model</label>
+              <select id="filter-model"><option value="">All models</option></select>
+            </div>
+          </div>
+          <div class="table-wrap sticky-head">
             <table>
               <thead>
                 <tr>
@@ -62,6 +81,11 @@
               </thead>
               <tbody id="sessions-body"></tbody>
             </table>
+          </div>
+          <div class="pager">
+            <button id="page-prev" type="button">‹ Previous</button>
+            <span id="page-status" class="status-line">—</span>
+            <button id="page-next" type="button">Next ›</button>
           </div>
         </section>
       </main>

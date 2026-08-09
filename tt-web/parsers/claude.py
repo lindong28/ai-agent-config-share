@@ -38,18 +38,19 @@ def load_entries(hours_back=0, base_dirs=None):
     return entries
 
 
-def parse_file(path, fallback_project="unknown"):
+def parse_file(path, fallback_project="unknown", source_errors=None):
     entries = []
     seen = set()
     try:
         with open(path, "r", encoding="utf-8") as handle:
-            for line in handle:
+            for line_number, line in enumerate(handle, start=1):
                 line = line.strip()
                 if not line:
                     continue
                 try:
                     data = json.loads(line)
-                except json.JSONDecodeError:
+                except json.JSONDecodeError as exc:
+                    _record_source_error(source_errors, path, line_number, exc)
                     continue
 
                 if not isinstance(data, dict) or data.get("type") != "assistant":
@@ -60,9 +61,19 @@ def parse_file(path, fallback_project="unknown"):
                     continue
                 seen.add(entry.dedup_key)
                 entries.append(entry)
-    except (OSError, PermissionError):
+    except (OSError, PermissionError, UnicodeError) as exc:
+        _record_source_error(source_errors, path, None, exc)
         return []
     return entries
+
+
+def _record_source_error(source_errors, path, line_number, exc):
+    if source_errors is None:
+        return
+    detail = "%s: %s" % (type(exc).__name__, exc)
+    if line_number is not None:
+        detail = "line %d: %s" % (line_number, detail)
+    source_errors.append({"path": str(path), "stage": "parse", "error": detail})
 
 
 def _get_claude_dirs():
@@ -89,6 +100,7 @@ def _parse_assistant_entry(data, project):
     output_tokens = _int(usage.get("output_tokens"))
     cache_creation = _int(usage.get("cache_creation_input_tokens"))
     cache_read = _int(usage.get("cache_read_input_tokens"))
+    cache_creation_1h = _cache_creation_1h(usage, cache_creation)
 
     if input_tokens == 0 and output_tokens == 0 and cache_creation == 0 and cache_read == 0:
         return None
@@ -115,7 +127,15 @@ def _parse_assistant_entry(data, project):
         cost_usd=data.get("costUSD"),
         project=project,
         agent_id="claude-code",
+        cache_creation_1h_tokens=cache_creation_1h,
     )
+
+
+def _cache_creation_1h(usage, cache_creation_total):
+    breakdown = usage.get("cache_creation")
+    if not isinstance(breakdown, dict):
+        return 0
+    return min(_int(breakdown.get("ephemeral_1h_input_tokens")), cache_creation_total)
 
 
 def _parse_timestamp(value):

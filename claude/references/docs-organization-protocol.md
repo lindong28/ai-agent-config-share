@@ -18,19 +18,19 @@ BINDING rule via CLAUDE.md。`docs/CLAUDE.md` 存在时协议生效——agent �
 
 1. **多种文档类型**——覆盖从架构到变更记录的项目知识光谱
 2. **docs/CLAUDE.md**——Claude Code 自动加载，agent 在 docs/ 下工作时协议规则自动 in context
-3. **提升机制**——**task 产物**（Long Task Protocol 产出的 state.md 和 journal.md）中有项目级价值的条目提升为持久化文档
+3. **同步机制**——把 **task 产物**（执行工作流留下的产物，本配置下是 Long Task Protocol 的 state.md / journal.md）里有项目级价值的条目、以及本次 diff 改变的当前态，同步到持久化项目文档
 
 ### 消费者层级
 
-所有消费者消费的是**项目源代码**，不是源代码部署后的产品。文档的消费者分三层，下层包含上层：
+所有消费者消费的是**项目源代码**，不是源代码运行后的产物。文档的消费者分三层，下层包含上层：
 
 ```
-  User       ← 看的最少：产品功能、变更记录、部署配置、使用验证、运维操作
-  Developer  ← 中间层：+ 架构、设计决策、行为契约
+  User       ← 看的最少：交付物能力、变更记录、获取/安装/配置、使用验证、运维（若有）
+  Developer  ← 中间层：+ 架构、设计决策、契约（行为契约及按需扩展的其他作用域）
   Agent      ← 看的最多：+ 经验、issues、测试 pattern
 ```
 
-User 是拿到源代码后需要部署、使用、运维的人——部署（环境搭建、数据库初始化、运行时配置）、使用验证（像产品用户一样实际使用部署后的产品，确认功能正常）、运维（日常配置调整、问题排查）。
+User 是获取项目交付物、按其形态使用它、但不读内部实现的人——具体动作随**交付形态**而定：可部署产品/服务经「部署（环境搭建、状态/数据初始化、运行时配置）→ 像产品用户一样使用并验证 → 运维（配置调整、问题排查）」；非部署交付物（库 / CLI / 数据管道 / 研究代码 等）则是「获取 → 调用 / 运行 → 取产出」。
 
 每个文档标注其**最上层消费者**——标注 `[User]` 意味着三层都看，`[Developer]` 意味着开发者和 Agent 看，`[Agent]` 意味着仅 Agent 需要看。
 
@@ -57,7 +57,7 @@ User 是拿到源代码后需要部署、使用、运维的人——部署（环
     │   └── <YYYYMMDD>-<short-name>/
     │       ├── plan.md
     │       └── spec.md
-    ├── contracts/
+    ├── contracts/                         # 各类契约（按项目需要扩展，如 interface-contract.md）
     │   ├── ux-contract.md                 # 行为契约（hard spec）[Developer]
     │   └── ux-test-patterns.md            # 测试 pattern（soft heuristics）[Agent]
     ├── experiences/
@@ -103,16 +103,18 @@ User 是拿到源代码后需要部署、使用、运维的人——部署（环
 
 | 场景 | 路径 |
 |---|---|
-| 长任务执行（有 task 产物） | 任务完成后**提升**到项目文档（见 §5） |
+| 长任务执行（有 task 产物） | 任务完成后**同步**到项目文档（见 §5） |
 | 常规 session（无 task 产物） | 发现值得持久化的信息时**直接写入**项目文档 |
 
-两条路径互补：提升是批量的事后总结；直接写入是逐条的实时记录。提升更系统，直接写入覆盖没有 task 产物的场景。
+两条路径互补：同步是批量的事后总结；直接写入是逐条的实时记录。同步更系统，直接写入覆盖没有 task 产物的场景。
 
 ### 执行模型
 
 文档的读写判断（何时触发、写什么）是协议语义；具体由谁执行写入是实现细节——本配置下由 subagent（`doc-updater`）执行，主 Agent 只负责判断触发条件和组装上下文，多个文档类型需要更新时并行 spawn 多个实例。
 
 详见 `~/.claude/agents/doc-updater.md`。
+
+**内容重新分配**：把一份已有文档的内容拆成多份或搬到别处时，对着**源文件全文**核一遍分配——每一部分都要指得出它去了哪，指不出的就是被丢掉的。只核搬出去的那几段不够：拆分的缝不出现在任何一份 diff 里，因此任何按 diff 驱动的事后检查都捞不回它。各类型的内容能不能被搬走或丢弃，按 §4 该文档类型自己的 Format 判，本节不另立规则。
 
 ---
 
@@ -130,17 +132,19 @@ User 是拿到源代码后需要部署、使用、运维的人——部署（环
 
 ### 4.1 README.md（根目录）[User]
 
-**What**：项目的入口文档。面向所有拿到源代码的人——介绍产品是什么、如何部署和配置、如何日常运维。
+**What**：项目的入口文档。面向所有拿到源代码的人——介绍这个项目是什么、如何获取/安装/配置使用，以及（若适用）如何部署和运维。
 
-**Format**：Mutable snapshot。按通用开源 README 惯例组织（产品介绍、功能、部署、配置、运维等）。
+**Format**：Mutable snapshot。按通用开源 README 惯例组织（项目介绍、功能、安装/使用，以及——若适用——部署、配置、运维 等）。
 
 **何时读**
 
-Lens：当你需要理解"这个项目是什么、怎么部署和使用"时。
+Lens：当你需要理解"这个项目是什么、怎么获取和使用"时。
 
 **何时写**
 
-Lens：当产品的功能、安装方式、使用方式发生变化时。与 CHANGELOG.md 和 contracts/ux-contract.md 联动——如果这两个文档更新了，README 大概率也需要同步。
+Lens：当项目的功能、安装方式、使用方式发生变化时。与 CHANGELOG.md 和 contracts/ux-contract.md 联动——如果这两个文档更新了，README 大概率也需要同步。
+
+**服务章节**：项目有长期运行的服务时，README 必须有专门的服务章节（服务清单 + 运维入口）。约定与脚本命名见 `service-operations-protocol.md` §3（脚本）、§4.1（服务章节）。
 
 ---
 
@@ -235,9 +239,9 @@ Lens：你做了一个设计选择，且未来 agent 如果不知道这个选择
 
 ---
 
-### 4.5 plans/ [Developer]
+### 4.5 plans/ — Plan/Spec 归档 [Developer]
 
-**What**：已完成 plan 的 plan.md 和 spec.md 归档。保留设计意图和需求定义的历史记录。
+**What**：已完成 plan 的 plan.md 和 spec.md 归档，保留设计意图和需求定义的历史记录。**按项目需要**——工作流产出 plan/spec 时才有此目录；不产出规划文档的工作流跳过。
 
 **Format**：目录结构，每个 plan 一个子目录（`<YYYYMMDD>-<short-name>/`），仅归档 plan.md + spec.md 这类设计/需求产物。归档件在正文之前附 2 行 **Archive status** 导航头——说明执行过程临时产物（如 `state.md` / `journal.md`，若有）按本节不入档，并给出实际结果/裁决的当前查阅入口（须指向具体可定位的文件/章节，非泛指"相关文档"）；不修改 plan 正文本身。
 
@@ -247,17 +251,20 @@ Lens：plan 执行完成后，将 plan.md 和 spec.md（如有）复制到 `docs
 
 ---
 
-### 4.6 contracts/ — UX Contract 与测试 Pattern [Developer]
+### 4.6 contracts/ — UX 契约与项目扩展契约 [Developer]
 
-**What**：产品面向用户的行为契约和测试指导。包含两层：**hard spec**（产品必须满足的行为契约）和 **soft heuristics**（测试时值得留意的模式和边界情况）。
+**What**：产品面向用户的行为契约和测试指导。包含两层：**hard spec**（产品必须满足的行为契约）和 **soft heuristics**（测试时值得留意的模式和边界情况）。本目录同时是项目自定义契约的落点——契约指被消费方依赖、不可静默改变的约定，项目可按需增加其他作用域的契约文件（如 `interface-contract.md`），文件名以作用域前缀区分。
 
 **Format**：目录结构。
 
 ```
 docs/contracts/
-├── ux-contract.md
-└── ux-test-patterns.md
+├── ux-contract.md              # 面向用户的行为契约（hard spec）[Developer]
+├── ux-test-patterns.md         # 测试 pattern（soft heuristics）[Agent]
+└── <scope>-contract.md         # 项目扩展，如 interface-contract.md [Developer]（消费者按各契约自述）
 ```
+
+本节其余规则（覆盖策略 / 何时读 / 何时写 / 执行路径）与 §5 同步机制**只覆盖 UX 两文件**。协议不为项目扩展的契约提供集中规则——新增时在该文件开头自述三项：性质（hard spec 还是 heuristics、mutable 还是 append-only）、消费者、写入权威与路径（事实来源、谁有权改、定义类问题往哪跟踪）。这三项由项目 owner 定，agent 起草时不得默认认定。
 
 | 文件 | 性质 | 覆盖策略 |
 |---|---|---|
@@ -347,6 +354,7 @@ docs/issues/                   # domain 文件 = 只存 open issues
 ├── README.md                  # 索引：各 domain 文件的列表与 scope
 ├── ux-issues.md               # 测试产品时发现的 UX 问题（contract 在实际产品中被 broken）
 ├── ux-contract-issues.md      # contract 本身的问题（定义缺失 / 不准确 / 过时）
+├── harness-issues.md          # Agent Harness 自身的问题——hooks / 适配层 / agent·skill 行为 / settings
 ├── general.md                 # 不属于特定 domain 的通用 issues
 └── archive/
     └── closed.md              # resolved + wontfix 条目（翻状态时从 domain 文件整条移入；只 grep 查史，不通读）
@@ -370,10 +378,20 @@ Lens：你发现了一个值得在未来某个时间点解决的问题，但不�
 触发例（不限于此）：
 - test-ux 发现产品行为与 contract 不符 → `ux-issues.md`
 - test-ux 发现 contract 本身的定义有问题 → `ux-contract-issues.md`
+- 发现 Agent Harness 自身（hooks / skill / settings 等）的问题但本次不就地修 → `harness-issues.md`
 - 代码审查 / skill 维护中发现改进项 → `general.md`
 - 从 state.md Open Issues 提升——任务结束时仍 open 的 issue（见 §5）
 
 **ux-issues.md 和 ux-contract-issues.md 的写入约束**：必须基于真实端到端产品观察，不依赖读代码或文档推断。只有 `/custom:test-ux` 等实际执行产品的流程才能写入这两个文件。通过 §5 提升的 UX-domain issue 如果不是基于真实端到端产品观察，应归入 `general.md` 而非 `ux-issues.md` / `ux-contract-issues.md`。
+
+**harness-issues.md 的写入路由**：默认写当前项目的 `docs/issues/harness-issues.md`。本机的 harness 配置由某个 git 仓提供（`~/.claude` / `~/.codex` 指向它）、且该仓不是当前项目时，按下表选落点——让纯 user-scope 的问题集中在该仓统一 triage，同时不让项目专属的问题挤进去。
+
+| 该问题 | 落点 |
+|---|---|
+| 不牵涉当前项目的任何特有内容——理解、复现与修复它只用得上 harness 侧的东西：该仓提供的配置、hooks、skill / command / reference、安装器与它装的 MCP、插件，以及 harness 运行时自身 | 该仓仓根的 `docs/issues/harness-issues.md`（该仓还没有这个文件时按本节格式新建） |
+| 牵涉当前项目（其 `.claude/`、项目级 CLAUDE.md / AGENTS.md、项目特有的代码与配置），或判不准 | 当前项目的 `docs/issues/harness-issues.md` |
+
+**跨仓写入：报出，不代为 commit**：在本轮回复里报出条目标题、文件绝对路径，并点明它是一处**未提交**改动；不代为 commit——那个仓有本 session 之外的写入者，何时提交、与什么一起提交由用户定。不报出，条目就成了别人工作树里一处无人知道的改动，会被随手的清理带走。
 
 写入后自检——下一个处理者只看这条 entry 能否判断"要不要修、怎么复现、优先级多高"。
 
@@ -471,11 +489,14 @@ Lens：一次实验产出了你会拿来和未来优化对比的结果（尤其�
 
 Lens：当你需要从系统整体视角了解运维状态时——服务清单、监控配置、最近的 incidents——而不是去钻某个单一组件的细节。
 
+Lens（归属判断）：当你要判断一个运维动作**由谁执行**时。operations/ 是"这件事 agent 自己能不能做"的权威记录——凭据放在哪、用哪个脚本、有什么前置约束都写在这里。注意这个 lens 触发的时机与上一个相反：上一个在你想了解现状时触发，这个在你**已经认定不必了解**时触发，因为把动作判给别人本身就是一次归属判断，而做这个判断所需的事实只存在于 operations/。
+
 触发例（不限于此）：
 - 拿到一个新项目，想知道"它在跑什么、谁拉起的"
 - 服务异常排查，先看 services.md 找正确的诊断起点
 - 新机器部署，按 services.md 清单逐项 bring-up
 - 加新服务前，先看现有服务的守护 pattern
+- 正要把一个运维动作记成待办 / 残留 / 交接项，或说成需要用户执行——先确认它不是自己就能做的
 
 **何时写**
 
@@ -497,20 +518,55 @@ operations/ 不替代 experiences/deployment.md——前者是"现状快照"（m
 
 ---
 
-## 5. 提升机制：task 产物 → 项目文档
+### 4.13 data/ — 数据源与物化数据 [Developer]
+
+**What**：项目的数据关注点，两面：**(a)** 消费的**外部数据源**——提供什么能力、各数据/字段的可信度分级、怎么用；**(b)** 项目的**物化数据**（内置 / 拉取缓存 / 计算物化的本地持久化数据，统称"物化数据"）——实际存了哪些数据集、覆盖范围、新鲜度、谁是 source-of-truth、怎么治理。让 coding agent 不必翻代码或试错就知道"有哪些数据可用、来自哪、可信到什么程度"——**用错数据 / 不知道有什么数据时，这里就是更新的锚点**。
+
+**何时启用**：项目消费外部数据源、或物化了非平凡的本地数据时。纯无状态、无外部数据依赖的项目不需要——这是**可选**类型。两面缺哪面可只建一个文件。
+
+**Format**：目录，两个文件。字段模板见 `docs-format-templates.md` §4.13。
+
+| 文件 | 性质 | 覆盖 |
+|---|---|---|
+| sources.md | Mutable snapshot | 每个外部源：能力（实测带日期）、可信度分级、用法/限制/认证 |
+| inventory.md | Mutable snapshot + 权威清单 | 物化数据盘点：有哪些、覆盖、新鲜度、source-of-truth |
+
+**大 / 活 store 的逐数据集清单别手维护**：store 随取数不断漂移，这种清单必然脱节、甚至讲反主源（还写着旧主源、实际早换了）。故 inventory.md 只放 curated 概览，权威清单交给一条能从 store 重新查出当前态的命令（regen 命令）生成；store 小 / 静态时手维护逐数据集清单才可以。
+
+**何时读**
+
+Lens：当你要用 / 取 / 治理项目数据，或不确定"有哪些数据可用、来自哪个源、可不可信"时。
+
+触发例（不限于此）：
+- 新功能要消费数据前——先看 sources.md 有哪些源能力、inventory.md 已有哪些数据
+- 在输出 / 计算引用某项数据前，确认其可信度分级
+- 数据治理 / 清理 / 迁移前，inventory.md 是 source-of-truth 盘点起点
+
+**何时写**
+
+sources.md 写入 lens：新增 / 移除一个外部源，或某源的能力 / 可信度分级 / 用法 / 限制变化（**含实测发现旧认知有误**）时。
+
+inventory.md 写入 lens：**物化数据的当前态实质变化时**——这类变化常**不伴随代码 diff**（一次取数跑完就过时），故触发不能只挂在 diff 上（不限于此）：① 新增 / 废弃一类数据集或换了主源；② 周期性或在重大数据操作后**重跑 regen 命令**刷新概览与权威清单。
+
+写入后自检——新 agent 读完 sources.md 能回答"该用哪个源、它可信吗、怎么调"；读完 inventory.md 能回答"现在有哪些数据、多新、哪份权威、怎么再生成清单"。
+
+---
+
+## 5. 同步机制：task 产物 / diff → 项目文档
 
 ### Why
 
-task 产物服务于一个具体任务的执行过程。任务完成后，其中一部分信息有项目级的持久价值。提升机制把这部分信息迁移到项目文档中，让它们的生命周期不再绑定于单个任务。
+task 产物服务于一个具体任务的执行过程。任务完成后，其中一部分信息有项目级的持久价值。同步机制把这部分信息迁移到项目文档中，让它们的生命周期不再绑定于单个任务。除 task 产物的条目外，本次 **diff** 也是一类同步源——mutable snapshot 类文档记录的是当前态，diff 改变了它就要同步到改完后的现实，这类同步不依赖 task 产物（自由 session 也会发生）。
 
-### 何时提升
+### 何时同步
 
-**Lens**：当一个有 task 产物的任务到达自然边界时——审视产物中是否有项目级价值的条目。
+**Lens**：当一个任务到达自然边界、或一次改动落地时——审视 task 产物中是否有项目级价值的条目（提升），以及本次 diff 是否改变了某 snapshot doc 的当前态（同步）。
 
 触发例（不限于此）：
 - 长任务完成（所有 Tasks done、verify 通过）
 - 长任务被取消但 journal 中有有价值的发现
 - session 结束前，当前 session 有 task 产物
+- 自由 session 中改动产生用户可感知变化、或改变了某 snapshot doc 的当前态
 
 ### 提升判断 lens
 
@@ -518,16 +574,20 @@ task 产物服务于一个具体任务的执行过程。任务完成后，其中
 
 通过这个 lens 的条目值得提升。没通过的留在 task 产物中作为历史归档。
 
-### 提升路径
+### 同步路径
 
-| task 产物条目 | 提升到 | 附加判断 |
+**同步**有两种**触发源**：task 产物里的**条目**——**提升**为持久 doc，和本次 **diff 改变的当前态**——同步到 mutable snapshot doc（让快照等于改完后的现实）。前者由「提升判断 lens」过滤项目级价值，后者由「diff 是否改变该 doc 的当前态答案」判断。两类都在任务边界一次过。
+
+| 触发源 | 落点 | 附加判断 |
 |---|---|---|
-| plan.md + spec.md（如有） | docs/plans/ | 复制到 `docs/plans/<YYYYMMDD>-<short-name>/`（不含 state.md / journal.md） |
+| plan.md + spec.md（如有） | docs/plans/ | 复制到 `docs/plans/<YYYYMMDD>-<short-name>/`（仅 plan.md + spec.md） |
 | journal.md `[decision]` | adr/ | 写入判断见 §4.4 写入 lens |
 | journal.md `[lesson]` / `[fact]` | experiences/ | 写入判断见 §4.7 写入 lens；写入与 topic 匹配的文件 |
 | state.md Open Issues（任务结束时仍 open） | issues/ | 写入判断见 §4.8 写入 lens；写入与 domain 匹配的文件 |
-| 任务完成 + 产出包含用户可感知变化 | contracts/ + CHANGELOG.md（根目录） | 用户的产品体验是否发生了变化？ux-contract.md 走 §4.6 执行路径（主路径：随实现 apply；否则 → issue 间接路径），ux-test-patterns.md 可直接写入 |
+| diff 含用户可感知变化 | CHANGELOG.md（根目录）[User]（+ contracts/，视交付形态） | CHANGELOG append 用户视角 entry；contracts/ 仅当交付形态有面向用户的行为契约时——ux-contract.md 走 §4.6 执行路径（主路径：随实现 apply；否则 → issue 间接路径），ux-test-patterns.md 可直接写入 |
+| diff 改变功能 / 安装 / 使用方式 | README.md（根目录）[User] | 见 §4.1；与 CHANGELOG / contracts 联动 |
 | diff 增删服务 / 改守护方式 / 监控链路 | operations/（+ README 服务章节）[User] | 见 §4.11；按 `service-operations-protocol.md` 检查生命周期脚本是否齐备 |
+| diff 改变模块 / 分层 / 核心抽象 | architecture.md [Developer] | 见 §4.3 写入 lens |
 | diff 改变外部源能力 或 物化数据当前态 | data/（sources.md / inventory.md）[Developer] | 见 §4.13；inventory 别手维护逐数据集清单，刷新走 **regen 命令** |
 
 ### 提升不是复制粘贴

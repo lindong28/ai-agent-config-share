@@ -150,6 +150,8 @@ contract 的验收规格必须来自用户真实可触达的产品入口——�
 
 ### domain 专属验收（若 L1 产品类型属 registry 列出的 domain）
 
+**Web 产品的 L2 前置**：涉及视觉、排版、对齐或响应式的 L2 条目，按 `~/.claude/references/web-ui-observation.md` 写成**可观察且含关系层**的条件——"字号 14px"这类单元素值断言无法表达用户第一眼看到的对齐与留白对称，只写值会让 contract 在关系层留白。产品以另一个在跑的产品为参照时，该文件的「同条件成对测量」与「反向完备性」两条同样 BINDING。
+
 **前置（必经，非可选参考）**：L1 一旦判定产品类型属于 `~/.claude/references/domain-registry.md` 列出的 domain（如游戏），逐点功能 verify 之外**必须**额外对齐该 domain 的专属验收——它验的是整局体验/形状，不是某时点能断言的功能。
 
 **对齐**：查 registry 找到该 domain 的原则文件，用其中每条原则的 **create 对齐 lens** 向用户**现场问出**意图（bar 是用户的设计判断，不可由 author 替拟）。具体问什么、起手提示，以该原则文件为准——本命令不复述。

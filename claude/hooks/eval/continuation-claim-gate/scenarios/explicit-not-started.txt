@@ -1,0 +1,3 @@
+# expect: ok
+# note: 明确标注未开始且球在用户那边。这是本闸希望 agent 采取的形态之一，必须放行。
+剩下的 uninstall.sh / status.sh 还没开始写——它们只能在 gpu-box 上对真实 unit 验证，本机 macOS 跑不出有区分力的结果。你说一声我就开始。

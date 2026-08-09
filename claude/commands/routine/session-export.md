@@ -22,6 +22,8 @@ Session 数据存储在 `~/.claude/projects/<path-hash>/`，其中 path-hash = `
 - `<session-id>/` — 子目录，含 subagents/*.jsonl、tool-results/*（可选，存在则包含）
 - `memory/` — 项目级持久记忆（可选，存在且非空则包含）
 
+**已知排除**：`subagents/` 只收**无名**委派。传了 `name` 的 teammate 另存为同目录下的独立 top-level session 文件（靠行内 `agentName` 与 `teamName`（实测形如 `session-<caller session id 前 8 位>`）与 caller 关联），**不在导出范围内**——导入方拿到的包不含这部分委派证据。需要追委派行为时按这两个键单独取。
+
 ## 压缩包结构
 
 ```

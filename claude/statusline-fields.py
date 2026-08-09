@@ -2,7 +2,8 @@
 """Extract every statusline field from the harness JSON, as shell assignments.
 
 statusline.sh used to shell out to `jq` 37 times per render — once per field.
-jq is deliberately not a prerequisite of this repo (see lib/install-platform.sh),
+jq is deliberately not a runtime prerequisite of this repo (the installer uses it
+only to merge settings.json, and degrades to manual wiring when it is missing),
 so on a host without it every field silently resolved to empty and the statusline
 collapsed to two lines. python3 *is* a declared prerequisite, so all parsing lives
 here instead: one interpreter start, one pass, no external binary.
@@ -181,6 +182,8 @@ emit("EFFORT", as_text(dig(data, "effort", "level")))
 emit("COST", as_num(dig(data, "cost", "total_cost_usd")))
 emit("DURATION_MS", as_int(dig(data, "cost", "total_duration_ms")))
 emit("TRANSCRIPT", as_text(dig(data, "transcript_path")))
+session_id = as_text(dig(data, "session_id"))
+emit("SESSION_ID", session_id)
 
 emit("CTX_PCT", as_int(dig(data, "context_window", "used_percentage")))
 emit("CTX_SIZE", as_int(dig(data, "context_window", "context_window_size")))
@@ -202,6 +205,116 @@ for var, window in (("5H", "five_hour"), ("7D", "seven_day")):
     emit("RESET_" + var, "" if resets is None else as_int(resets))
 
 
+# ── Model-scoped usage windows (Fable's weekly quota, and any peer) ──────────
+# `rate_limits` above is everything the harness sends, and it carries only the
+# two account-wide windows. Per-model quotas live in `GET /api/oauth/usage`,
+# which statusline-usage.py polls in the background; all that happens here is a
+# cache read plus, when it has gone stale, spawning that refresh detached. A
+# render must never itself wait on the network.
+
+USAGE_CACHE = os.environ.get("USAGE_CACHE", "")
+REFRESH_AFTER_S = 300
+# Past this the number stops being worth showing at all. A weekly percentage
+# drifts slowly, so several stale hours still read true, but a bar left over
+# from an account that has since been rate-limited would actively mislead.
+DISPLAY_MAX_AGE_S = 6 * 3600
+
+now_seconds = int(time.time())
+model_limit_lines: list[str] = []
+if USAGE_CACHE:
+    attempted_at = 0
+    try:
+        with open(USAGE_CACHE, encoding="utf-8") as fh:
+            usage_cached = json.load(fh)
+        attempted_at = as_int(usage_cached.get("attempted_at"))
+        # No lower bound on the age. A clock that has jumped backwards makes
+        # this negative, and rejecting that would blank the bars for as long as
+        # the skew lasted; the refresh trigger below reads the same skew as a
+        # reason to refetch, so a bad stamp corrects itself instead.
+        if now_seconds - as_int(usage_cached.get("fetched_at")) <= DISPLAY_MAX_AGE_S:
+            for limit in usage_cached.get("limits") or []:
+                if not isinstance(limit, dict):
+                    continue
+                limit_name = as_text(limit.get("name"))
+                resets_at = as_int(limit.get("resets_at"))
+                if not limit_name:
+                    continue
+                # A window whose reset has *passed* is still carrying the previous
+                # period's percentage, which is simply the wrong number now — and
+                # dropping only the countdown would leave a confident bar behind.
+                #
+                # An *absent* reset is the opposite case and must not be folded
+                # into it. The refresher writes 0 whenever the payload carried no
+                # parseable `resets_at`, and that has been observed live — beside
+                # a Fable window reading 0%, which the next refresh replaced with
+                # a percentage and a reset both present. Whatever makes the field
+                # absent, its absence says nothing about the percentage: that is
+                # still the server's current answer, and only the countdown is
+                # unknown. Reading it as elapsed dropped the entry, which is what
+                # made the bar vanish and reappear on its own. The renderer
+                # already omits a countdown it cannot format, so 0 goes through.
+                if resets_at and resets_at <= now_seconds:
+                    continue
+                model_limit_lines.append(
+                    "%s|%d|%d" % (limit_name, as_int(limit.get("percent")), resets_at)
+                )
+    except Exception:
+        pass
+    # Keyed on the attempt, not the success: a host that is offline or holding
+    # an expired token would otherwise spawn a refresher on every render. Out of
+    # range in either direction, so a backwards clock refetches rather than
+    # wedging refreshes off for the length of the skew.
+    cache_dir = os.path.dirname(USAGE_CACHE) or "."
+    lock_path = USAGE_CACHE + ".lock"
+    try:
+        # Created, not merely tested: `os.access` reports a directory that does
+        # not exist yet as unwritable, which on a fresh host would suppress the
+        # very first refresh — the one render with nothing cached to show. The
+        # speed cache below creates this same directory anyway.
+        os.makedirs(cache_dir, exist_ok=True)
+    except OSError:
+        pass
+    # Two readings, because either one alone can freeze. `attempted_at` cannot
+    # be written by a refresher on a full filesystem; the lock's mtime can,
+    # since stamping an existing inode allocates nothing. Whichever is newer
+    # wins, so a host that opens the cache but cannot write it still backs off
+    # instead of forking a doomed refresher on every render.
+    try:
+        last_attempt = max(attempted_at, int(os.path.getmtime(lock_path)))
+    except OSError:
+        last_attempt = attempted_at
+    spawn_refresh = False
+    # Two probes, because neither subsumes the other. `os.access` is the only
+    # one that notices a directory which has stopped being writable while the
+    # lock file still sits in it — opening that existing lock needs no write
+    # permission on its directory. The open is the only one that notices a
+    # filesystem with no inodes or blocks left, which no permission bit
+    # records. Either failure is the one that would otherwise leave both backoff
+    # readings frozen and fork a doomed refresher on every render, forever.
+    if not 0 <= now_seconds - last_attempt <= REFRESH_AFTER_S and os.access(cache_dir, os.W_OK):
+        try:
+            # Creating it is not itself an attempt: the refresher stamps the
+            # mtime once it holds the lock, and O_RDONLY leaves an existing
+            # file's mtime alone.
+            os.close(os.open(lock_path, os.O_CREAT | os.O_RDONLY, 0o600))
+            spawn_refresh = True
+        except OSError:
+            spawn_refresh = False
+    if spawn_refresh:
+        try:
+            subprocess.Popen(
+                [sys.executable, str(HERE / "statusline-usage.py")],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+                env={**os.environ, "USAGE_CACHE": USAGE_CACHE},
+            )
+        except Exception:
+            pass
+emit("MODEL_LIMIT_LINES", "\n".join(model_limit_lines))
+
+
 # ── Output speed (tok/s) ─────────────────────────────────────────────────────
 
 SPEED_CACHE = os.environ.get("SPEED_CACHE", "")
@@ -213,7 +326,6 @@ now_ms = int(time.time() * 1000)
 # output count of session A and report a rate that belongs to neither. The
 # session id keeps each series to itself; without one there is nothing to key
 # on, so fall back to the shared path rather than inventing a series.
-session_id = as_text(dig(data, "session_id"))
 if SPEED_CACHE and session_id:
     # Hashed rather than sanitised: substituting path characters and truncating
     # is lossy, so two distinct ids could normalise to one filename and silently

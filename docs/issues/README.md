@@ -6,7 +6,7 @@
 
 | 文件 | Scope | 写入驱动 |
 |---|---|---|
-| [harness-issues.md](harness-issues.md) | Agent Harness 自身问题——hooks（含 Stop Gate）、适配层、agent / skill 行为、settings / 权限。**不含**产品代码 bug（走各 project 自己的 issue 跟踪）。 | `~/.claude/CLAUDE.md`「Harness Issue Capture」 |
+| [harness-issues.md](harness-issues.md) | Agent Harness 自身问题——hooks（含 Stop Gate）、适配层、agent / skill 行为、settings / 权限。**不含**产品代码 bug（走各 project 自己的 issue 跟踪）。本文件同时是**其他项目**发现的纯 user-scope harness 问题的汇聚点——判据见协议 §4.8 写入路由。 | `~/.claude/CLAUDE.md`「Harness Issue Capture」 |
 | [general.md](general.md) | 上一行不覆盖的其余问题——本仓自身的产品代码 / 安装器缺陷，以及 wrapped-agent 行为问题与工具缺口。 | `/custom:supervise` 等流程；审计与 review 流程发现但本次不就地修的本仓缺陷 |
 
 条目格式见 `~/.claude/references/docs-format-templates.md` §4.8。新增 domain 时按「一类 issues 有独立 consumer 或明显不同优先级时给它单独文件」的 lens 判断。

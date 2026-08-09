@@ -2,7 +2,17 @@
   const charts = {};
   window.ttWebCharts = charts;
 
-  const palette = ["#0f766e", "#2563eb", "#b7791f", "#be4458", "#4d7c0f", "#7c3aed", "#0e7490", "#a16207"];
+  // Eight categorical slots, assigned in fixed order and never cycled. Validated
+  // against this dashboard's white panel surface on the adjacent pairlist that
+  // lines, bars and stacks use: worst CVD ΔE 9.1 (protan), worst normal-vision
+  // ΔE 19.6. The previous set put claude-opus-5 (#0f766e) and claude-sonnet-5
+  // (#0e7490) at ΔE 5.8 — the same legend, indistinguishable to full colour
+  // vision — and paired violet with blue at ΔE 0.4 under deuteranopia.
+  // Slots 3, 4 and 5 fall below 3:1 against white, so any chart that reaches
+  // them owes the reader direct labels or a table view beside it.
+  const palette = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#4a3aa7", "#e34948"];
+  // A ninth series is not a generated hue: callers fold the tail into "Other".
+  const OTHER_COLOR = "#8a8a80";
   const rangeDays = { "7d": 7, "30d": 30, "90d": 90, "6m": 180, "1y": 365, "2y": 730 };
 
   // Absolute timestamps are rendered in the timezone the server (this machine)
@@ -119,13 +129,14 @@
     return json;
   }
 
-  function bindShell(load) {
+  function bindShell(load, options) {
     const range = qs("#range");
+    const bindRange = !options || options.range !== false;
     const requested = params().get("range");
     if (range && requested) {
       range.value = requested;
     }
-    if (range) {
+    if (range && bindRange) {
       range.addEventListener("change", () => {
         setParam("range", range.value);
         load(false);
@@ -178,6 +189,65 @@
     return Math.round(Number(value)) + "%";
   }
 
+  // Axis ticks and bar-end labels read as magnitudes, not as digit strings:
+  // 20,000,000,000 costs a reader a digit count that "20B" does not.
+  function compactNumber(value) {
+    const n = Number(value || 0);
+    const abs = Math.abs(n);
+    if (abs >= 1e9) {
+      return (n / 1e9).toFixed(abs >= 1e10 ? 0 : 1).replace(/\.0$/, "") + "B";
+    }
+    if (abs >= 1e6) {
+      return (n / 1e6).toFixed(abs >= 1e7 ? 0 : 1).replace(/\.0$/, "") + "M";
+    }
+    if (abs >= 1e3) {
+      return (n / 1e3).toFixed(abs >= 1e4 ? 0 : 1).replace(/\.0$/, "") + "K";
+    }
+    return String(Math.round(n));
+  }
+
+  // Values printed at the end of each bar. Three of the eight categorical slots
+  // sit below 3:1 against the white panel, and that debt is only discharged by
+  // labels the reader can see or a table beside the chart — so horizontal bar
+  // charts here carry their values rather than relying on the axis alone.
+  // The formatter is captured in a closure rather than read back off
+  // `chart.options`: Chart.js resolves option values through a proxy that
+  // treats a function as a scriptable option, and looking one up by name from
+  // inside the plugin resolves to itself ("Recursion detected").
+  function barValueLabels(format) {
+    return {
+      id: "barValueLabels",
+      afterDatasetsDraw(instance) {
+        const { ctx } = instance;
+        ctx.save();
+        // Read the label's face and colour from the stylesheet rather than
+        // copying them here: a hard-coded copy silently diverges from the UI
+        // labels beside it the next time the visual system changes.
+        const rootStyle = getComputedStyle(document.documentElement);
+        const numFace = rootStyle.getPropertyValue("--font-sans").trim() ||
+          getComputedStyle(document.body).fontFamily;
+        ctx.font = "600 12px " + numFace;
+        ctx.fillStyle = rootStyle.getPropertyValue("--ink-muted").trim() || "#57616c";
+        ctx.textBaseline = "middle";
+        ctx.textAlign = "left";
+        instance.data.datasets.forEach((set, setIndex) => {
+          const meta = instance.getDatasetMeta(setIndex);
+          if (meta.hidden) {
+            return;
+          }
+          meta.data.forEach((element, pointIndex) => {
+            const value = set.data[pointIndex];
+            if (value === null || value === undefined) {
+              return;
+            }
+            ctx.fillText(format(value), element.x + 8, element.y);
+          });
+        });
+        ctx.restore();
+      },
+    };
+  }
+
   function shortText(value, length) {
     const text = String(value || "");
     if (text.length <= length) {
@@ -198,19 +268,27 @@
     return charts[key];
   }
 
+  function seriesColor(index) {
+    return palette[index] || OTHER_COLOR;
+  }
+
   function dataset(label, data, index, extra) {
     return Object.assign(
       {
         label,
         data,
-        borderColor: palette[index % palette.length],
-        backgroundColor: palette[index % palette.length],
+        borderColor: seriesColor(index),
+        backgroundColor: seriesColor(index),
         borderWidth: 2,
-        tension: 0.25,
+        // Straight segments: smoothing a cost series draws intermediate values
+        // between samples that were never spent.
+        tension: 0,
       },
       extra || {}
     );
   }
+
+  const SERIES_LIMIT = palette.length;
 
   function chartOptions(extra) {
     return Object.assign(
@@ -285,25 +363,58 @@
       costLink.href = url.pathname + url.search;
     }
 
+    const projects = data.top_projects_week.slice();
     chart("topProjects", "top-projects-chart", {
       type: "bar",
       data: {
-        labels: data.top_projects_week.map((row) => shortText(row.project, 42)),
-        datasets: [dataset("Cost", data.top_projects_week.map((row) => row.cost_usd), 2)],
+        labels: projects.map((row) => projectLabel(row.project)),
+        datasets: [dataset("Cost", projects.map((row) => row.cost_usd), 0)],
       },
-      options: chartOptions({ indexAxis: "y" }),
+      options: chartOptions({
+        indexAxis: "y",
+        // One series: the panel heading already names it, so a legend box would
+        // only repeat the title. Bar ends carry the values instead.
+        plugins: {
+          legend: { display: false },
+          tooltip: { callbacks: { title: (items) => projects[items[0].dataIndex].project } },
+        },
+        scales: { x: { beginAtZero: true }, y: { ticks: { autoSkip: false } } },
+        layout: { padding: { right: 64 } },
+      }),
+      plugins: [barValueLabels(money)],
     });
 
+    // Model mix is a magnitude comparison across models. Stacking eight series
+    // onto a single "This month" column made five of them thinner than a pixel
+    // while each still claimed a legend entry; ranked horizontal bars let every
+    // model be read and compared directly.
+    const mix = data.model_mix_month.slice().sort((a, b) => Number(b.tokens) - Number(a.tokens));
     chart("modelMix", "model-mix-chart", {
       type: "bar",
       data: {
-        labels: ["This month"],
-        datasets: data.model_mix_month.slice(0, 8).map((row, index) =>
-          dataset(row.model, [row.tokens], index, { stack: "tokens" })
-        ),
+        labels: mix.map((row) => row.model),
+        datasets: [dataset("Tokens", mix.map((row) => row.tokens), 0)],
       },
-      options: chartOptions({ scales: { x: { stacked: true }, y: { stacked: true, beginAtZero: true } } }),
+      options: chartOptions({
+        indexAxis: "y",
+        plugins: { legend: { display: false } },
+        scales: {
+          x: { beginAtZero: true, ticks: { callback: (value) => compactNumber(value) } },
+          y: { ticks: { autoSkip: false } },
+        },
+        layout: { padding: { right: 64 } },
+      }),
+      plugins: [barValueLabels(compactNumber)],
     });
+  }
+
+  // Project identifiers share a long host-and-owner prefix, so truncating from
+  // the left kept "hub.com/" and dropped the part that tells them apart. Keep
+  // the trailing segments; the full path stays available in the tooltip.
+  function projectLabel(value) {
+    const parts = String(value || "").split("/").filter(Boolean);
+    const tail = parts.slice(-2).join("/");
+    return tail.length > 34 ? tail.slice(0, 33) + "…" : tail;
   }
 
   function legacyCostHistory(rows) {
@@ -358,11 +469,152 @@
     if (fiveHour) {
       fiveHour.textContent = pct(block?.five_hour_pct);
       qs(`#${provider}-five-reset`).textContent = resetText(block?.five_hour_resets_at);
-      qs(`#${provider}-five-updated`).textContent = updatedText(block?.updated_at);
+      qs(`#${provider}-five-updated`).textContent = quotaSourceText(block);
     }
     qs(`#${provider}-seven-day`).textContent = pct(block?.seven_day_pct);
     qs(`#${provider}-seven-reset`).textContent = resetText(block?.seven_day_resets_at);
-    qs(`#${provider}-seven-updated`).textContent = updatedText(block?.updated_at);
+    qs(`#${provider}-seven-updated`).textContent = quotaSourceText(block);
+  }
+
+  function quotaSourceText(block) {
+    if (!block || !block.updated_at) {
+      return `unavailable · ${block?.unavailable_reason || "no admitted source"}`;
+    }
+    const source = block.source_machine ? ` · from ${block.source_machine}` : "";
+    return updatedText(block.updated_at) + source;
+  }
+
+  function renderSyncStatus(status) {
+    const coverageElement = qs("#sync-coverage");
+    const summaryElement = qs("#sync-summary");
+    const machineList = qs("#sync-machines");
+    if (!coverageElement || !summaryElement || !machineList || !status) {
+      return;
+    }
+    pageServerInstance = status.instance_id || pageServerInstance;
+    const coverage = status.coverage || { admitted: 0, declared: 0 };
+    coverageElement.textContent = `coverage ${coverage.admitted}/${coverage.declared}`;
+    const included = (status.all_machines || []).join(", ") || "none";
+    const warnings = (status.machines || []).filter(
+      (machine) => !machine.admitted || machine.stale || machine.availability === "unreachable" || machine.availability === "unknown"
+    ).length;
+    summaryElement.textContent = status.polling_error
+      ? `${status.polling_error} · Last rendered data remains on screen`
+      : status.syncing
+      ? `Syncing in background · All currently includes ${included}`
+      : `${warnings ? warnings + " machine warning(s)" : "All current"} · All includes ${included}`;
+    machineList.innerHTML = (status.machines || []).map(renderMachineStatus).join("");
+    revealSyncDetailOnTrouble(Boolean(warnings || status.polling_error));
+  }
+
+  // The panel opens itself the moment something needs attention, and stays
+  // wherever the reader last put it for as long as that condition holds — so a
+  // poll every few seconds cannot keep reopening a panel they just closed.
+  let syncTroubleLatch = false;
+
+  function revealSyncDetailOnTrouble(inTrouble) {
+    const panel = qs("#sync-panel");
+    if (!panel) {
+      return;
+    }
+    if (inTrouble && !syncTroubleLatch) {
+      panel.open = true;
+    }
+    syncTroubleLatch = inTrouble;
+  }
+
+  function renderMachineStatus(machine) {
+    const chips = [];
+    chips.push(statusChip(machine.admitted ? "ok" : "bad", machine.admitted ? "included" : "excluded"));
+    if (machine.availability) {
+      chips.push(statusChip(machine.availability === "reachable" ? "ok" : machine.availability === "never" ? "bad" : "warn", machine.availability));
+    }
+    if (machine.stale) {
+      chips.push(statusChip("warn", "stale"));
+    }
+    if (machine.syncing) {
+      chips.push(statusChip("info", "syncing"));
+    }
+    const marker = machine.this_machine ? ' <span class="scope-badge">This machine</span>' : "";
+    const timestamps = [
+      machine.last_sync_ts ? `last sync ${formatDate(machine.last_sync_ts)}` : "last sync never",
+      machine.last_attempt_ts ? `last attempt ${formatDate(machine.last_attempt_ts)} (${machine.last_attempt_outcome})` : `last attempt ${machine.last_attempt_outcome || "unknown"}`,
+      machine.last_successful_contact_ts ? `last successful contact ${formatDate(machine.last_successful_contact_ts)}` : "successful contact never observed",
+      machine.generated_at ? `generated ${formatDate(machine.generated_at)}` : "generated never",
+      machine.data_start_date ? `data since ${escapeHtml(machine.data_start_date)}` : "data start unknown",
+    ].join(" · ");
+    let consequence;
+    if (!machine.admitted) {
+      const attemptFailed = ["failure", "cleanup_failed", "malformed_result"].includes(machine.last_attempt_outcome);
+      const attemptContext = machine.reason
+        ? attemptFailed ? `. Latest sync failed: ${machine.reason}` : `. ${machine.reason}`
+        : "";
+      consequence = `Excluded from All: ${exclusionText(machine)}${attemptContext}`;
+    } else if (machine.availability === "unreachable") {
+      consequence = `Included in All using the last generation. Sync failed: ${machine.reason || "unreachable"}`;
+    } else if (machine.availability === "unknown") {
+      consequence = `Included in All using the last generation. Contact status is unknown: ${machine.reason || "no observation in this server process"}`;
+    } else if (machine.stale) {
+      const attemptContext = machine.reason ? ` Latest sync attempt failed: ${machine.reason}` : "";
+      consequence = `Included in All, but this generation is stale.${attemptContext}`;
+    } else {
+      const attemptContext = machine.reason ? ` Latest sync attempt failed: ${machine.reason}` : "";
+      consequence = `Included in All.${attemptContext}`;
+    }
+    return `<article class="sync-machine ${machine.admitted ? "included" : "excluded"}">
+      <div class="sync-machine-title"><strong>${escapeHtml(machine.name)}</strong>${marker}<span class="sync-chips">${chips.join("")}</span></div>
+      <div class="sync-machine-time">${timestamps}</div>
+      <div class="sync-machine-reason">${escapeHtml(consequence)}</div>
+    </article>`;
+  }
+
+  function exclusionText(machine) {
+    if (machine.availability === "never") {
+      return "never synced; no generation is available";
+    }
+    const labels = {
+      machine_config_fingerprint: "machine configuration fingerprint mismatch",
+      bucket_timezone: "bucket timezone mismatch",
+      generation_id: "generation identity mismatch",
+      digest: "generation digest mismatch",
+      source_host_identity_collision: "source machine identity collision",
+      invalid_generation: "generation validation failed",
+      removed_from_config: "machine was removed from configuration during the latest sync",
+      no_longer_declared_after_latest_attempt: "machine was targeted by the latest sync but is no longer declared",
+    };
+    return labels[machine.exclusion_reason] || machine.exclusion_reason || "generation was not admitted";
+  }
+
+  function statusChip(kind, text) {
+    return `<span class="status-pill ${kind}">${escapeHtml(text)}</span>`;
+  }
+
+  async function waitForSyncTerminal(initialStatus, options) {
+    const isCurrent = options && typeof options.isCurrent === "function" ? options.isCurrent : () => true;
+    const renderIfCurrent = (status) => {
+      if (isCurrent()) {
+        renderSyncStatus(status);
+      }
+    };
+    let status = initialStatus || await api("/api/sync-status");
+    renderIfCurrent(status);
+    while (status.syncing) {
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      try {
+        status = await api("/api/sync-status");
+      } catch (error) {
+        status = Object.assign({}, status, {
+          syncing: false,
+          terminal: false,
+          polling_error: `Sync status unavailable: ${error && error.message ? error.message : error}`,
+          machines: (status.machines || []).map((machine) => Object.assign({}, machine, { syncing: false })),
+        });
+        renderIfCurrent(status);
+        return status;
+      }
+      renderIfCurrent(status);
+    }
+    return status;
   }
 
   function updatedText(iso) {
@@ -561,15 +813,18 @@
     const envs = proxyEnvEntries.length
       ? proxyEnvEntries.map(([key, value]) => `${escapeHtml(key)} = ${escapeHtml(value)}`).join("<br>")
       : "—";
+    // The provider name belongs to the card, not to each row: repeated six
+    // times it filled the label column and wrapped every label onto two lines.
     qs("#network-risk").innerHTML = [
-      kvRow("Risk score (proxycheck)", score),
-      kvRow("Type (proxycheck)", type),
-      kvRow("Marked proxy (ip-api / proxycheck)", markedProxy ? statusPill("warn", "yes") : statusPill("ok", "no")),
-      kvRow("Hosting (ip-api)", pub.hosting ? statusPill("warn", "yes") : statusPill("ok", "no")),
-      kvRow("Spam score (stopforumspam)", spamScore),
-      kvRow("Spam reports (stopforumspam)", spamReports),
+      kvRow("Risk score", score),
+      kvRow("Type", type),
+      kvRow("Marked proxy", markedProxy ? statusPill("warn", "yes") : statusPill("ok", "no")),
+      kvRow("Hosting", pub.hosting ? statusPill("warn", "yes") : statusPill("ok", "no")),
+      kvRow("Spam score", spamScore),
+      kvRow("Spam reports", spamReports),
       kvRow("Last spam report", lastSpamReport),
-      kvRow("Proxy envs (local shell)", envs),
+      kvRow("Proxy envs", envs),
+      '<p class="conclusion-note">Risk and type from proxycheck; marked proxy and hosting from ip-api; spam rows from stopforumspam. Proxy envs are read from this machine\'s shell.</p>',
     ].join("");
   }
 
@@ -634,6 +889,41 @@
     return Number.isNaN(date.getTime()) ? iso : fmtAbs(date);
   }
 
+  // Session rows all carried a full date and zone suffix, which wrapped every
+  // row onto a second line for information that is identical down long runs of
+  // the table. The date moves to a group heading; the row keeps the time.
+  function dayKey(iso) {
+    const date = new Date(iso);
+    if (Number.isNaN(date.getTime())) {
+      return "";
+    }
+    const opts = serverTimeZone ? { timeZone: serverTimeZone } : undefined;
+    try {
+      return new Intl.DateTimeFormat(
+        "en-CA",
+        Object.assign({ year: "numeric", month: "2-digit", day: "2-digit" }, opts)
+      ).format(date);
+    } catch (e) {
+      return date.toISOString().slice(0, 10);
+    }
+  }
+
+  function timeOfDay(iso) {
+    const date = new Date(iso);
+    if (Number.isNaN(date.getTime())) {
+      return iso;
+    }
+    const opts = serverTimeZone ? { timeZone: serverTimeZone } : undefined;
+    try {
+      return new Intl.DateTimeFormat(
+        undefined,
+        Object.assign({ hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false }, opts)
+      ).format(date);
+    } catch (e) {
+      return date.toLocaleTimeString();
+    }
+  }
+
   async function initOverview() {
     const retiredFiveHour = qs("#codex-five-hour");
     const legacyCard = retiredFiveHour && retiredFiveHour.closest(".kpi-card");
@@ -664,6 +954,26 @@
         error.remove();
       }
       renderOverview(data, selectedRange);
+      renderSyncStatus(data.sync);
+      if (data.sync && data.sync.refresh_pending) {
+        if (data.sync.syncing) {
+          const terminalStatus = await waitForSyncTerminal(data.sync, {
+            isCurrent: () => generation === overviewGeneration,
+          });
+          if (terminalStatus.polling_error) {
+            return;
+          }
+        }
+        if (generation !== overviewGeneration) {
+          return;
+        }
+        const finalData = await api("/api/overview", { range: selectedRange, sync: "0" });
+        if (generation < renderedOverviewGeneration) {
+          return;
+        }
+        renderOverview(finalData, selectedRange);
+        renderSyncStatus(finalData.sync);
+      }
     }
     bindShell(load);
     await load(false);
@@ -680,6 +990,18 @@
     message.textContent = `Failed to refresh overview: ${error.message || error}`;
   }
 
+  // Every session ever recorded arrived as one unbroken table — 2,512 rows and
+  // 162,000 pixels on this machine — with no way to narrow it and a header that
+  // scrolled out of sight within a screen. Narrowing comes first because the
+  // question is almost always "which session was that", not "show me all".
+  const SESSIONS_PAGE_SIZE = 100;
+  const sessionsView = { rows: [], page: 0, filters: { agent: "", project: "", model: "" } };
+  const SESSION_FILTERS = [
+    { key: "agent", select: "#filter-agent", field: "agent_id" },
+    { key: "project", select: "#filter-project", field: "project" },
+    { key: "model", select: "#filter-model", field: "model" },
+  ];
+
   async function initSessions() {
     async function load() {
       const data = await api("/api/sessions", {
@@ -687,28 +1009,126 @@
         sort: qs("#sort") ? qs("#sort").value : "time",
         order: "desc",
       });
-      renderSessions(data);
+      sessionsView.rows = data;
+      sessionsView.page = 0;
+      populateSessionFilters(data);
+      renderSessions();
     }
     bindShell(load);
     const sort = qs("#sort");
     if (sort) {
       sort.addEventListener("change", load);
     }
+    SESSION_FILTERS.forEach((filter) => {
+      const select = qs(filter.select);
+      if (select) {
+        select.addEventListener("change", () => {
+          sessionsView.filters[filter.key] = select.value;
+          sessionsView.page = 0;
+          renderSessions();
+        });
+      }
+    });
+    const prev = qs("#page-prev");
+    const next = qs("#page-next");
+    if (prev) {
+      prev.addEventListener("click", () => turnSessionPage(-1));
+    }
+    if (next) {
+      next.addEventListener("click", () => turnSessionPage(1));
+    }
     await load(false);
   }
 
-  function renderSessions(rows) {
+  function turnSessionPage(step) {
+    const total = filteredSessions().length;
+    const lastPage = Math.max(0, Math.ceil(total / SESSIONS_PAGE_SIZE) - 1);
+    sessionsView.page = Math.min(lastPage, Math.max(0, sessionsView.page + step));
+    renderSessions();
+    const wrap = qs(".table-wrap.sticky-head");
+    if (wrap) {
+      wrap.scrollTop = 0;
+    }
+  }
+
+  // Options come from the rows actually loaded, so a filter can never offer a
+  // value that would return nothing. A selection that survives a reload stays
+  // selected; one whose value has aged out of the window resets to "all".
+  function populateSessionFilters(rows) {
+    SESSION_FILTERS.forEach((filter) => {
+      const select = qs(filter.select);
+      if (!select) {
+        return;
+      }
+      const values = Array.from(new Set(rows.map((row) => row[filter.field]).filter(Boolean))).sort();
+      const previous = sessionsView.filters[filter.key];
+      const keep = values.includes(previous) ? previous : "";
+      const label = select.options[0] ? select.options[0].textContent : "All";
+      const labels = optionLabels(filter.key, values);
+      select.innerHTML =
+        `<option value="">${escapeHtml(label)}</option>` +
+        values
+          .map((value, index) => `<option value="${escapeHtml(value)}">${escapeHtml(labels[index])}</option>`)
+          .join("");
+      select.value = keep;
+      sessionsView.filters[filter.key] = keep;
+    });
+  }
+
+  // Shortening a project to its trailing segments can map two different paths
+  // onto one label, and an <option> has nowhere to put the full value — the
+  // reader would face two identical entries with no way to choose. Where that
+  // happens, those entries keep their full path.
+  function optionLabels(key, values) {
+    if (key !== "project") {
+      return values.slice();
+    }
+    const short = values.map((value) => projectLabel(value));
+    const seen = short.reduce((counts, label) => {
+      counts[label] = (counts[label] || 0) + 1;
+      return counts;
+    }, {});
+    return short.map((label, index) => (seen[label] > 1 ? values[index] : label));
+  }
+
+  function filteredSessions() {
+    return sessionsView.rows.filter((row) =>
+      SESSION_FILTERS.every((filter) => {
+        const wanted = sessionsView.filters[filter.key];
+        return !wanted || row[filter.field] === wanted;
+      })
+    );
+  }
+
+  function renderSessions() {
     const tbody = qs("#sessions-body");
+    const matched = filteredSessions();
+    const start = sessionsView.page * SESSIONS_PAGE_SIZE;
+    const pageRows = matched.slice(start, start + SESSIONS_PAGE_SIZE);
+    // Dates only group meaningfully while the list is in time order; sorted by
+    // cost or tokens the days interleave and a heading would assert an order
+    // the table does not have.
+    const grouped = (qs("#sort") ? qs("#sort").value : "time") === "time";
+    let lastDay = null;
+
     tbody.innerHTML = "";
-    rows.forEach((row) => {
+    pageRows.forEach((row) => {
+      const day = dayKey(row.started_at);
+      if (grouped && day && day !== lastDay) {
+        const heading = document.createElement("tr");
+        heading.className = "date-group";
+        heading.innerHTML = `<th colspan="7" scope="colgroup">${escapeHtml(day)}</th>`;
+        tbody.appendChild(heading);
+        lastDay = day;
+      }
       const tr = document.createElement("tr");
       tr.className = "session-row";
       tr.dataset.sessionId = row.session_id;
       tr.innerHTML = `
-        <td><span class="pill">${escapeHtml(row.agent_id)}</span></td>
-        <td>${escapeHtml(shortText(row.project, 54))}</td>
-        <td>${escapeHtml(row.model)}${row.estimated ? ' <span class="muted">推算</span>' : ""}</td>
-        <td>${formatDate(row.started_at)}</td>
+        <td><span class="pill agent-${escapeHtml(row.agent_id)}">${escapeHtml(row.agent_id)}</span></td>
+        <td class="project-cell"><span title="${escapeHtml(row.project)}">${escapeHtml(projectLabel(row.project))}</span></td>
+        <td class="nowrap">${escapeHtml(row.model)}${row.estimated ? ' <span class="muted">estimated</span>' : ""}</td>
+        <td class="nowrap">${grouped ? escapeHtml(timeOfDay(row.started_at)) : formatDate(row.started_at)}</td>
         <td class="numeric">${moneyPrecise(row.cost_usd)}</td>
         <td class="numeric">${integer(row.tokens)}</td>
         <td class="numeric">${integer(row.messages)}</td>
@@ -716,7 +1136,42 @@
       tr.addEventListener("click", () => toggleSession(tr));
       tbody.appendChild(tr);
     });
-    qs("#session-count").textContent = integer(rows.length) + " sessions";
+
+    syncStickyHeaderOffset();
+    const filtering = matched.length !== sessionsView.rows.length;
+    qs("#session-count").textContent = filtering
+      ? `${integer(matched.length)} of ${integer(sessionsView.rows.length)} sessions`
+      : `${integer(sessionsView.rows.length)} sessions`;
+    renderSessionPager(matched.length, start, pageRows.length);
+  }
+
+  // The date headings stick directly beneath the column header, so they need
+  // its rendered height — which moves with font metrics and zoom — rather than
+  // a constant chosen when the stylesheet was written.
+  function syncStickyHeaderOffset() {
+    const wrap = qs(".table-wrap.sticky-head");
+    const head = wrap && wrap.querySelector("thead");
+    if (!wrap || !head) {
+      return;
+    }
+    wrap.style.setProperty("--sessions-head-h", Math.round(head.getBoundingClientRect().height) + "px");
+  }
+
+  function renderSessionPager(total, start, shown) {
+    const status = qs("#page-status");
+    const prev = qs("#page-prev");
+    const next = qs("#page-next");
+    if (status) {
+      status.textContent = total
+        ? `Showing ${integer(start + 1)}–${integer(start + shown)} of ${integer(total)}`
+        : "No sessions match these filters";
+    }
+    if (prev) {
+      prev.disabled = sessionsView.page === 0;
+    }
+    if (next) {
+      next.disabled = start + shown >= total;
+    }
   }
 
   async function toggleSession(row) {
@@ -763,6 +1218,7 @@
   // banner makes it visible on every access path, including a long-open tab or a
   // phone on the Tailnet that never went through `tt-web open`.
   let pageWebSignature = null;
+  let pageServerInstance = null;
   async function pollFreshness() {
     try {
       const url = new URL("/api/health", window.location.origin);
@@ -777,6 +1233,11 @@
         return;
       }
       pageWebSignature = json.web_signature || pageWebSignature;
+      if (pageServerInstance && json.instance_id && json.instance_id !== pageServerInstance) {
+        const status = await api("/api/sync-status");
+        renderSyncStatus(status);
+      }
+      pageServerInstance = json.instance_id || pageServerInstance;
       if (json && json.stale) {
         showStaleBanner();
       }
@@ -857,6 +1318,7 @@
     bindShell,
     chart,
     chartOptions,
+    compactNumber,
     dataset,
     getRange,
     integer,
@@ -864,10 +1326,14 @@
     moneyPrecise,
     params,
     palette,
+    SERIES_LIMIT,
     qsa,
     qs,
     setParam,
     shortText,
+    renderSyncStatus,
+    waitForSyncTerminal,
+    pollFreshness,
     initNetwork,
     initOverview,
     initSessions,

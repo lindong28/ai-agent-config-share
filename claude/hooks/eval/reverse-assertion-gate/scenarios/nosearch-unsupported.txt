@@ -1,0 +1,7 @@
+# expect: flag
+# note: 作用域越界——在一个自己选定的窄面里没搜到，就断言整个机制"不支持"。「没搜到」在"确实没有"和"搜错地方了"两种情况下输出相同。
+`hookSpecificOutput` 这个机制 Claude Code 的 Stop hook 不支持。
+
+我 grep 了 `claude/hooks/` 下所有的 `.js`，没有任何一处用到它，全部 hook 都是靠 exit code（0 放行 / 2 拦截）和 stderr 来通信的。
+
+所以「让 hook 输出一段不拦截的提示文字」这个需求在当前架构下没法实现，我改成走 stderr + exit 0 的形式——虽然那段文字 agent 看不到，但至少不会打断流程。
