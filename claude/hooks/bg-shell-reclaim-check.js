@@ -40,8 +40,10 @@
  * 任何异常一律 fail-open：这道 gate 的作用是提醒，不该因自身故障卡住会话。
  *
  * stop-gate.js 先 `exit 2` **不会短路**本 hook——实测与唯一权威处见 `lib/judge-log.js` 头部
- * 「同事件多闸的调度关系」。注意那里把"并行启动"单独标为**未取证**：本文件原有的旁证
- * （ghostty-tab-title.sh 的铃声先于 stop-gate 裁决响起）与"串行但不短路"同样相容，不构成证明。
+ * 「同事件多闸的调度关系」。"并行启动"于 2026-08-10 取证成立，但**作用域只到同一 matcher 组内**
+ * （判据是判官超时的落盘聚簇，而被测四道闸与本 hook 同属 `Stop` 的第一组）。本文件原有的旁证
+ * （ghostty-tab-title.sh 的铃声先于 stop-gate 裁决响起）**恰恰跨组**、因而没有被上述读数覆盖，
+ * 它与"串行但不短路"同样相容、从来不构成证明——跨组并行至今仍未取证，别顺带引用。
  */
 
 "use strict";
@@ -50,6 +52,10 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const { execFileSync } = require("child_process");
+// 进程树遍历与根进程判定住在共享模块：本 hook 与 continuation-claim-gate 曾各写一份，
+// 本 hook 那份用 includes("claude")，会在 claude-mem 这类同前缀进程上误停、漏报待回收
+// 进程；对面那份漏掉 claude.exe。两份各修对了对方的 bug。见 lib/session-tree.js。
+const { sessionDescendants } = require("./lib/session-tree");
 
 let lastAssistantMessage;
 try {
@@ -93,72 +99,6 @@ function realpath(p) {
  * `.../tasks/<id>.output`——目录是结果而不是输入。转录里提到什么都进不来，
  * resume 新建的目录自动覆盖，也完全不必读那份 21MB 的转录。
  */
-function psTable() {
-  const out = execFileSync("ps", ["-eo", "pid=,ppid=,comm="], {
-    encoding: "utf8",
-    timeout: 3000,
-    stdio: ["ignore", "pipe", "ignore"],
-  });
-  const parent = new Map();
-  const comm = new Map();
-  const children = new Map();
-  for (const line of out.split("\n")) {
-    const m = line.trim().match(/^(\d+)\s+(\d+)\s+(.*)$/);
-    if (!m) continue;
-    const pid = +m[1];
-    const ppid = +m[2];
-    parent.set(pid, ppid);
-    comm.set(pid, m[3]);
-    if (!children.has(ppid)) children.set(ppid, []);
-    children.get(ppid).push(pid);
-  }
-  return { parent, comm, children };
-}
-
-/** 一次性记录能力不可用——静默失效的 gate 与不存在的 gate 无法区分。 */
-function noteUnusable(stateFile, session, reason) {
-  dbg("unusable:", reason);
-  updateState(stateFile, (state) => {
-    if (!state.unusableLogged) {
-      state.unusableLogged = true;
-      logFire({ at: new Date().toISOString(), session, unusable: reason });
-    }
-    return state;
-  });
-}
-
-function sessionDescendants() {
-  let t;
-  try {
-    t = psTable();
-  } catch (e) {
-    return { ok: false, reason: (e && e.code) || "ps-failed" };
-  }
-  const { parent, comm, children } = t;
-  let p = process.pid;
-  let claude = null;
-  for (let i = 0; i < 16 && p > 1; i++) {
-    if ((comm.get(p) || "").split("/").pop().includes("claude")) {
-      claude = p;
-      break;
-    }
-    p = parent.get(p) || 1;
-  }
-  if (!claude) return { ok: false, reason: "no-claude-ancestor" };
-  const seen = new Set();
-  const stack = [claude];
-  while (stack.length) {
-    for (const k of children.get(stack.pop()) || []) {
-      if (!seen.has(k)) {
-        seen.add(k);
-        stack.push(k);
-      }
-    }
-  }
-  seen.delete(process.pid);
-  return { ok: true, pids: seen };
-}
-
 /**
  * 在给定进程集合里找出以**写**模式持有 `.../tasks/<id>.output` 的那些。
  *

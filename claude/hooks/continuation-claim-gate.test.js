@@ -84,7 +84,10 @@ const CASES = [
 let pass = 0;
 const fails = [];
 for (const c of CASES) {
-  const got = judge(c.msg);
+  // judge() 自 ADR-019 起返回 `{ concern, route }`——route 由调用方逐调用携带，不再走模块级状态。
+  // 本标定台只关心 concern；忘了解构会让每个 case 都拿到一个恒真的对象、全部判成 flag（实测：
+  // 迁移时这份测试立刻从 9/9 掉到 4/9，`判官理由: [object Object]`）。
+  const { concern: got } = judge(c.msg);
   if (got === null) {
     console.log(`SKIP  ${c.name}（判官不可用）`);
     continue;

@@ -17,6 +17,8 @@
  */
 
 const { execFileSync } = require('child_process');
+// 解析住在共享模块：commit 相关的闸不止一道，两份实现迟早分歧（H-006）。
+const { extractMessages, isCommitCommand } = require('./lib/git-commit-parse');
 
 // CJK 统一表意文字（含扩展 A）。不含日文假名——那不是这条规则的对象。判仓库惯例用它。
 const HAN = /[㐀-䶿一-鿿豈-﫿]/;
@@ -68,50 +70,6 @@ function repoPrefersChinese(cwd, sample = 40) {
  * `/(?:-m|--message)[=\s]+["']?([^"']+)["']?/` 这种写法在 `git commit -m "$(cat <<'EOF' …`
  * 上只会抓到 `$(cat <<`——检查照跑，作用在垃圾串上，看起来还挺正常。
  */
-function extractMessages(command) {
-  const messages = [];
-  let m;
-
-  // 1) `-m "$(cat <<'EOF' … EOF)"` —— create-commit 规定的形式。
-  //
-  // 必须锚在 `-m` 的参数位置上，不能全命令扫 heredoc：`cat >> doc.md <<'EOF' … EOF &&
-  // git commit -m "…"` 是极常见的组合（写文档顺手提交），全扫会把**文档正文**当成
-  // commit message 判，于是往中文文档里追加内容这件事本身会被拦下。
-  const msgHeredoc =
-    /(?:^|\s)(?:-m|--message)(?:=|\s+)["']?\$\(\s*cat\s+<<-?\s*['"]?([A-Za-z_][A-Za-z0-9_]*)['"]?\r?\n([\s\S]*?)\r?\n\s*\1\b/g;
-  while ((m = msgHeredoc.exec(command)) !== null) messages.push(m[2]);
-
-  // 2) 常规 -m/--message 字面量。上面已吃掉的区间不再重复扫。
-  const rest = command.replace(msgHeredoc, ' ');
-  const flag = /(?:^|\s)(?:-m|--message)(?:=|\s+)("([^"]*)"|'([^']*)')/g;
-  while ((m = flag.exec(rest)) !== null) {
-    const body = m[2] !== undefined ? m[2] : m[3];
-    // `-m "$(...)"` 是命令替换而非字面 message，抓到的是 shell 语法不是文本。
-    if (body && !/^\s*\$\(/.test(body)) messages.push(body);
-  }
-
-  return messages;
-}
-
-// git 的全局选项里，这几个的值是**独立的下一个 token**（`git -C /repo commit`）。用正则
-// 一把梭会漏掉它们——而 `git -C <path> commit` 是日常写法，漏掉就是漏拦。
-const GLOBAL_OPTS_WITH_VALUE = /^(-C|-c|--git-dir|--work-tree|--namespace|--exec-path|--super-prefix)$/;
-
-/** 是不是一条会产生 commit 的命令（`git commit`，含 --amend、`git -C x commit`）。 */
-function isCommitCommand(command) {
-  for (const seg of String(command).split(/[;&|]+/)) {
-    const toks = seg.trim().split(/\s+/).filter(Boolean);
-    const gi = toks.findIndex((t) => t === 'git' || t.endsWith('/git'));
-    if (gi < 0) continue;
-    let j = gi + 1;
-    while (j < toks.length && toks[j].startsWith('-')) {
-      j += GLOBAL_OPTS_WITH_VALUE.test(toks[j]) && !toks[j].includes('=') ? 2 : 1;
-    }
-    if (toks[j] === 'commit') return true;
-  }
-  return false;
-}
-
 function evaluate(rawInput) {
   let input;
   try {

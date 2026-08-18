@@ -10,6 +10,7 @@ import ipaddress
 import os
 import sys
 import subprocess
+import concurrent.futures
 import datetime
 import re
 import platform
@@ -410,7 +411,7 @@ def get_stopforumspam(ip, route=None):
         resp = _egress_session(route).get(
             "https://api.stopforumspam.org/api",
             params={"json": 1, "ip": ip},
-            timeout=6,
+            timeout=(6, 10),
         )
         data = resp.json().get("ip", {})
         if not data.get("appears"):
@@ -425,6 +426,31 @@ def get_stopforumspam(ip, route=None):
         return lines
     except Exception as e:
         return [warn(f"查询失败（{e}）")]
+
+
+def _collect_risk_probes(ip, route=None):
+    """Run the two independent reputation lookups with a bounded fan-out."""
+    results = {}
+    futures = {}
+    try:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+            for name, probe in (
+                ("risk", get_ip_risk),
+                ("spam", get_stopforumspam),
+            ):
+                try:
+                    futures[name] = executor.submit(probe, ip, route)
+                except Exception as exc:
+                    results[name] = (None, exc)
+        for name, future in futures.items():
+            try:
+                results[name] = (future.result(), None)
+            except Exception as exc:
+                results[name] = (None, exc)
+    except Exception as exc:
+        for name in ("risk", "spam"):
+            results.setdefault(name, (None, exc))
+    return results
 
 
 def get_proxy_envs():
@@ -601,8 +627,10 @@ def collect_all() -> dict:
     pub_data = out.get("public") or {}
     if pub_data.get("ok") and (pub_data.get("proxy") or pub_data.get("hosting")):
         ip = pub_data.get("ip")
-        try:
-            risk_display, risk_score = get_ip_risk(ip, route)
+        probes = _collect_risk_probes(ip, route)
+        risk_result, risk_error = probes["risk"]
+        if risk_error is None:
+            risk_display, risk_score = risk_result
             risk_display = _strip(risk_display)
             out["risk"] = {
                 "score": risk_score,
@@ -611,13 +639,13 @@ def collect_all() -> dict:
                 "marked_proxy": pub_data.get("proxy", False),
                 "display": risk_display,
             }
-        except Exception as e:
-            errors.append({"section": "risk", "message": str(e)})
-        try:
-            spam_lines = get_stopforumspam(ip, route)
+        else:
+            errors.append({"section": "risk", "message": str(risk_error)})
+        spam_lines, spam_error = probes["spam"]
+        if spam_error is None:
             out["spam"] = _parse_spam_lines(spam_lines)
-        except Exception as e:
-            errors.append({"section": "spam", "message": str(e)})
+        else:
+            errors.append({"section": "spam", "message": str(spam_error)})
 
     try:
         out["proxy_envs"] = get_proxy_envs()
@@ -799,9 +827,16 @@ def main():
         tbl_row("IP 标记为代理", bad("是 ✗") if pub.get("proxy")   else ok("否 ✓"))
         tbl_row("机房 / 托管",   bad("是 ✗") if pub.get("hosting") else ok("否 ✓"))
         if (pub.get("hosting") or pub.get("proxy")) and pub_ip:
-            risk_display, risk_score = get_ip_risk(pub_ip, route)
+            probes = _collect_risk_probes(pub_ip, route)
+            risk_result, risk_error = probes["risk"]
+            if risk_error is None:
+                risk_display, risk_score = risk_result
+            else:
+                risk_display = warn(f"查询失败（{risk_error}）")
             tbl_row("IP 风险查询",  risk_display)
-            spam_lines = get_stopforumspam(pub_ip, route)
+            spam_lines, spam_error = probes["spam"]
+            if spam_error is not None:
+                spam_lines = [warn(f"查询失败（{spam_error}）")]
             tbl_row("垃圾滥用记录", spam_lines[0])
             for line in spam_lines[1:]:
                 tbl_row("", line)

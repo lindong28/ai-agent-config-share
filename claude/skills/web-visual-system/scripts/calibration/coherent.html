@@ -1,0 +1,35 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Coherent system</title>
+<style>
+/* A deliberately coherent system: IBM-Carbon-style neutrals, closed spacing ladder,
+   integer line-heights, three weights, named-property transitions, reduce branch. */
+:root{ --s2:2px;--s4:4px;--s6:6px;--s8:8px;--s12:12px;--s16:16px;--s24:24px;--s32:32px;--s48:48px;
+       --dur:120ms; --ease:cubic-bezier(.2,0,.38,.9);
+       --elev1: 0 1px 2px rgba(22,22,22,.16), 0 4px 8px rgba(22,22,22,.10); }
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#ffffff;color:#161616;font-family:system-ui;font-size:14px;line-height:20px;font-weight:400;padding:32px}
+h1{font-size:28px;line-height:36px;font-weight:600;margin-bottom:24px}
+h2{font-size:20px;line-height:28px;font-weight:600;margin-bottom:16px}
+p{margin-bottom:16px}
+.card{background:#ffffff;box-shadow:var(--elev1);padding:16px;margin-bottom:24px}
+button,a{font-size:14px;line-height:20px;font-weight:500;padding:8px 16px;background:#161616;color:#ffffff;border:0;
+  transition:background-color var(--dur) var(--ease), color var(--dur) var(--ease)}
+a{display:inline-block;text-decoration:none}
+:focus-visible{outline:2px solid #0f62fe;outline-offset:2px}
+/* standard focus-ring-as-box-shadow technique, single layer by construction */
+.ring:focus{box-shadow:0 0 0 3px #0f62fe}
+table{border-collapse:collapse;margin-bottom:24px}
+td,th{padding:8px 12px;border-bottom:1px solid #e0e0e0;font-variant-numeric:tabular-nums;text-align:right}
+th{font-weight:600}
+/* an accordion that animates its height — a deliberate, designed motion */
+details>div{transition:height var(--dur) var(--ease);height:48px;overflow:hidden}
+@media (prefers-reduced-motion:reduce){*{transition-duration:0.01ms;animation-duration:0.01ms}}
+</style></head><body>
+<h1>Fleet console</h1>
+<p>Showing <span>12</span> active nodes across 3 regions.</p>
+<div class="card"><h2>Throughput</h2>
+<table><thead><tr><th>Node</th><th>rps</th></tr></thead>
+<tbody><tr><td>a</td><td>1204</td></tr><tr><td>b</td><td>98</td></tr></tbody></table>
+<button class="ring">Refresh</button> <a href="#" class="ring">Details</a>
+</div>
+<details><summary>Advanced</summary><div><p>Nested panel body.</p></div></details>
+</body></html>

@@ -14,13 +14,13 @@
  *   `post-compact-restore.js` injects it into the fresh context.
  *
  * Usage:
- *   active-plan set <plan.md> [--title "..."]   # state.md / journal.md inferred as siblings
+ *   active-plan set <plan.md|program.md> [--title "..."] [--type <plan|program>]
  *   active-plan show
  *   active-plan clear
  *
- * Session id resolution: $CLAUDE_CODE_SESSION_ID (what Claude Code exports to
- * Bash, and the same value hooks receive as `session_id`), then
- * $CLAUDE_SESSION_ID, then --session <id>.
+ * Session id resolution: explicit --session <id>, then the active harness
+ * environment. If Claude and Codex both supply different ids, fail closed so a
+ * nested harness cannot overwrite its parent's marker.
  * Exit 0 on success, 1 on usage/IO error.
  */
 
@@ -35,9 +35,12 @@ const STATE_DIR = path.join(os.homedir(), '.claude', 'state');
 function sessionId(argv) {
   const i = argv.indexOf('--session');
   if (i !== -1 && argv[i + 1]) return argv[i + 1];
-  // CLAUDE_CODE_SESSION_ID is what Claude Code exports into Bash and is the
-  // same value hooks receive as `session_id` -- verified equal in practice.
-  return process.env.CLAUDE_CODE_SESSION_ID || process.env.CLAUDE_SESSION_ID || null;
+  const claude = process.env.CLAUDE_CODE_SESSION_ID || process.env.CLAUDE_SESSION_ID || null;
+  const codex = process.env.CODEX_THREAD_ID || null;
+  if (claude && codex && claude !== codex) {
+    die('conflicting Claude and Codex session ids; pass --session explicitly');
+  }
+  return codex || claude;
 }
 
 function markerPath(sid) {
@@ -49,6 +52,10 @@ function flag(argv, name) {
   return i !== -1 && argv[i + 1] ? argv[i + 1] : null;
 }
 
+// `msg` may be multi-line. Only the first line carries the `active-plan: `
+// prefix, so in a log where several processes' stderr is interleaved the
+// continuation lines have no attribution — keep them indented and obviously
+// subordinate, and put the line a truncating reader must not miss first.
 function die(msg) {
   process.stderr.write(`active-plan: ${msg}\n`);
   process.exit(1);
@@ -57,13 +64,40 @@ function die(msg) {
 function main() {
   const argv = process.argv.slice(2);
   const cmd = argv[0];
-  const sid = sessionId(argv);
 
+  // Usage validation runs BEFORE sessionId(): that helper die()s when Claude
+  // and Codex both supply ids, and it would swallow this branch — handing a
+  // mistyped-subcommand caller a message about session ids, which is the very
+  // "an error about X reads as a report about Y" hazard this branch exists to
+  // remove. Usage validity does not depend on the session id.
   if (!cmd || !['set', 'show', 'clear'].includes(cmd)) {
-    die('usage: active-plan set <plan.md> [--title "..."] | show | clear');
+    // An unknown subcommand must not read like "there is no marker". The bare
+    // usage line did: a caller ran `active-plan get 2>&1 | head -5`, saw one
+    // line of text where it expected marker state, concluded the marker was
+    // lost, and built a wrong root-cause story on top of it (HARNESS-309).
+    // Both halves below are load-bearing — name the bad token, and say
+    // outright that nothing was looked up.
+    const what = cmd ? `unknown command ${JSON.stringify(cmd)}` : 'no command given';
+    die(
+      `${what} — NO MARKER WAS QUERIED. This is a usage error, not a report about the marker.\n` +
+      '  to read the marker: active-plan show\n' +
+      '  usage: active-plan set <plan.md|program.md> [--title "..."] [--type <plan|program>] | show | clear\n' +
+      '  any command also accepts [--session <id>]'
+    );
   }
+
+  const sid = sessionId(argv);
   if (!sid) {
-    die('no session id ($CLAUDE_CODE_SESSION_ID / $CLAUDE_SESSION_ID unset and --session not given)');
+    // Same hazard as the unknown-command branch above, and likelier: the ids
+    // below are absent in every non-interactive shell (ssh 'cmd', cron,
+    // launchd, git hooks), so `show` lands here rather than on a real answer.
+    // Without the second line a caller reads "no session id" as "no marker".
+    die(
+      'no session id — NOTHING WAS READ OR WRITTEN. This is an environment error, ' +
+      'not a report about the marker.\n' +
+      '  $CODEX_THREAD_ID / $CLAUDE_CODE_SESSION_ID / $CLAUDE_SESSION_ID are all unset and --session was not given.\n' +
+      '  non-interactive shells (ssh \'cmd\', cron, launchd, git hooks) do not inherit them — pass --session <id> there.'
+    );
   }
   fs.mkdirSync(STATE_DIR, { recursive: true });
   const mp = markerPath(sid);
@@ -82,9 +116,19 @@ function main() {
 
   // set
   const planArg = argv[1];
-  if (!planArg || planArg.startsWith('--')) die('set requires a path to plan.md');
+  if (!planArg || planArg.startsWith('--')) die('set requires a path to plan.md or program.md');
   const plan = path.resolve(planArg);
-  if (!fs.existsSync(plan)) die(`plan not found: ${plan}`);
+  if (!fs.existsSync(plan)) die(`plan or program not found: ${plan}`);
+
+  const typeIndex = argv.indexOf('--type');
+  const typeArg = typeIndex === -1 ? null : argv[typeIndex + 1];
+  if (typeIndex !== -1 && (!typeArg || typeArg.startsWith('--'))) {
+    die('--type requires plan or program');
+  }
+  const type = typeArg || 'plan';
+  if (!['plan', 'program'].includes(type)) {
+    die(`invalid --type "${type}"; expected plan or program`);
+  }
 
   const dir = path.dirname(plan);
 
@@ -95,6 +139,7 @@ function main() {
   const marker = {
     session_id: sid,
     declared_at: new Date().toISOString(),
+    type,
     title: flag(argv, '--title'),
     plan,
     dir,
@@ -102,14 +147,25 @@ function main() {
     journal: path.join(dir, 'journal.md'),
   };
   fs.writeFileSync(mp, JSON.stringify(marker, null, 2));
-  process.stdout.write(`declared active plan -> ${plan}\n`);
+  process.stdout.write(`declared active plan (type: ${type}) -> ${plan}\n`);
 
   const missing = ['state.md', 'journal.md'].filter((n) => !fs.existsSync(path.join(dir, n)));
   if (missing.length) {
-    process.stdout.write(
-      `warning: ${missing.join(' and ')} not present yet in ${dir}\n` +
-      'long-task-protocol requires them; create them before relying on compaction recovery.\n'
-    );
+    if (type === 'program') {
+      if (missing.includes('journal.md')) {
+        process.stdout.write(
+          'program.md is the ledger snapshot; journal.md (append-only 过程时间线) is part of the ledger ' +
+          'directory — create it with a clock-read first entry before the first dispatch. state.md is not used.\n'
+        );
+      } else {
+        process.stdout.write('program.md is the ledger snapshot; state.md is not used for program markers.\n');
+      }
+    } else {
+      process.stdout.write(
+        `warning: ${missing.join(' and ')} not present yet in ${dir}\n` +
+        'long-task-protocol requires them; create them before relying on compaction recovery.\n'
+      );
+    }
   }
 }
 

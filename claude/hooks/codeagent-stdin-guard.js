@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 /**
- * Block the common codeagent-wrapper dispatch that provides no stdin.
+ * Block a prompt-as-arg background dispatch that provides no stdin —
+ * `codeagent-wrapper` (any subcommand but the no-stdin flags) and `codex exec`.
  *
  * Ground truth from the wrapper source (ccg-workflow/codeagent-wrapper): it
  * reads its own stdin (`io.ReadAll`) before launching the backend on EVERY run
@@ -24,8 +25,19 @@
  *
  * Block iff the command contains no `<` at all AND, in the first pipe-stage of
  * some statement, the plain command token (first token after bare `VAR=val`
- * prefixes) is codeagent-wrapper (bare or path-suffixed) whose first argument is
- * not one of the wrapper's no-stdin flags (--help/-h/--version/-v/--cleanup).
+ * prefixes) is either codeagent-wrapper (bare or path-suffixed) whose first
+ * argument is not one of the wrapper's no-stdin flags
+ * (--help/-h/--version/-v/--cleanup), or codex (bare or path-suffixed) whose
+ * first argument is exec.
+ *
+ * COVERAGE NOTE (2026-08-12): `codex exec` was added after a review measured
+ * that the two shapes were asymmetric — the wrapper form was blocked while the
+ * raw form, which caused the LONGER of the two recorded hangs (~43 min, see
+ * background-agent-monitoring.md), was allowed. The reviewer also proposed
+ * covering headless `claude -p`; that was rejected on a measurement rather than
+ * on taste: `claude -p` prints `Warning: no stdin data received in 3s,
+ * proceeding without it` and continues, so adding it to a hook whose only
+ * verdict is exit 2 would be a pure false block.
  *
  * ACCEPTED RESIDUALS (allow-biased best-effort; five Codex rounds confirmed a
  * fully-correct guard needs a real bash parser, disproportionate here):
@@ -123,6 +135,20 @@ function isWrapperToken(tok) {
   return tok === 'codeagent-wrapper' || tok.endsWith('/codeagent-wrapper');
 }
 
+// Raw `codex exec` is the second dispatch shape with the same failure: it blocks
+// on `Reading additional input from stdin...` with no EOF (the ~43-minute
+// incident in background-agent-monitoring.md, the longer of the two on record).
+// Identified only as `codex` with first argument `exec` — `codex --help`, the
+// TUI, and any other subcommand fall through to allow.
+//
+// Headless `claude -p` is deliberately NOT covered even though it is the third
+// prompt-as-arg dispatch shape: measured 2026-08-12, it self-limits and prints
+// `Warning: no stdin data received in 3s, proceeding without it`. Adding it to a
+// hook whose only verdict is exit 2 would be a pure false block.
+function isCodexExec(tok, firstArg) {
+  return (tok === 'codex' || tok.endsWith('/codex')) && firstArg === 'exec';
+}
+
 function parseInput(inputOrRaw) {
   if (typeof inputOrRaw === 'string') {
     try {
@@ -133,9 +159,14 @@ function parseInput(inputOrRaw) {
 }
 
 function run(inputOrRaw) {
+  // CODEAGENT_STDIN_GUARD=0 disables the guard on every entry path — direct
+  // invocation AND the run-with-flags module call (which never reaches the
+  // require.main block below). Keeping the check here is what makes the escape
+  // hatch hold on both harness sides.
+  if (process.env.CODEAGENT_STDIN_GUARD === '0') return { exitCode: 0, stderr: '' };
   const input = parseInput(inputOrRaw);
   const command = String(input?.tool_input?.command || '');
-  if (!command.includes('codeagent-wrapper')) return { exitCode: 0 };
+  if (!command.includes('codeagent-wrapper') && !command.includes('codex')) return { exitCode: 0 };
   // Any `<` anywhere (input redirect / heredoc / herestring / process sub) →
   // a stdin source is plausibly present → fail open. Checked on the raw string
   // so no downstream lexing can misplace it into a false block.
@@ -144,14 +175,19 @@ function run(inputOrRaw) {
   for (const statement of splitStatements(joinPipeContinuations(blankQuotedContent(command)))) {
     const stage = statement.split('|')[0]; // only the first stage lacks upstream stdin
     const [cmd, firstArg] = stageTokens(stage);
-    if (!isWrapperToken(cmd)) continue;
-    if (NO_STDIN_FLAGS.has(firstArg)) continue; // wrapper exits without reading stdin
+    const wrapper = isWrapperToken(cmd);
+    const codexExec = isCodexExec(cmd, firstArg);
+    if (!wrapper && !codexExec) continue;
+    if (wrapper && NO_STDIN_FLAGS.has(firstArg)) continue; // wrapper exits without reading stdin
+    const what = wrapper ? '`codeagent-wrapper`' : '`codex exec`';
+    const how = wrapper
+      ? 'reading its own stdin before the backend launches — a silent ~20-min hang'
+      : 'on `Reading additional input from stdin...` — a silent ~43-min hang';
     return {
       exitCode: 2,
       stderr:
-        'BLOCKED: `codeagent-wrapper` here has no stdin, so it will block ' +
-        'reading its own stdin before the backend launches — a silent ~20-min ' +
-        'hang with no output. Append `</dev/null` (the prompt is passed as an ' +
+        `BLOCKED: ${what} here has no stdin, so it will block ` +
+        `${how} with no output. Append \`</dev/null\` (the prompt is passed as an ` +
         'argument, so stdin is unused), or provide stdin via a heredoc / pipe / ' +
         'the `-` form.',
     };
@@ -162,10 +198,9 @@ function run(inputOrRaw) {
 
 module.exports = { run };
 
-// Direct-invocation entrypoint. Upstream reaches run() through a hook-profile
-// dispatcher (run-with-flags.js); this repo wires hooks straight into
-// settings.json, so the entrypoint lives here — without it the file would load,
-// export, and exit 0, i.e. silently never guard anything.
+// Direct-invocation entrypoint. Both harness sides normally reach run() through
+// the hook-profile dispatcher (run-with-flags.js); this entry is kept so a bare
+// `node codeagent-stdin-guard.js` still guards instead of silently exiting 0.
 //
 // Contract mirrors the dispatcher: write stderr (Claude Code shows it to the
 // agent on a block), exit with run()'s code. Nothing on stdout — for PreToolUse,

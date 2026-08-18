@@ -136,3 +136,44 @@ describe('codeagent-stdin-guard: ambiguous forms fail open (allow) by design', (
     });
   }
 });
+
+// Raw `codex exec` — the second prompt-as-arg dispatch shape, and the one behind
+// the longer of the two recorded hangs (~43 min, background-agent-monitoring.md).
+// Before this coverage existed, `codex exec "p"` was allowed while the equivalent
+// wrapper form was blocked; that asymmetry is what these cases pin down.
+describe('codeagent-stdin-guard: raw `codex exec` without stdin', () => {
+  const block = [
+    ['bare', 'codex exec "review this repo"'],
+    ['absolute path', '/usr/local/bin/codex exec "p"'],
+    ['bare env prefix', 'CODEX_TIMEOUT=600000 codex exec "p"'],
+    ['second statement', 'cd /repo; codex exec "p"'],
+  ];
+  for (const [name, cmd] of block) {
+    it(`blocks: ${name}`, () => {
+      assert.equal(exit(cmd), 2, `expected block (2) for: ${cmd}`);
+    });
+  }
+
+  const allow = [
+    ['redirect from /dev/null', 'codex exec "p" </dev/null'],
+    ['heredoc', "codex exec - <<'EOF'\np\nEOF"],
+    ['pipe-fed', 'echo p | codex exec -'],
+    ['non-exec subcommand', 'codex --help'],
+    ['interactive TUI', 'codex'],
+    ['mentioned in text, not command position', 'echo "run codex exec later" </dev/null'],
+    ['unrelated command naming codex', 'grep -rn codex ~/.claude'],
+  ];
+  for (const [name, cmd] of allow) {
+    it(`allows: ${name}`, () => {
+      assert.equal(exit(cmd), 0, `expected allow (0) for: ${cmd}`);
+    });
+  }
+
+  // Headless `claude -p` is the third prompt-as-arg shape and is deliberately
+  // NOT blocked: measured 2026-08-12, it prints `Warning: no stdin data received
+  // in 3s, proceeding without it` and continues. A 3-second self-limit is not the
+  // failure this hook exists for, and blocking it would be a pure false block.
+  it('allows headless `claude -p` (self-limits at 3s; blocking it would be a false block)', () => {
+    assert.equal(exit('claude -p "summarise the diff"'), 0);
+  });
+});

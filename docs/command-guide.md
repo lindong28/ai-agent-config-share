@@ -10,9 +10,9 @@
 | `/custom:create-plan <task> [给我 N 份方案]` | 写 plan.md（含 L3 设计 + 内部 verify；可读 spec 为输入）。**判据是方案要不要交给新的 implementer context 独立接手**，与改动大小无关——单文件且不交接、或方案本轮用完即弃时不走它。默认 bootstrap long-task 模式（plan.md banner + state.md / journal.md），送审前会把阻塞在外部事实上的分支拆成独立 plan；附「给我 N 份方案」则启用 Best-of-N，产出多份候选供挑 | 内部自动调 `/custom:review-plan` 循环至其 severity gate 收敛（非"零发现"） |
 | `/custom:review-spec <path>` | 按 `spec-review-principles.md` 审查 spec | 三阶段循环（审查→决策→落地），改动后回到第 1 步重审 |
 | `/custom:review-plan <path>` | 按 `plan-review-principles.md` 审查 plan | 循环，但收敛判据是 severity gate（非"零发现"）+ 默认 2 轮预算与停滞熔断，残余项经 AskUserQuestion 交你拍板 |
-| `/custom:review-skill <path> [optimize]` | 按 `skill-review-principles.md` 审查并按需修复单个 SKILL.md、command、agent 定义或 reference（含 principles 文件——但本仓未收录专审 meta-原则的命令，所以「这套原则本身立不立得住」这一维度不被覆盖，reviewer 会声明该维度未审）；`optimize` 叠加体积优化维度 | 循环，但重审范围由修复 diff 的影响面界定，不整份重跑全部原则 |
+| `/custom:review-skill <path> [optimize]` | 按 `skill-review-principles.md` 审查并按需修复单个 SKILL.md、command、agent 定义、`rules/` 规则文件或非原则类 reference；`optimize` 叠加体积优化维度。原则文件改走 `/custom:review-principles` | 循环，但重审范围由修复 diff 的影响面界定，不整份重跑全部原则 |
 | `/custom:create-skill-from-workflow` | 把刚执行的工作流提取为可复用 skill / command | 内部自动调 `/custom:review-skill` 循环 |
-| `/custom:fix-skill-from-session [问题]` | 扫 session 中 skill / command 的错行为，定位 source-level 修复（受理面比 review-skill 宽：CLAUDE.md、hook、settings 都在 fix 范围内） | 是，但**按落点分派**到对应的 review 命令，不一律走 `review-skill` |
+| `/custom:fix-harness-from-session [问题]` | 用户点名**单个**刚发生的 harness 问题时复盘根因并定位 source-level 修复（受理面比 review-skill 宽：CLAUDE.md、hook、settings、适配层都在 fix 范围内；原名 `fix-skill-from-session`） | 是，但**按落点分派**到对应的 review 命令，不一律走 `review-skill` |
 | `/custom:execute-plan <plan.md>` | Claude 作为 supervisor 启动 Codex 实施 plan.md：按 Stop Gate 收敛；随后按 plan 声明分流 UX 验收——声明了「UX 契约影响」就应用契约并按契约验证，只有 UX 入口就跑一遍探索式 `/custom:test-ux`，发现的 issue 回灌给 Codex 直到清零 | 是（Stop Gate + UX 验收双循环） |
 | `/custom:supervise [--backend codex\|gemini\|claude] [--autopilot] <task>` | Claude 作为 supervisor 用 codeagent-wrapper 跑**开放式任务（无 plan.md）**：spawn 前锁定 success criteria + backend，过程中代答简单决策 / 升级复杂决策（`--autopilot` 则全程不打扰），agent 早停则 resume 续命，结束把 agent 行为问题沉淀到 `docs/issues/general.md` | 是（按 success criteria + Stop Gate resume 收敛） |
 | `/custom:resolve-issues [--source <path>] <目标>` | 围绕一个目标批量解决项目 issue：按目标 triage（核实存在性 + consumer scope，回写陈旧项），用户批准后按依赖顺序委派 agent 逐个解决并闭环回灌新 issue | 是（逐 issue 委派 + 回灌循环） |
@@ -20,7 +20,7 @@
 | `/custom:create-ux-contract [产品上下文]` | 访谈用户写 ux-contract.md（L1 产品全貌 + L2 用户视角 verify + 验收侧重），作为 UX 验收基准 | 内部自动调 `/custom:review-ux-contract` 循环至收敛 |
 | `/custom:review-ux-contract <path>` | 按 `ux-contract-review-principles.md` 审查 ux-contract | 三阶段循环（审查→决策→落地），改动后回到第 1 步重审 |
 | `/custom:execute-ux-contract <contract-path>` | Claude 作为 supervisor 把已审契约翻译为 test plan，驱动 Codex 跑端到端 UX 测试 + 修复闭环，直到可即时修复的 Critical/High/Medium 清零 | 是（test session + fix session 测-修循环） |
-| `/custom:create-handoff` | 把 session 关键 context 落到 markdown 给新 session 接力。**先按 active-plan marker（`~/.claude/bin/active-plan show`）三态分流**：marker 指向本轮 plan → 不写 handoff（plan/state/journal 已是交接物）；在执行 plan 但 marker 缺失 → `active-plan set <plan.md>` 而非写 handoff；确无 plan 才写 | 否（单次执行） |
+| `/custom:create-handoff` | 把 session 关键 context 落到 markdown 给新 session 接力。**先按 active-plan marker（`~/.claude/bin/active-plan show`）的类型分流**——program 型 marker 走 program 分流表（交接整个 program supervisor session 不写 handoff；task 级才写；非当前执行对象 / ledger 过期不可读各有处置），plan 型 / 无 marker 走另一张表（指向本轮 plan → 不写，plan/state/journal 已是交接物；在执行 plan 但 marker 缺失 → 先 `active-plan set <plan.md>`；确无 plan 才写） | 否（单次执行） |
 | `/custom:sync-docs [改了什么] [max-principle-per-subagent=5]` | 项目文档维护单入口（docs/ + 根 README/CHANGELOG）：给出改动描述则补该改动的文档，空参数则审查并修全部现有文档，docs/ 未初始化时先建结构。既可独立调用，也可作为 recipe 被 supervisor 编排复用（入口契约声明目标 repo / 源证据 / gate owner） | 是（审查→决策→落地→失效分析→重审，直到全部审查单元 coverage complete；终态是 `converged` 或 `blocked`，`awaiting-caller-gate` 是交回 caller 跑领域 gate 的中途状态、不是收尾） |
 | `/custom:create-refactor-plan <scope> [--rescan]` | 为周期性还技术债写系统化重构 plan.md（提升可维护性 / 可扩展性 / 易读性），`--rescan` 续下一轮 | 内部自动调 `/custom:review-plan` 循环 |
 | `/custom:absorb-skill <外部 skill>` | 把外部 skill / command 中有用的内容合并进已有本地 skill / command | 内部按落点分派 `/custom:review-skill` 等收敛 |
@@ -37,6 +37,11 @@
 | `/custom:review-readme <readme 路径> [max-principle-per-subagent=10]` | 按 `readme-review-principles.md` 审单份 README 的内容质量并修复（整个 docs/ 的跨文件一致性走 `sync-docs`） | 三阶段循环（审查→决策→落地），分组并行 subagent，改动后回到第 1 步重审 |
 | `/custom:create-aigc-design <效果>` | 为合成 / 编辑 / 后处理 / 多来源接合 / 多步生成类效果写 L1/L2/L3 设计（深度随复杂度伸缩），聚焦算法-视觉-效果层 | 配合 `/custom:review-aigc-design` 循环至过 blocker gate |
 | `/custom:review-aigc-design <path>` | 按 `aigc-design-review.md` 在实现前独立评审 AIGC 流水线设计文档 | 配合 `/custom:create-aigc-design` 循环至 blocker 清零 |
+| `/custom:review-evangelism <文档>` | 按布道写作原则审查对外推广 / 宣讲 / 说服性文档并修复 | 三阶段循环（审查→决策→落地） |
+| `/custom:review-llm-cost [项目根=cwd]` | 按 `llm-cost-observability-principles.md` 审项目的 LLM 成本观测（计量 / 定价成本 / 主动消费 / 调用归因）并按影响范围修复 | 审查→决策→落地循环 |
+| `/custom:review-agent-harness [关注点]` | 任务完成后基于本 session 运行时证据复盘 harness：定位显著影响正确性 / 效率 / 安全的问题，归因后路由到当场修复 / issue 记账 / 经验沉淀（整段 session 复盘入口；单个已点名问题走 `fix-harness-from-session`） | 是（检测层复用 `review-session-skills`，含归因路由与三路处置） |
+| `/custom:find-claude-session <描述>` | 按记忆中的对话特征定位历史 Claude Code session UUID 以便 resume | 否（单次执行） |
+| `/custom:create-experience-from-journal <journal 路径>` | 把 journal 内容提炼为项目内可复用经验，写入 `docs/experiences/`（显式调用） | 否（单次执行） |
 | `/routine:session-export` | 把当前 session 导出为可移植归档 | 否（单次执行） |
 | `/routine:session-import <归档路径>` | 把导出的 session 归档导入到本机 | 否（单次执行） |
 

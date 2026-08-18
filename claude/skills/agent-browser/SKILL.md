@@ -285,7 +285,8 @@ agent-browser snapshot -i --urls      # Include href URLs for links
 agent-browser snapshot -s "#selector" # Scope to CSS selector
 
 # Interaction (use @refs from snapshot)
-agent-browser click @e1               # Click element
+agent-browser click @e1               # Click element — read "Re-reading the control you clicked
+                                      #   is not verification" before relying on its exit code
 agent-browser click @e1 --new-tab     # Click and open in new tab
 agent-browser fill @e2 "text"         # Clear and type text
 agent-browser type @e2 "text"         # Type without clearing
@@ -314,8 +315,15 @@ agent-browser wait "#spinner" --state hidden  # Wait for element to disappear
 
 # Downloads
 agent-browser download @e1 ./file.pdf          # Click element to trigger download
-agent-browser wait --download ./output.zip     # Wait for any download to complete
+agent-browser wait --download ./output.zip     # Wait for a browser-initiated download to complete
 agent-browser --download-path ./downloads open <url>  # Set default download directory
+# Two limits measured on 0.27.0, neither of which announces itself:
+#  - wait --download does not observe a programmatic download (a blob-URL a.click()
+#    from eval). It times out with "the element may not exist" while the file lands
+#    correctly. Test for the file instead.
+#  - --download-path is honored only on the command that starts the daemon. Later it
+#    prints "⚠ --download-path ignored: daemon already running" and the file goes to
+#    the default directory. Set AGENT_BROWSER_DOWNLOAD_PATH before the first command.
 
 # Tab management
 agent-browser tab list                         # List all open tabs
@@ -360,6 +368,8 @@ agent-browser clipboard read                      # Read text from clipboard
 agent-browser clipboard write "Hello, World!"     # Write text to clipboard
 agent-browser clipboard copy                      # Copy current selection
 agent-browser clipboard paste                     # Paste from clipboard
+# Value copied by the app but masked in its API? Read it at the sink, not from
+# the clipboard — references/value-extraction.md.
 
 # Dialogs (alert, confirm, prompt, beforeunload)
 # By default, alert and beforeunload dialogs are auto-accepted so they never block the agent.
@@ -481,6 +491,8 @@ agent-browser get text @e5           # Get specific element text
 agent-browser snapshot -i --json
 agent-browser get text @e1 --json
 ```
+
+When the value is one the page produces on demand but its API returns masked — a key behind a Copy button — it is in the page's memory but in neither the DOM nor any response. See [value-extraction.md](references/value-extraction.md).
 
 ### Parallel Sessions
 
@@ -679,7 +691,17 @@ agent-browser diff url https://staging.example.com https://prod.example.com --sc
 
 **Baseline limitation:** `--baseline` is not optional. Without it `diff snapshot` compares against an empty baseline, not against your last `snapshot` — take a snapshot, perform no action, and it still reports the whole page as additions. `diff --help` claims the opposite; the observed behavior is what holds. Refs are also renumbered on every snapshot, so a `-i` baseline marks every ref-bearing line as changed and the diff degenerates into noise — take the baseline without `-i` when you only need to see what the page did.
 
-**Re-reading the control you clicked is not verification.** Confirm an action's effect against the authoritative view of that state — a list page, a counter — because two page-authoring patterns defeat re-reading, and both fail confidently rather than visibly:
+**Media on a local browser plays into the user's speakers — decide sound deliberately, never by default.** This is not specific to `--cdp`: any browser this CLI drives on the user's machine, headless included, can reach the audio device. Three branches, and you must pick one explicitly:
+
+- **Not observing sound or volume state** (the usual case) — keep every media element silent. `muted = true` is the strongest form; reach for it first.
+- **The application's own logic depends on "unmuted"** — `volume = 0` keeps `muted === false` with no audible output. It is **not** side-effect-free: `volume` is itself observable and setting it fires `volumechange`, so a page that reads volume or listens for that event *does* see a difference. If the behaviour under test could depend on either, say so rather than claiming the state is untouched.
+- **Sound itself is the observation** (lip-sync, audio artefacts) — that needs the user's permission first, and a bounded clip rather than a loop. Cost of skipping this: a pool of speaker videos left looping on the user's machine until they interrupted to ask whether it was us.
+
+Coverage to check each time, because the branches above are per-element: `<video>` **and** `<audio>`, elements added after load, and Web Audio (element attributes are not known to reach it — silence it at the `AudioContext`, or skip the observation and mark it uncovered; whether any element-level control suffices is **unverified**). On the way out `pause()` and close the session rather than leaving a playing page behind.
+
+**Re-reading the control you clicked is not verification — and neither is the CLI's own `✓ Done`.** `click` does **not** scroll its target into view: below the fold it lands on empty space (the event `target` is `HTML`, the document root), no application handler runs, and the command still prints `✓ Done` and exits 0. So an exit code cannot separate "clicked" from "clicked nothing" — observed on `agent-browser` **0.27.0**. Before a click that matters, read the element's rect and `agent-browser scrollintoview <sel>` if it is offscreen, then click for real. **`eval element.click()` is not an equivalent fix**: it bypasses the viewport, occlusion and hit-testing entirely, so it turns "the user cannot actually reach this control" into a green step — use it only for programmatic actions you are explicitly not evaluating as real interaction. Recheck this behaviour when the CLI is upgraded.
+
+Then confirm the effect against the authoritative view of that state — a list page, a counter, the destination page, server-side state — never against the control you just touched. Two page-authoring patterns defeat re-reading, and both fail confidently rather than visibly:
 
 | Pattern | What it does to your reader |
 | --- | --- |
@@ -826,6 +848,7 @@ Project and user-level defaults (viewport, timeouts, engine, download path) can 
 | [references/snapshot-refs.md](references/snapshot-refs.md)           | Ref lifecycle, invalidation rules, troubleshooting        |
 | [references/session-management.md](references/session-management.md) | Parallel sessions, state persistence, concurrent scraping |
 | [references/authentication.md](references/authentication.md)         | Login flows, OAuth, 2FA handling, state reuse             |
+| [references/value-extraction.md](references/value-extraction.md)     | A value the app produces on demand (API key behind a Copy button) but returns masked from its own API |
 | [references/video-recording.md](references/video-recording.md)       | Recording workflows for debugging and documentation       |
 | [references/profiling.md](references/profiling.md)                   | Chrome DevTools profiling for performance analysis        |
 | [references/proxy-support.md](references/proxy-support.md)           | Proxy configuration, geo-testing, rotating proxies        |

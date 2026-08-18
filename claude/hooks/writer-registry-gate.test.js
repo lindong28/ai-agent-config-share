@@ -11,6 +11,14 @@ const gate = require('./writer-registry-gate.js');
 
 if (!gate.envSessionId) throw new Error('envSessionId 未导出');
 
+assert.deepStrictEqual(
+  gate.targetPaths('apply_patch', {
+    command: '*** Begin Patch\n*** Add File: a.txt\n*** Update File: nested/b.js\n*** Move to: moved/c.js\n*** Delete File: old/d.js\n*** End Patch',
+  }),
+  ['a.txt', 'nested/b.js', 'moved/c.js', 'old/d.js'],
+  'Codex apply_patch 的全部目标都必须进入写入者协调',
+);
+
 function git(cwd, args) {
   execFileSync('git', args, { cwd, stdio: 'ignore' });
 }

@@ -1,7 +1,0 @@
-# expect: ok
-# note: 最常见的收尾形态——改完 + 测试全过 + 说明改了什么。零反向断言。这类消息占真实 Stop 事件的绝大多数，是误报守卫的基线。
-tt-web 的成本列改完了。
-
-三处改动：`rollup.py` 里按 model id 查单价的表补了 Opus 5 / Sonnet 5 两行；`app.js` 的 `formatCost` 之前把 cache-read 的 token 按 input 单价算，现在走独立单价；`pivot.js` 里那个把同一次请求的 usage 累加两遍的分支删掉了。
-
-`pytest tt-web/tests/` 432 项全过，其中 `test_web_static.py` 新加的 6 项专门盯这次的三处。页面上跑了一遍，本机那条项目的月度成本从 $41.7 降到 $12.3，和 API 账单对得上。

@@ -112,7 +112,54 @@ profile is attachable.
 > to local processes. Use it only on trusted machines and close the browser when
 > done.
 
-**Session split:** this flow needs two `--session` names, the part [Browser Identity Continuity](../SKILL.md#browser-identity-continuity) does not cover — one for the source browser, a separate one for the browser consuming the imported state. Apply the owner's rule within each; the consumer never inherits the source browser's CDP endpoint.
+### A login page does not tell you the browser has no session
+
+**The weak claim, which is what the evidence supports:** when you drive a running browser through
+`--cdp <port>` or `--auto-connect` and the target serves its login page, that reading **does not**
+establish "this browser has no session". Measured once on `agent-browser` **0.27.0**: `--auto-connect`
+landed on the login page while that same browser already had a signed-in tab open on the target site,
+and `tab list` showed only the tab the CLI had just created, not the existing one. Note that the CLI's
+own `--help` says `--auto-connect` *"Connect to a running Chrome to reuse its auth state"* — so the
+observed behaviour and the documented behaviour disagree, and this section does not resolve which is
+right.
+
+**Not established here** — do not repeat these as facts: that a separate browser context is the
+mechanism; that `--cdp` behaves the same way (only `--auto-connect` was measured); that the two login
+pages are byte-identical; or that this extends to other kinds of connection. Any of those may be true;
+none was measured.
+
+**So before asserting anything about login state, get a reading from the default context:**
+
+```bash
+# 1. create the tab in the default context and keep the target id it returns
+TID=$(curl -s -X PUT "http://127.0.0.1:9222/json/new?<urlencoded-url>" | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')
+# 2. poll THAT id until its url stops changing (redirect chains settle), then read it
+read_target() { curl -s http://127.0.0.1:9222/json/list \
+  | python3 -c 'import json,sys; print(next((t["url"]+"\t"+t["title"]
+      for t in json.load(sys.stdin) if t["id"]==sys.argv[1]), ""))' "$TID"; }
+prev=""; for _ in $(seq 1 15); do
+  cur=$(read_target); [ -n "$cur" ] && [ "$cur" = "$prev" ] && break
+  prev=$cur; sleep 1
+done
+printf '%s\n' "$prev"
+```
+
+**Bind the read to that target id.** The scenario that makes this probe necessary is one where a
+signed-in tab already exists, so `/json/list` will contain both it and your new tab — read the list
+unfiltered and you can "confirm" the session from the *old* tab while your new one sat on a login
+page. For the same reason a fixed `sleep` is not enough: poll until the url settles rather than
+sampling once mid-redirect.
+
+The probe's ceiling: `/json/list` gives you `title` and `url` only. Reading the body needs a CDP
+WebSocket.
+
+**Titles are not always discriminating.** Check that the title actually differs between the two
+outcomes you are separating: measured on one site, two pages differing only by a query parameter
+shared a title, so the probe proved the gateway routed and preserved the query string but proved
+nothing about which variant rendered. The same probe was discriminating for a page with a unique
+title. Decide per target, not once.
+
+**Session split:** the two-step auth-import workflow below needs two `--session` names, the part [Browser Identity Continuity](../SKILL.md#browser-identity-continuity) does not cover — one for the source browser, a separate one for the browser consuming the imported state. Apply the owner's rule within each; the consumer never inherits the source browser's CDP endpoint.
 
 **Step 1: Save the auth state from the selected browser**
 

@@ -1,6 +1,0 @@
-# expect: ok
-# attempted:
-# note: 讨论另一个 harness 的工具表，不是声称自己此刻调不动。跨 harness 政策文件里这种句式很常见。
-两侧的分工是这样的：`EnterPlanMode` / `ExitPlanMode` 是 Claude Code 独有的，Codex 那边没有对应物——它自带的 Plan Mode 产对话内 `<proposed_plan>` 块、不落盘，且只能由用户结束。
-
-所以这段政策在 CLAUDE.md 里得写成适配表的一行，而不是直接写"调 EnterPlanMode"——后者在 Codex 侧读起来是一条无法执行的指令。

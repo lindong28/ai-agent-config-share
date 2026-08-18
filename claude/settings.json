@@ -48,7 +48,6 @@
       "mcp__devfleet__*",
       "mcp__playwright__*",
       "mcp__chrome-devtools__*",
-      "mcp__prompts.chat__*",
       "mcp__plugin_claude-mem_mcp-search__*",
       "mcp__plugin_prompts_chat_prompts_chat__*",
       "mcp__plugin_everything-claude-code_*",
@@ -60,6 +59,9 @@
       "Bash(*codeagent-wrapper*)",
       "Bash(~/.claude/bin/codeagent-wrapper --backend gemini*)",
       "Bash(~/.claude/bin/codeagent-wrapper --backend codex*)"
+    ],
+    "deny": [
+      "mcp__claude-in-chrome__*"
     ]
   },
   "hooks": {
@@ -70,7 +72,7 @@
           {
             "type": "command",
             "command": "node \"$HOME/.claude/hooks/ask-recommend-gate.js\"",
-            "timeout": 28
+            "timeout": 50
           }
         ],
         "description": "Gate AskUserQuestion: block (exit 2) when options lack a clearly-marked recommendation + reason; agent must re-issue with both. Tiered LLM judge (GLM → Anthropic API → claude -p subscription; see hooks/lib/llm-judge.js) reads tool_input.questions directly; fail-open on no-backend/error/timeout. Enforces CLAUDE.md 'Surface Choices (Real Ones), Recommend One'.",
@@ -81,7 +83,18 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"$HOME/.claude/hooks/codeagent-stdin-guard.js\"",
+            "command": "node \"$HOME/.claude/hooks/run-with-flags.js\" block-no-verify block-no-verify.js"
+          }
+        ],
+        "description": "Block git commit/push --no-verify and equivalent hook-bypass flags so pre-commit / commit-msg / pre-push hooks cannot be silently skipped.",
+        "id": "pre:bash:block-no-verify"
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$HOME/.claude/hooks/run-with-flags.js\" codeagent-stdin-guard codeagent-stdin-guard.js",
             "timeout": 5
           }
         ],
@@ -95,9 +108,14 @@
             "type": "command",
             "command": "node \"$HOME/.claude/hooks/run-with-flags.js\" writer-registry-gate writer-registry-gate.js",
             "timeout": 15
+          },
+          {
+            "type": "command",
+            "command": "node \"$HOME/.claude/hooks/run-with-flags.js\" memory-carrier-gate memory-carrier-gate.js",
+            "timeout": 15
           }
         ],
-        "description": "Register the writer and block overlapping concurrent edits (references/concurrent-plan-isolation.md 「轻量登记」). The registry lives in the git common-dir, not the worktree, so entries written from one worktree are visible from every other; the hook writes, reads AND expires entries, because the observed failure was not 'nobody registers' but 'entries are written, never read, never cleaned'.",
+        "description": "Register the writer and block overlapping concurrent edits (references/concurrent-plan-isolation.md 「轻量登记」). The registry lives in the git common-dir, not the worktree, so entries written from one worktree are visible from every other; the hook writes, reads AND expires entries, because the observed failure was not 'nobody registers' but 'entries are written, never read, never cleaned'. | memory-carrier-gate: block cross-project rules from being written into auto-memory files that git cannot see — durable guidance belongs in a git-tracked carrier (CLAUDE.md / references), memory keeps only a pointer (CLAUDE.md '长期解决方案载体').",
         "id": "pre:edit:writer-registry-gate"
       },
       {
@@ -116,11 +134,33 @@
         "hooks": [
           {
             "type": "command",
+            "command": "node \"$HOME/.claude/hooks/run-with-flags.js\" push-approval-gate push-approval-gate.js"
+          }
+        ],
+        "description": "Require explicit per-push user approval before any `git push`: each push needs its own approval in the current turn's user text; blanket or past-turn approval does not carry over. Deterministic enforcement of CLAUDE.md 'Git Push 需显式许可'.",
+        "id": "pre:bash:push-approval-gate"
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
             "command": "node \"$HOME/.claude/hooks/run-with-flags.js\" commit-message-language commit-message-language.js"
           }
         ],
         "description": "Enforce create-commit's commit-message language rule (English by default; exceptions are an explicit user request, a repo whose recent history is Chinese, or a term with no accurate English equivalent). Purely deterministic (scan characters + read git log). It exists because the rule was in context and still lost once: the turn that wrote the message followed a long stretch of editing Chinese docs and the body drifted along with it.",
         "id": "pre:bash:commit-message-language"
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$HOME/.claude/hooks/run-with-flags.js\" commit-discipline-gate commit-discipline-gate.js"
+          }
+        ],
+        "description": "Enforce the deterministic half of the create-commit checklist at `git commit` time: no Co-Authored-By trailer, no vague bundled staging (git add -A / .), and the create-commit skill must actually have been invoked this session. Complements commit-message-language (language) — this gate checks staging discipline and skill invocation.",
+        "id": "pre:bash:commit-discipline-gate"
       }
     ],
     "Stop": [
@@ -130,7 +170,7 @@
           {
             "type": "command",
             "command": "node \"$HOME/.claude/hooks/desktop-notify.js\"",
-            "timeout": 6
+            "timeout": 12
           }
         ],
         "description": "Desktop notification when Claude finishes responding: Ghostty OSC9 (clicking focuses the originating tab) with terminal-notifier as fallback elsewhere. Replaces the ECC plugin's stop:desktop-notify (disabled via ECC_DISABLED_HOOKS) so the logic lives in version control, not a third-party plugin cache.",
@@ -141,8 +181,20 @@
         "hooks": [
           {
             "type": "command",
+            "command": "node \"$HOME/.claude/hooks/stop-gate.js\"",
+            "timeout": 45
+          }
+        ],
+        "description": "Block a stop that yields the turn while the task is not actually done and nothing blocks it — parking user-owned calls on the user, premature 'blocked' claims without an attempted alternative, admitting undone work without cause, or asking a question that hands work back. Tiered LLM judge over the closing message (same backend chain as ask-recommend-gate); repeat flags within one session are counted and surfaced. Enforces references/plan-execution-principles.md 'Stop Gate'.",
+        "id": "stop:stop-gate"
+      },
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
             "command": "node \"$HOME/.claude/hooks/continuation-claim-gate.js\"",
-            "timeout": 30
+            "timeout": 45
           }
         ],
         "description": "Block a stop whose closing line promises a follow-up action (「接下来我做 X」) while nothing is actually running — no task, monitor, or subagent. To the caller that sentence is simply false. The existing gates cannot see it: stop-gate.js judges whether the USER was asked to act, and this failure asks nothing of the user, so it falls outside that axis entirely.",
@@ -154,7 +206,7 @@
           {
             "type": "command",
             "command": "node \"$HOME/.claude/hooks/prose-choice-gate.js\"",
-            "timeout": 28
+            "timeout": 45
           }
         ],
         "description": "Block a stop that hands the user a set of parallel options as a prose list instead of via AskUserQuestion — the carrier half of CLAUDE.md 'Surface Choices'. ask-recommend-gate structurally cannot fire here (it is PreToolUse on AskUserQuestion, and the whole failure is that the call never happened), and stop-gate correctly passes it, since 'asking the user to decide' is an explicit ok clause in its rubric.",
@@ -178,7 +230,7 @@
           {
             "type": "command",
             "command": "node \"$HOME/.claude/hooks/reverse-assertion-gate.js\"",
-            "timeout": 28
+            "timeout": 45
           }
         ],
         "description": "Block a stop that delivers a reverse assertion (X does not exist / is not authorized / is unavailable / is a dead end) when the reading behind it would look identical were the claim false. Accepting one deletes the checks that should have followed: a positive misjudgment gets caught downstream, a reverse one has no downstream. Real case (2026-08-07): 'this host's SSH key is not authorized' — the actual cause was a non-interactive shell missing SSH_AUTH_SOCK.",
@@ -195,9 +247,63 @@
         "description": "Before stopping, put long-unaccounted-for background shells in front of the agent. From a real incident: three `until ! pgrep -f pytest` loops spun for 15 hours (pgrep -f matched the loop's own command line, so the condition never cleared) while the agent repeatedly announced 'cleanup complete, nothing pending'. stop-gate.js has the right timing but reads only the last assistant message, so it sees zero process facts.",
         "id": "stop:bg-shell-reclaim-check"
       }
+    ],
+    "UserPromptSubmit": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$HOME/.claude/hooks/teammate-reclaim-check.js\"",
+            "timeout": 10
+          }
+        ],
+        "description": "Surface in-process teammates that finished their report but were never reclaimed by the caller — teammates do not self-terminate, so an unreclaimed one silently holds its pane/slot until the session ends. Runs at prompt-submit so the reminder lands before new work starts; see references/background-agent-monitoring.md 'Teammate 生命周期与回收义务'.",
+        "id": "prompt:teammate-reclaim-check"
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "startup|resume",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$HOME/.claude/hooks/teammate-reclaim-check.js\"",
+            "timeout": 10
+          }
+        ],
+        "description": "Same teammate-reclaim surfacing as the UserPromptSubmit wiring, run once at session start/resume so leftovers from a previous session are seen even before the first prompt.",
+        "id": "session-start:teammate-reclaim-check"
+      },
+      {
+        "matcher": "compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$HOME/.claude/scripts/hooks/post-compact-restore.js\"",
+            "timeout": 15
+          }
+        ],
+        "description": "After context compaction, re-inject the active plan/program marker state (active-plan) so a compacted session does not lose track of the plan.md / long-task ledger it was executing.",
+        "id": "session-start:post-compact-restore"
+      }
+    ],
+    "SubagentStop": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$HOME/.claude/hooks/stop-gate.js\"",
+            "timeout": 45
+          }
+        ],
+        "description": "Run the same stop-gate on subagent completion: a subagent that yields with undone work poisons the caller's view just like a main-loop premature stop.",
+        "id": "subagent-stop:stop-gate"
+      }
     ]
   },
-  "model": "claude-opus-4-6[1m]",
+  "model": "claude-fable-5[1m]",
   "enableAllProjectMcpServers": true,
   "statusLine": {
     "type": "command",

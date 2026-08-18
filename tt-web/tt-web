@@ -90,7 +90,7 @@ PY
   echo "$port" > "$PORT_FILE"
 
   for _ in 1 2 3 4 5 6 7 8 9 10; do
-    if curl -fsS "http://$CONNECT_HOST:$port/api/health" >/dev/null 2>&1; then
+    if curl --noproxy '*' -fsS "http://$CONNECT_HOST:$port/api/health" >/dev/null 2>&1; then
       echo "tt-web started: http://$CONNECT_HOST:$port (pid $pid)"
       return 0
     fi
@@ -152,7 +152,7 @@ PY
 refresh_if_stale() {
   local port stale
   port="$(cat "$PORT_FILE" 2>/dev/null || echo "$BASE_PORT")"
-  stale="$(curl -fsS "http://$CONNECT_HOST:$port/api/health?asset_watch=1" 2>/dev/null \
+  stale="$(curl --noproxy '*' -fsS "http://$CONNECT_HOST:$port/api/health?asset_watch=1" 2>/dev/null \
     | "$TT_WEB_PYTHON" -c 'import json,sys; print("1" if json.load(sys.stdin).get("stale") else "0")' 2>/dev/null || echo 0)"
   [ "$stale" = "1" ] || return 0
   if compile_ok; then
@@ -164,12 +164,30 @@ refresh_if_stale() {
   fi
 }
 
+request_fresh_generation() {
+  local port response pending
+  port="$(cat "$PORT_FILE" 2>/dev/null || echo "$BASE_PORT")"
+  if ! response="$(curl --noproxy '*' -fsS "http://$CONNECT_HOST:$port/api/overview?force=1" 2>/dev/null)"; then
+    echo "tt-web: 未能请求最新用量快照；将打开现有数据。请在页面中点 Refresh 重试。" >&2
+    return 0
+  fi
+  pending="$(
+    printf '%s' "$response" \
+      | "$TT_WEB_PYTHON" -c 'import json,sys; sync=(json.load(sys.stdin).get("sync") or {}); print("1" if sync.get("refresh_pending") is True or sync.get("syncing") is True else "0")' 2>/dev/null \
+      || echo 0
+  )"
+  if [ "$pending" != "1" ]; then
+    echo "tt-web: 未能请求最新用量快照；将打开现有数据。请在页面中点 Refresh 重试。" >&2
+  fi
+}
+
 open_dashboard() {
   if ! is_running; then
     start
   else
     refresh_if_stale
   fi
+  request_fresh_generation
   local port
   port="$(cat "$PORT_FILE")"
 

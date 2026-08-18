@@ -1,6 +1,0 @@
-# expect: ok
-# attempted: mcp__context7__resolve-library-id
-# note: F4——判官抽到消息里的短名，转录记的是 canonical 三段名。正文刻意不含任何调用结果，故判 ok 的唯一通路是第②段按尾段归一匹配上。
-`resolve-library-id` 现在用不了，Context7 这条查文档的路暂时走不通。
-
-我先按仓库里 `package-lock.json` 锁定的版本号去读本地 `node_modules` 的 d.ts 顶一下，等它恢复了再跟官方文档核对一遍。

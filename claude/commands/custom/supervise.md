@@ -124,7 +124,7 @@ Bash({ command: "~/.claude/bin/poll-progress.sh <output-file>" })
 - Agent 进程异常退出 / `.output` 数据截断 / 无 session id
 - **Agent stuck**：启动 5 分钟后仍无实质输出
 
-每轮等待之间发一条简短中文状态给用户（"Wrapped agent 仍在执行，已等待 X 分钟"），不要静默。
+每轮等待之间发一条简短中文状态给用户（"Wrapped agent 仍在执行，已等待 X 分钟"），不要静默。这条状态行**必须点名在等什么**（wrapped agent / 哪个后台任务），不能缩成"等待中""下次读数 X 分钟后返回"——supervise 的每一轮等待都是一次停止，而 stop-gate 判官只看你最后那段话：不点名等的对象，「在等自己的后台任务」这条正当理由它无从核实，你会被按无理由停止拦下、被迫重发整轮交付物。
 
 §4 裁决的证据基线永远是 `Read(<output-file>)` 全量——增量轮询（`poll-progress.sh`）只决定『何时该裁决 / 介入』，不充当裁决证据本身。因为 `poll-progress.sh` 每轮都推进 cursor：单轮新增超过回显上限时，超出部分被跳过、在增量模式下永不再现，而 blocked / stop report / verify 证据可能正落其中——只有全量 Read 保证证据完整。`poll-progress.sh` 只读不改源文件，完整记录始终在盘上；context 压缩后恢复 / 排查异常亦用全量 Read。resume 会产生**新的后台任务 = 新 `.output` 文件**，对新文件重新记录路径并从 0 开始轮询。
 

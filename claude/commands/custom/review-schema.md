@@ -56,7 +56,7 @@ description: 审查一份会被本进程之外的消费者读到、且字段名�
 
 ### 2. 审查（每条原则一个 subagent，并行）
 
-判据档的**每条原则各 spawn 一个 `general-purpose-readonly` subagent 并行**审查整个 schema 面，确保每条获得充分注意力。用 readonly 类型是因为 subagent 的契约就是"报发现、不改文件"，而被审对象常是不可变记录——越权写入不可撤销。spawn 时**不传 `name`**——判据见 `~/.claude/references/delegation-policy.md` §Harness transport。
+判据档的**每条原则各 spawn 一个 reviewer 并行**审查整个 schema 面，确保每条获得充分注意力。用 readonly 类型是因为 subagent 的契约就是"报发现、不改文件"，而被审对象常是不可变记录——越权写入不可撤销。通道按 `~/.claude/references/delegation-policy.md` §Transport selection 判；走 in-process 时用 `general-purpose-readonly` 且**不传 `name`**。
 
 每个 subagent 的输入：
 

@@ -21,7 +21,7 @@ description: 审查一份实现 plan.md，逐条对照 plan-review principle 修
 
 主 session 开始前完整读取 `~/.claude/references/plan-review-principles.md` 与 `~/.claude/references/deep-discuss-style.md`。
 
-本 command 的**所有** subagent spawn（原则审查、目标反证、局部反证）一律**不传 `name`**——它们的 findings 都要由主 session 消费，判据见 `~/.claude/references/delegation-policy.md` §Harness transport。
+本 command 的**所有** subagent spawn（原则审查、目标反证、局部反证）通道按 `~/.claude/references/delegation-policy.md` §Transport selection 判；走 in-process 时用 `general-purpose`，且一律**不传 `name`**——它们的 findings 都要由主 session 消费。
 
 **severity 定义（分级只按此定义，不按修复成本）**：
 - **violation** = 某条 principle 的可执行判据（其 flag 条件）被明确命中，且不修会造成该 principle 要防的实质后果；或目标反证给出完整因果链，证明 plan 按字面执行且 verify 全过仍会造成 consumer goal 失败——且该反例指向**缺失或错误的机制/契约**。前者的实质后果**限于 plan 期必须出清的面**：用户面（consumer goal、plan 所声明 verify 的真实性、用户决策权、承诺面/scope——verify 是执行期的验收依据，失真不分层一律出清）、plan 作为交付物的内容边界（scope 溢出、无谓抽象），以及各原则点名、且无法由实施期自决消化的其他实质损害（典型：约束多个执行单元的接口缺口）；修复本身需要用户决策的 finding（高反转成本取舍、无从推导的阈值）同属 plan 期——走「决策」真取舍路径当场问，把人机交互集中在 create-plan、让 execute-plan 免于中途向用户索取决策正是两阶段分工的设计目标（create-plan「风格与取舍」）。后者无法映射现有 principle 时同时记为 principle coverage gap。**原则审查路径的分流**：实质后果不落在上述面上、而修复按 bounded TODO 条目判据属实施期义务的，按 bounded TODO 处置，不判 violation、不触发 plan 重写；目标反证来源的下沉口径更窄，见「目标反证」。（L1/L2/L3 依 `create-plan`「三层产物」。）
@@ -53,7 +53,7 @@ description: 审查一份实现 plan.md，逐条对照 plan-review principle 修
 
 ### 原则审查执行机制（final full / impact-scoped）
 
-将 principles 按 `max-principle-per-subagent` 均匀分组，每组 spawn 一个 general-purpose subagent 并行审查。
+将 principles 按 `max-principle-per-subagent` 均匀分组，每组 spawn 一个 reviewer 并行审查。
 
 每个 subagent 的输入：
 - `~/.claude/references/plan-review-principles.md`（传完整文件——相邻 principle 提供边界上下文，帮助 subagent 避免报告属于其他组的发现；明确告知只应用分配给该 subagent 的那几条 principle。conditional principle 仅在适用范围内生效）

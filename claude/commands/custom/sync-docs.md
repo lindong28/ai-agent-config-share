@@ -97,7 +97,7 @@ docs/ 未初始化的 bootstrap（含无「改了什么」时）：以 repo 现�
 
 1. **侦察**：从「改了什么」+ docs/ 现状确定受影响的文档类型；有改动语境时同时追踪变更前后的身份与语义，把仍依赖旧状态的现役文档及其索引 / cross-ref 纳入审查范围，历史载荷是否保留按目标文档的生命周期语义判断。对每个类型按 `doc-updater` agent 定义中的对齐 lens 表识别取舍点。
 2. **对齐**：存在只能用户回答的取舍（组织方式、粒度、叙事角度等）时，用 `AskUserQuestion` 问用户；剩余决策都能被合理 default 时即对齐充分，无取舍则直接起草。
-3. **起草**：先确认 CWD 是目标 repo，再为每个受影响的文档类型并行 spawn `doc-updater`（输入契约见其 agent 定义），每实例传入：
+3. **起草**：先确认 CWD 是目标 repo，再为每个受影响的文档类型并行起一个起草者（通道按 `~/.claude/references/delegation-policy.md` §Transport selection 判；走 in-process 时用 `doc-updater`，输入契约见其 agent 定义），每实例传入：
    - `type` = 该实例负责的文档类型——并行分工无法从 repo 反推；
    - `context` = 「改了什么」描述 + 对齐结论 + caller 提供的源证据路径 / hash / diff——这些是 caller 独有上下文，不在 repo 里、doc-updater 无从自读；
    - `write_contract` = §0 为该实例全部候选写入（目标类型 + 必需的索引 / cross-ref 联动）解析出的写入路径与允许的 mutation shape——writer 必须在首次写入前拿到完整 gate 结果；
@@ -126,7 +126,7 @@ docs/ 未初始化的 bootstrap（含无「改了什么」时）：以 repo 现�
 
 ### 2.1 审查编排与 coverage gate
 
-两组 review subagent 并行跑独立审查。分工同时受两个维度约束：
+两组 review reviewer 并行跑独立审查（通道按 `~/.claude/references/delegation-policy.md` §Transport selection 判；走 in-process 时用 `general-purpose`）。分工同时受两个维度约束：
 
 | 维度 | 分组约束 | 防止的失真 |
 |---|---|---|

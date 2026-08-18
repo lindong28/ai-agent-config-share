@@ -10,11 +10,17 @@
  *
  * "A turn finished" deliberately reads idle_prompt and NOT the Stop event, even
  * though Stop is the event literally named "Claude finished responding". Hooks
- * matching one event all run in PARALLEL, so a Stop-registered notifier fires
- * before its siblings have ruled: stop-gate.js can exit 2 and force the turn to
- * continue, and ECC's stop-format-typecheck can keep the terminal busy for
- * minutes afterwards. Both produce the same defect — a notification that pulls
- * the user to a tab still visibly working. idle_prompt is emitted by the CLI
+ * in the same matcher group run in PARALLEL (measured 2026-08-10; see the
+ * "同事件多闸的调度关系" section in lib/judge-log.js for the reading and its
+ * scope), so a Stop-registered notifier sharing that group fires before its
+ * siblings have ruled: any of the five judge gates can exit 2 and force the
+ * turn to continue. (A notifier in its own matcher group would be the
+ * cross-group case, which is still unmeasured — so it is not ruled out
+ * either.) That
+ * produces a notification pulling the user to a tab still visibly working.
+ * (A 300s ECC format/typecheck hook used to widen this window to minutes; it
+ * was removed from Stop on 2026-08-10, which shrinks the window but does not
+ * close it.) idle_prompt is emitted by the CLI
  * itself only once nothing is loading, no tool is pending, no /loop is running,
  * and the user has not touched the terminal since the last message, so it
  * cannot fire mid-work no matter what hooks are registered. Its cost is the
@@ -26,14 +32,29 @@
  * that gate can deny the call outright and a parallel notifier would announce a
  * question the user is never shown.
  *
- * Two backends, in priority order:
+ * Three backends:
  *
- *   1. Ghostty (primary): an OSC 9 escape written to the terminal's tty.
- *      Clicking the notification focuses the Ghostty surface that emitted it —
- *      i.e. jumps straight to the tab this session lives in. terminal-notifier
- *      cannot do this (it only foregrounds the app on whatever tab is current).
+ *   0. Mosh relay (always attempted, self-gating): every attention-worthy
+ *      event is offered to agent-desktop-notify, which walks process ancestry
+ *      and relays to the MacBook only when the transport really is mosh (or
+ *      the tmux session is detached). Mosh drops OSC 9, so for mosh users this
+ *      is the only path that works — for questions and permissions as much as
+ *      for turn-end. When it relays, the local terminal-notifier fallback is
+ *      suppressed (the banner already reached the user's machine).
+ *   1. Ghostty (primary for ssh/local): an OSC 9 escape written to the
+ *      terminal's tty. Clicking the notification focuses the Ghostty surface
+ *      that emitted it — i.e. jumps straight to the tab this session lives in.
+ *      terminal-notifier cannot do this (it only foregrounds the app on
+ *      whatever tab is current).
  *   2. terminal-notifier (fallback): for non-Ghostty terminals, or when the
  *      tty can't be located. Guaranteed present by install.sh.
+ *
+ * Every invocation appends (best-effort) one line to
+ * ~/.claude/logs/desktop-notify.log — event, chosen branch, targets, relay
+ * verdict — because hook stderr is not persisted and silent delivery failures
+ * were otherwise undiagnosable. An unwritable log directory or a hard kill of
+ * the hook process still loses the line; the log is evidence when present,
+ * not proof of absence.
  *
  * Over SSH the choice is forced. terminal-notifier would fire on the *remote*
  * host (the SSH target) — invisible to the user sitting at the local terminal.
@@ -69,6 +90,25 @@ const { lastAssistantMessage } = require('./lib/transcript');
 
 const MAX_BODY_LENGTH = 100;
 const ACTIVATE_BUNDLE_ID = 'com.mitchellh.ghostty';
+const TRACE_PATH = path.join(process.env.HOME || '', '.claude', 'logs', 'desktop-notify.log');
+const TRACE_MAX_BYTES = 512 * 1024;
+
+/**
+ * Durable one-line trace per invocation. stderr from hooks is not persisted
+ * anywhere, which made every past delivery failure in this file invisible
+ * until a user complained — the log is the only after-the-fact evidence of
+ * which branch ran and where the escape/relay went. Truncate-at-cap instead
+ * of rotating: this is diagnostic breadcrumb, not an audit trail.
+ */
+function trace(fields) {
+  try {
+    fs.mkdirSync(path.dirname(TRACE_PATH), { recursive: true });
+    try {
+      if (fs.statSync(TRACE_PATH).size > TRACE_MAX_BYTES) fs.truncateSync(TRACE_PATH, 0);
+    } catch {}
+    fs.appendFileSync(TRACE_PATH, `${new Date().toISOString()} ${JSON.stringify(fields)}\n`);
+  } catch {}
+}
 
 /**
  * Extract a short summary from the last assistant message.
@@ -117,7 +157,14 @@ function isTmux() {
   return process.env.TMUX != null;
 }
 
-const DEVICE_FLAGS = fs.constants.O_WRONLY | fs.constants.O_NOCTTY;
+// O_NONBLOCK bounds the one otherwise-unbounded step in this file: opening or
+// writing a tty whose reader is wedged (backpressured pty, hung mosh client)
+// would block the hook synchronously with no timeout, starving the relay that
+// runs after it. Nonblocking turns that into an immediate EAGAIN, which
+// notifyGhostty already treats as delivery failure. The escapes are a few
+// hundred bytes — far under any pty buffer — so a healthy tty never hits a
+// short write.
+const DEVICE_FLAGS = fs.constants.O_WRONLY | fs.constants.O_NOCTTY | fs.constants.O_NONBLOCK;
 
 function isCharDevice(devPath) {
   try {
@@ -262,14 +309,22 @@ function pickTargets() {
  * surface. Returns true on success so the caller can fall back on failure.
  */
 function notifyGhostty(tty, body, viaPassthrough = false) {
+  let fd = null;
   try {
-    const fd = fs.openSync(tty, DEVICE_FLAGS);
-    fs.writeSync(fd, osc9(body, viaPassthrough));
-    fs.closeSync(fd);
-    return true;
+    const seq = osc9(body, viaPassthrough);
+    fd = fs.openSync(tty, DEVICE_FLAGS);
+    // A nonblocking tty can short-write when its output queue is nearly full.
+    // A truncated escape produces no notification, so anything less than the
+    // full sequence is a delivery failure — the caller then falls back.
+    const written = fs.writeSync(fd, seq);
+    return written === Buffer.byteLength(seq);
   } catch (err) {
     log(`[DesktopNotify] OSC9 write failed: ${err.message}`);
     return false;
+  } finally {
+    if (fd !== null) {
+      try { fs.closeSync(fd); } catch {}
+    }
   }
 }
 
@@ -278,14 +333,19 @@ function notifyGhostty(tty, body, viaPassthrough = false) {
  * foregrounds Ghostty; -group replaces same-project notifications instead of
  * stacking them.
  */
-function notifyTerminalNotifier(project, body) {
+function notifyTerminalNotifier(project, body, kind) {
   const result = spawnSync('terminal-notifier', [
     '-title', `Claude Code · ${project}`,
     '-message', body,
     '-sound', 'default',
-    '-group', `claude-${project}`,
+    // Attention notices (🔐/❓ — someone is waiting) get their own group so a
+    // later turn-end notification for the same project cannot evict them from
+    // Notification Center; the relay applies the same split via `kind`.
+    '-group', kind === 'attention' ? `claude-${project}-attn` : `claude-${project}`,
     '-activate', ACTIVATE_BUNDLE_ID,
-  ], { stdio: 'ignore', timeout: 5000 });
+    // 3 s, not 5: the local branch's worst case (relay 4.5 s + findTTY 3 s +
+    // this) must stay inside the Notification hook's 12 s budget.
+  ], { stdio: 'ignore', timeout: 3000 });
 
   if (result.error || result.status !== 0) {
     log(`[DesktopNotify] terminal-notifier failed: ${result.error ? result.error.message : `exit ${result.status}`}`);
@@ -299,27 +359,85 @@ function notifyTerminalNotifier(project, body) {
  * independently proves that the active tmux client descends from mosh-server
  * before contacting the MacBook.
  *
- * The relay's --claude mode builds its own title/body from `cwd` and
- * `last_assistant_message`, so the caller normalizes idle_prompt's payload into
- * that shape rather than forwarding it verbatim — idle_prompt carries neither
- * field's content, and an un-normalized forward would relay an empty body.
+ * The relay's --claude mode prefers a caller-built `body` and falls back to
+ * building one from `cwd` + `last_assistant_message`, so the caller passes the
+ * exact body it rendered locally — question and permission notifications carry
+ * content that exists nowhere in the relay's own inputs.
+ *
+ * Returns a short status string for the trace log; 'sent' means the relay
+ * process accepted the payload, not that a banner was proven on screen.
  */
 function notifyMoshRelay(payload) {
   const executable = path.join(process.env.HOME || '', '.local', 'bin', 'agent-desktop-notify');
   try {
     fs.accessSync(executable, fs.constants.X_OK);
   } catch {
-    return;
+    return 'no-relay-bin';
   }
   const result = spawnSync(executable, ['--claude'], {
     input: payload,
     encoding: 'utf8',
     stdio: ['pipe', 'ignore', 'pipe'],
-    timeout: 8000,
+    // Must undercut the Notification hook's total budget with room for the
+    // caller's own fallback work; the relay's internal ssh ConnectTimeout is
+    // 3 s so a healthy-or-dead answer arrives well inside this.
+    timeout: 4500,
   });
   if (result.error || result.status !== 0) {
     log(`[DesktopNotify] Mosh relay failed: ${result.error ? result.error.message : `exit ${result.status}`}`);
+    return `failed:${result.error ? result.error.message : result.status}`;
   }
+  // Exact line match, not substring: stderr may carry unrelated runtime
+  // warnings, and a future message like "not relayed" must not read as
+  // success. The two verdict markers are a stable contract with notifyClaude.
+  const lines = (result.stderr || '').split('\n').map(l => l.trim());
+  if (lines.includes('relayed')) return 'relayed';
+  if (lines.includes('skipped:not-mosh')) return 'skipped:not-mosh';
+  return `sent:${lines.filter(Boolean).join(' ').slice(0, 120)}`;
+}
+
+// --- Pending-permission stash (read side) ----------------------------------
+// Written by permission-gate.js on its passthrough path; contract (freshness,
+// redaction, best-effort) documented at the write side. Consumed (unlinked)
+// on read so a later unrelated permission_prompt cannot replay stale entries.
+const PENDING_FRESH_MS = 60 * 1000;
+// Naming a single target is a stronger claim than counting: a stale entry
+// whose own prompt was answered can survive (its notification never fired),
+// and if the CURRENT prompt's stash write failed, that survivor would be
+// mis-named as the waiting one. The permission_prompt event fires 6.3–8.1s
+// after the dialog (measured 6/6 against messageIdleNotifThresholdMs=8000),
+// so a genuine match is ≤~10s old; beyond 15s we only claim the count.
+const PENDING_NAME_MS = 15 * 1000;
+const SESSION_ID_RE = /^[A-Za-z0-9-]{8,64}$/;
+
+function readPendingPermissions(sessionId) {
+  if (typeof sessionId !== 'string' || !SESSION_ID_RE.test(sessionId)) return [];
+  const dir = path.join(
+    process.env.HOME || '',
+    '.claude', 'logs', 'pending-permission', sessionId
+  );
+  const entries = [];
+  const now = Date.now();
+  try {
+    for (const name of fs.readdirSync(dir)) {
+      if (!name.endsWith('.json')) continue;
+      const file = path.join(dir, name);
+      try {
+        const e = JSON.parse(fs.readFileSync(file, 'utf8'));
+        if (e && typeof e.ts === 'number' && now - e.ts < PENDING_FRESH_MS && typeof e.tool === 'string') {
+          entries.push(e);
+        }
+      } catch {}
+      // Consume fresh and stale alike so a later unrelated prompt cannot replay.
+      try { fs.unlinkSync(file); } catch {}
+    }
+  } catch {
+    return [];
+  }
+  // Deliberately NO rmdir here: it races a writer's mkdir→write window and a
+  // lost race drops that writer's candidate. Empty per-session dirs are cheap
+  // and bounded by session count; correctness beats tidiness.
+  return entries;
 }
 
 const ATTENTION_MAX = 80;
@@ -386,6 +504,21 @@ function buildBody(input, project, turnEnd) {
   }
 
   if (input.hook_event_name === 'Notification' && input.notification_type === 'permission_prompt') {
+    // Wording asserts only what the stash can prove. No hook event can prove
+    // WHICH dialog is on screen (parallel PermissionRequests, failed writes,
+    // cleaner races — every stronger claim fell to an interleaving in review),
+    // but "a request record X exists from the last 15s" is true in all of
+    // them: entries only come from real passthroughs of this session, and a
+    // record can be missing but never fabricated — so counts are lower
+    // bounds ("至少 N") and the named one is a record, not the newest.
+    const pending = readPendingPermissions(input.session_id);
+    if (pending.length === 1 && Date.now() - pending[0].ts <= PENDING_NAME_MS) {
+      const p = pending[0];
+      return `[${project}] 🔐 等你审批 · 近期请求记录: ${clip(`${p.tool} ${p.target || ''}`.trim(), 60)}`;
+    }
+    if (pending.length >= 1) {
+      return `[${project}] 🔐 等你审批 · 近期至少 ${pending.length} 个请求`;
+    }
     return `[${project}] 🔐 ${clip(input.message) || '等你授权'}`;
   }
 
@@ -400,35 +533,93 @@ function buildBody(input, project, turnEnd) {
  */
 function run(raw) {
   let echoPayload = true;
+  const tr = {
+    env: {
+      tmux: !!process.env.TMUX,
+      ssh_tty: !!process.env.SSH_TTY,
+      ssh_conn: !!process.env.SSH_CONNECTION,
+      term_program: process.env.TERM_PROGRAM || null,
+    },
+  };
   try {
     const input = raw.trim() ? JSON.parse(raw) : {};
     echoPayload = input.tool_name !== 'AskUserQuestion' &&
                   input.hook_event_name !== 'Notification';
 
+    tr.event = input.hook_event_name || null;
+    tr.type = input.notification_type || input.tool_name || null;
+
     const project = getProjectName(input.cwd || process.cwd());
     const turnEnd = isTurnEnd(input) ? turnEndText(input) : null;
     const body = buildBody(input, project, turnEnd);
-    if (body == null) return echoPayload ? raw : '';
-
-    // OSC 9 is the only backend that reaches the user's *local* terminal when
-    // the session isn't purely local: over SSH terminal-notifier would fire on
-    // the remote host, invisible to whoever is sitting at the terminal. So no
-    // terminal-notifier fallback here — on the remote it's worse than nothing.
-    // pickTargets() decides which ttys carry the escape home.
-    if (isSSH() || isTmux()) {
-      const target = pickTargets();
-      if (target) {
-        for (const tty of target.ttys) notifyGhostty(tty, body, target.viaPassthrough);
-      }
-    } else {
-      const tty = isGhostty() ? findTTY() : null;
-      if (!tty || !notifyGhostty(tty, body)) notifyTerminalNotifier(project, body);
+    tr.body = body;
+    if (body == null) {
+      tr.branch = 'not-attention';
+      return echoPayload ? raw : '';
     }
-    if (isTurnEnd(input) && (isSSH() || isTmux())) {
-      notifyMoshRelay(JSON.stringify({ cwd: input.cwd, last_assistant_message: turnEnd }));
+
+    // Ordering is deliberate: the OSC 9 escapes are small nonblocking tty
+    // writes (bounded by the tmux/ps probe timeouts, not by any peer's
+    // read-side behavior) and must never be starved by a slow relay — over
+    // plain ssh they ARE the delivery, and a hung relay eating the hook
+    // budget before them would regress the path that already worked. The relay
+    // then runs UNCONDITIONALLY for every attention-worthy body — not just
+    // turn-end, and not gated on isSSH()/isTmux(). Both former gates lost real
+    // notifications: AskUserQuestion and permission_prompt had no relay at all
+    // (OSC 9 is dropped by mosh, so over the user's standard mosh transport
+    // every question notification vanished), and a Claude launched in a mosh
+    // shell *without* tmux has neither SSH_TTY nor TMUX and was misclassified
+    // as local — its notifications fired on the remote host's own Notification
+    // Center. Whether the mosh hop actually exists is agent-desktop-notify's
+    // isMoshTransport() call — one place, walking real process ancestry — so a
+    // plain-ssh or truly-local session costs one short-lived subprocess and
+    // relays nothing, and no duplicate ever reaches the MacBook. The verdict
+    // gates only the local terminal-notifier fallback: once the MacBook got
+    // the banner, a copy on the remote host's Notification Center is noise.
+    const kind = (input.tool_name === 'AskUserQuestion' ||
+      (input.hook_event_name === 'Notification' && input.notification_type === 'permission_prompt'))
+      ? 'attention' : 'turn-end';
+    tr.kind = kind;
+    const relayPayload = JSON.stringify({
+      cwd: input.cwd,
+      body,
+      kind,
+      last_assistant_message: turnEnd,
+    });
+    if (isSSH() || isTmux()) {
+      tr.branch = 'remote-osc9';
+      const target = pickTargets();
+      let oscDelivered = 0;
+      if (target) {
+        tr.targets = target.ttys;
+        for (const tty of target.ttys) {
+          if (notifyGhostty(tty, body, target.viaPassthrough)) oscDelivered += 1;
+        }
+      }
+      tr.osc_delivered = oscDelivered;
+      tr.relayed = notifyMoshRelay(relayPayload);
+      // No further fallback exists in this corner: with every OSC 9 write
+      // failed (wedged/backpressured client pty — typically a sleeping or
+      // frozen remote viewer) and the relay judging the transport non-mosh,
+      // a remote-host terminal-notifier banner would fire on the wrong
+      // machine. The realistic trigger state means no channel reaches the
+      // user anyway; the trace line turns a silent loss into an evidenced one.
+      if (oscDelivered === 0 && tr.relayed !== 'relayed') tr.undelivered = true;
+    } else {
+      tr.relayed = notifyMoshRelay(relayPayload);
+      const relayDelivered = tr.relayed === 'relayed';
+      tr.branch = relayDelivered ? 'local-suppressed' : 'local';
+      const tty = isGhostty() ? findTTY() : null;
+      tr.targets = tty ? [tty] : [];
+      if (!relayDelivered && (!tty || !notifyGhostty(tty, body))) {
+        notifyTerminalNotifier(project, body, kind);
+      }
     }
   } catch (err) {
+    tr.error = err.message;
     log(`[DesktopNotify] Error: ${err.message}`);
+  } finally {
+    trace(tr);
   }
 
   return echoPayload ? raw : '';

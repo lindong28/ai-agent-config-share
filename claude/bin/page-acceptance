@@ -1,0 +1,444 @@
+#!/usr/bin/env python3
+"""交付一个页面之前，机械核验「你声明的主功能元素，经全部祖先裁剪后仍进入过视口、且已就绪」。
+
+**别把这句读成"用户真的看得见"**——它是几何相交加就绪度，不是可见性：被遮挡、`opacity:0`、
+`visibility:hidden` 的元素照样能通过。准确语义以本文件的 `NOT_COVERED` 与成功输出那句为准。
+
+## 它防的是哪一次失守
+
+一轮交付里 28 个 `<video>` 全在 DOM 中，`.mcard`=28 / `not_synced`=0 / 112 个数值读数
+全部正常——据此宣称页面可用。实际它们被祖先的 `overflow:hidden` 整块裁掉，用户一个也
+看不见；页面自己的 IntersectionObserver 因同一原因永不触发，`src` 从未挂上。**元素计数
+在"渲染正常"与"全被裁掉"两种情况下取值相同**，所以它不是证据。
+
+## 为什么必须由调用方声明预期（--expect）
+
+探针不猜"什么算坏"。折叠区、未打开的 modal、虚拟列表、合法懒加载的元素都"存在但不可见"，
+若由探针自行判定就会大量误报。改为：**你先写出这一页的主功能元素与预期条数**，探针只报
+声明与实测之差。这一步同时强制补上那次失守的根因——当时的验收清单来自"我这轮改了什么"
+（指标绑定），而不是"这一页是干什么的"（浏览评测集＝看视频）。
+
+## 读数的确切含义（字段名即测法，不用总括词）
+
+- `ever_intersected`：滚动扫描全程，该元素**经全部祖先裁剪后**是否与视口有过**面积非零**的
+  交集（取 `intersectionRect` 的宽高俱 > 0，不是只看 `isIntersecting`——按 W3C 规范，边缘
+  相接或零面积目标时它仍可为 true）。不是 `display`/宽高自判：后者对上述失守假通过。
+- `ready_ok`：媒体元素的 `readyState >= 你声明的阈值`。
+- `errored`：媒体 `error` 非空。
+
+**不覆盖**的完整清单与各项归属见源码里的 `NOT_COVERED` / `NOT_COVERED_OWNERS`——
+它是**唯一定义处**，文本输出与 `--json` 都从它渲染，所以改边界只改那一处。
+本 docstring 不进 `--help`，别在这里再抄一份清单：抄了就会漂，而漂了没人看得见。
+简述：几何与就绪度之外的东西一概不管，其中**关系层对齐**与**内容对读者有没有用**归
+`web-ui-observation.md`、**多状态真实使用**归 `test-ux`。
+非零退出只表示「**被声明的**元素在**被声明的**状态下未达声明计数」，不表示"页面有问题"。
+
+## 副作用与适用边界
+
+**本探针不是惰性观察**：它会滚动，因而触发懒加载、自动播放与埋点。只对本地或明示可打扰
+的实例运行，**不要对生产环境运行**（交付的正是生产 URL 时，改为如实写降级声明）。
+每次用一次性 session，跑完销毁；动作面只有滚动，不点击、不输入、不导航。
+
+## 三态：`unresolved` 不是"失败"的别名
+
+- **0 通过**：声明的每一条都达标。
+- **1 失败**：出现 `error`，或**几何量**（`found` / `ever_intersected`）短缺且读数已不再变化——
+  扫描与 reach 都走完之后，布局稳定了它就不会自己变好，缺了即终局。
+- **3 unresolved**：只有**就绪量**（`ready_ok`）短缺而预算耗尽，或滚动高度始终未稳。就绪度是会
+  推进的量，短缺只说明"还没到"，**不能读成坏**；提高 `--settle-ms` / `--max-settle-polls` 重跑。
+  把这两类混成一个码，"慢"与"坏"就同形了——本探针存在的理由正是不让两种结局同形。
+- **2 仪器故障**：打开失败、eval 失败、读数不可解析、读数与声明错位、agent-browser 超时、
+  `--inject-css` 未生效。**与页面读数彻底分开**——探针坏了不能长得像"页面没问题"。
+
+## 已知不覆盖的到达面
+
+滚动扫描走顶层窗口，扫完再对未见到的声明元素逐个 `scrollIntoView`（它会滚动全部祖先滚动
+容器，因而覆盖内部 `overflow:auto` 面板与横向滚动区）。**虚拟列表中尚未渲染的项仍到不了**，
+这类页面的读数不适用。
+
+用法：
+    page-acceptance <url> --expect 'video=28@ready>=2' [--expect '.mcard=28'] \
+        [--settle-ms 800] [--max-scroll-steps 60] [--inject-css '<css>'] [--json]
+
+`--inject-css` 供阳性对照用：把已知致病的 CSS 临时注入同一页面，探针须转红。
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import re
+import shutil
+import subprocess
+import sys
+import time
+import uuid
+
+class ProbeError(RuntimeError):
+    """探针自身没能取到读数——与"取到读数且判失败"必须分开，不得同形。"""
+
+
+EXPECT_RE = re.compile(r"^(?P<sel>.+?)=(?P<count>\d+)(?:@ready>=(?P<ready>\d))?$")
+
+# 能力边界只在这里定义一次，两种输出模式都从它渲染。
+# 先前它被抄成三份（模块 docstring、文本输出、以及 --json 分支里干脆没有），
+# 于是"改了边界"与"使用者看得到新边界"是两件事：JSON 消费者在探针全绿时什么都读不到，
+# 而 docstring 不进 --help。一份数据 + 两个渲染，是让这两件事重新变成一件事的最小办法。
+NOT_COVERED = (
+    "遮挡", "透明度", "visibility", "可读性", "可操作性",
+    "感知质量（口型/声音/美感）", "关系层对齐", "多状态真实使用", "内容对读者有没有用",
+)
+NOT_COVERED_OWNERS = {
+    "关系层对齐与内容": "web-ui-observation.md",
+    "多状态真实使用": "test-ux",
+}
+
+# 每次 eval 都必须短：一次长 eval（内部滚动 + sleep）会 wedge agent-browser 的 daemon
+# ——实测在这个 28 播放器的页面上复现（EAGAIN os error 35，与仓内既有的长任务卡死同族）。
+# 因此滚动与等待都由 Python 侧驱动，浏览器里每次只做一件立刻返回的事。
+
+INSTALL_JS = """
+(() => {
+  const specs = SPECS;
+  window.__pa = window.__pa || {};
+  window.__pa.seen = new WeakSet();
+  window.__pa.specs = specs;
+  window.__pa.io = new IntersectionObserver((es) => {
+    // isIntersecting 在边缘相接或目标零面积时仍可为 true（W3C IntersectionObserver），
+    // 所以判据取交集矩形的实际面积 > 0——这正是旧判据丢掉的「非退化」那一半。
+    for (const e of es) {
+      const r = e.intersectionRect;
+      if (e.isIntersecting && r && r.width > 0 && r.height > 0) window.__pa.seen.add(e.target);
+    }
+  });
+  window.__pa.observe = () => {
+    let n = 0;
+    for (const s of specs) for (const el of document.querySelectorAll(s.sel)) {
+      window.__pa.io.observe(el); n++;
+    }
+    return n;
+  };
+  return JSON.stringify({observed: window.__pa.observe()});
+})()
+"""
+
+STEP_JS = """
+(() => {
+  window.scrollTo(0, Y);
+  window.__pa.observe();
+  return JSON.stringify({h: document.body.scrollHeight, y: window.scrollY,
+                         vh: window.innerHeight});
+})()
+"""
+
+REACH_JS = """
+(() => {
+  // 顶层滚动到不了的地方：内部 overflow 容器、横向滚动区。scrollIntoView 会滚动
+  // 全部祖先滚动容器，因此对"主功能在内滚容器里"的页面补上覆盖；虚拟列表中尚未
+  // 渲染的项仍然到不了，那属于本探针明示不覆盖的范围。
+  let touched = 0;
+  for (const s of window.__pa.specs) {
+    for (const el of document.querySelectorAll(s.sel)) {
+      if (!window.__pa.seen.has(el)) {
+        el.scrollIntoView({block: 'center', inline: 'center'});
+        window.__pa.io.observe(el);
+        touched++;
+      }
+    }
+  }
+  return JSON.stringify({touched});
+})()
+"""
+
+SNAPSHOT_JS = """
+(() => {
+  const rows = window.__pa.specs.map(s => {
+    const els = [...document.querySelectorAll(s.sel)];
+    return {
+      sel: s.sel,
+      found: els.length,
+      ever_intersected: els.filter(e => window.__pa.seen.has(e)).length,
+      media_capable: els.filter(e => typeof e.readyState === 'number').length,
+      ready_ok: s.ready === null ? null
+        : els.filter(e => typeof e.readyState === 'number' && e.readyState >= s.ready).length,
+      errored: els.filter(e => e && e.error).length,
+    };
+  });
+  return JSON.stringify({rows, doc_height: document.body.scrollHeight});
+})()
+"""
+
+
+def parse_expect(raw: str) -> dict:
+    m = EXPECT_RE.match(raw.strip())
+    if not m:
+        raise SystemExit(
+            f"--expect 格式错误: {raw!r}\n"
+            "期望形如 'video=28@ready>=2' 或 '.mcard=28'（ready 阈值仅对媒体元素有意义）"
+        )
+    count = int(m.group("count"))
+    ready = int(m.group("ready")) if m.group("ready") is not None else None
+    # count=0 是空洞断言：零元素的页面照样"通过"，而这正是本探针要挡的失守形态
+    if count < 1:
+        raise SystemExit(f"--expect 的预期条数必须 ≥1（拿到 {raw!r}）："
+                         "声明 0 条等于没有断言，任何页面都会通过")
+    # readyState 的值域是 0..4；>=0 恒真、>=5 恒假，两者都让读数失去区分度
+    if ready is not None and not (1 <= ready <= 4):
+        raise SystemExit(f"--expect 的 ready 阈值须在 1..4（拿到 {raw!r}）："
+                         ">=0 恒真、>4 恒假，都不构成判据")
+    return {"sel": m.group("sel"), "count": count, "ready": ready}
+
+
+def run(cmd: list[str], timeout: int = 180) -> subprocess.CompletedProcess:
+    return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(
+        description="核验被声明的主功能元素经祖先裁剪后仍进入过视口且达到就绪阈值"
+                    "（不等于用户可见：遮挡 / 透明度 / visibility 不在覆盖范围）")
+    ap.add_argument("url")
+    ap.add_argument("--expect", action="append", required=True,
+                    help="'<css选择器>=<预期条数>[@ready>=<readyState阈值>]'，可重复")
+    ap.add_argument("--settle-ms", type=int, default=800)
+    ap.add_argument("--max-scroll-steps", type=int, default=60)
+    ap.add_argument("--max-settle-polls", type=int, default=8,
+                    help="就绪读数的最多轮询次数；耗尽仍未达标且无 error → unresolved（退出 3）")
+    ap.add_argument("--inject-css", default=None,
+                    help="临时注入 CSS（阳性对照用；不改动仓库文件）")
+    ap.add_argument("--json", action="store_true")
+    args = ap.parse_args()
+
+    if shutil.which("agent-browser") is None:
+        print("page-acceptance: 需要 agent-browser，未找到", file=sys.stderr)
+        return 2
+
+    specs = [parse_expect(e) for e in args.expect]
+    session = f"page-acceptance-{uuid.uuid4().hex[:8]}"
+
+    try:
+        opened = run(["agent-browser", "--session", session, "open", args.url])
+        if opened.returncode != 0:
+            print(f"page-acceptance: 打开失败 {args.url}\n{opened.stderr.strip()[:500]}",
+                  file=sys.stderr)
+            return 2
+
+        if args.inject_css:
+            css = json.dumps(args.inject_css)
+            inject = (f"(()=>{{const s=document.createElement('style');"
+                      f"s.setAttribute('data-page-acceptance','1');s.textContent={css};"
+                      f"document.head.appendChild(s);"
+                      f"return JSON.stringify({{injected:"
+                      f"document.querySelectorAll('style[data-page-acceptance]').length}});}})()")
+            proc = run(["agent-browser", "--session", session, "eval", inject], timeout=90)
+            value = _extract_json(proc.stdout) if proc.returncode == 0 else None
+            # 注入失败却继续测，等于拿原页面冒充对照——对照装置坏掉会被读成"探针有区分度"
+            if not value or value.get("injected", 0) < 1:
+                print("page-acceptance: --inject-css 未生效，拒绝把原页面当作对照",
+                      file=sys.stderr)
+                return 2
+
+        settle_s = args.settle_ms / 1000.0
+
+        def short_eval(js: str, label: str) -> dict:
+            proc = run(["agent-browser", "--session", session, "eval", js], timeout=90)
+            if proc.returncode != 0:
+                raise ProbeError(f"{label} 失败\n{proc.stderr.strip()[:400]}")
+            value = _extract_json(proc.stdout)
+            if value is None:
+                raise ProbeError(f"{label} 读数无法解析\n{proc.stdout.strip()[:400]}")
+            return value
+
+        short_eval(INSTALL_JS.replace("SPECS", json.dumps(specs)), "安装观察器")
+
+        # 滚动扫描：Python 侧驱动、每步一次短 eval，浏览器里从不长时间阻塞
+        y, steps, last_h, stable_h = 0, 0, -1, 0
+        scroll_stable = False
+        while steps < args.max_scroll_steps:
+            state = short_eval(STEP_JS.replace("Y", str(y)), "滚动一步")
+            time.sleep(settle_s)
+            h, vh = int(state["h"]), int(state["vh"])
+            stable_h = stable_h + 1 if h == last_h else 0
+            last_h = h
+            if y >= h - vh:
+                if stable_h >= 2:
+                    scroll_stable = True
+                    break
+            y = min(y + max(200, int(vh * 0.8)), max(0, h - vh))
+            steps += 1
+
+        # 顶层滚动到不了的元素，再用 scrollIntoView 逐个够一次
+        short_eval(REACH_JS, "补够内滚容器里的元素")
+        time.sleep(settle_s)
+
+        # 收敛判定：轮询到"全部达标"或"出现 error"才是终局；预算内既没达标也没报错，
+        # 是 unresolved（退出 3），不并入失败——否则"慢"与"坏"同形。
+        specs_by_sel = {sp["sel"]: sp for sp in specs}
+
+        # 终局判定要分开两种量，否则"慢"与"坏"必然同形：
+        #   几何（found / ever_intersected）——扫描与 reach 走完、读数不再变化后，
+        #     再等也不会自己变好，缺了就是终局的坏。
+        #   就绪（ready_ok）——是会推进的量，短缺时只能继续等；预算耗尽仍短缺，
+        #     诚实的说法是"没测出来"（unresolved），不是"坏"。
+        def verdict(rows: list, stable: bool) -> str:
+            geometry_short = ready_short = False
+            for row in rows:
+                spec = specs_by_sel[row["sel"]]
+                if row.get("errored"):
+                    return "fail"
+                if row.get("found", 0) < spec["count"] or \
+                        row.get("ever_intersected", 0) < spec["count"]:
+                    geometry_short = True
+                if spec["ready"] is not None and (row.get("ready_ok") or 0) < spec["count"]:
+                    ready_short = True
+            if not geometry_short and not ready_short:
+                return "pass"
+            if geometry_short and stable:
+                return "fail"
+            return "pending"
+
+        snap = short_eval(SNAPSHOT_JS, "读数快照")
+        # 先校验读数与声明是否对得上：声明错误（如给非媒体元素定 ready 阈值）若不在这里
+        # 拦下，收敛判定会永远不成立，于是被掩盖成 unresolved——两种不同的坏同形。
+        validate_rows(specs, snap["rows"])
+        polls, prev_rows = 1, None
+        state = verdict(snap["rows"], stable=False)
+        while state == "pending" and polls < args.max_settle_polls:
+            time.sleep(settle_s)
+            prev_rows = snap["rows"]
+            snap = short_eval(SNAPSHOT_JS, f"读数快照复测 #{polls}")
+            polls += 1
+            state = verdict(snap["rows"], stable=(snap["rows"] == prev_rows))
+        resolved = state in ("pass", "fail")
+        payload = {
+            "rows": snap["rows"],
+            "doc_height": snap["doc_height"],
+            "steps": steps,
+            "polls": polls,
+            "scroll_stable": scroll_stable,
+            "resolved": resolved,
+        }
+    except ProbeError as exc:
+        print(f"page-acceptance: {exc}", file=sys.stderr)
+        return 2
+    finally:
+        closed = run(["agent-browser", "--session", session, "close"], timeout=60)
+        if closed.returncode != 0:  # 只关自己这一个 session：--all 会关掉并发任务的浏览器
+            print(f"page-acceptance: 清理 session {session} 失败（rc={closed.returncode}）"
+                  f"，可能留下常驻浏览器：{closed.stderr.strip()[:200]}", file=sys.stderr)
+
+    return report(args, payload)
+
+
+def _extract_json(stdout: str) -> dict | None:
+    """agent-browser 把 eval 结果作为带引号的 JSON 字符串回显。"""
+    text = stdout.strip()
+    for candidate in (text, text.strip('"')):
+        try:
+            value = json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(value, dict):
+            return value
+        if isinstance(value, str):
+            try:
+                inner = json.loads(value)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(inner, dict):
+                return inner
+    return None
+
+
+ROW_FIELDS = ("sel", "found", "ever_intersected", "ready_ok", "errored",
+              "media_capable")
+
+
+def validate_rows(specs: list[dict], rows: list) -> None:
+    """读数必须与声明逐条对齐。缺行/错序/缺字段是**仪器故障**，不是验收失败——
+    两者若共用一个退出码，坏掉的探针会被读成"页面没问题"或"页面有问题"。"""
+    if not isinstance(rows, list) or len(rows) != len(specs):
+        raise ProbeError(f"读数行数 {len(rows) if isinstance(rows, list) else '?'} "
+                         f"与声明数 {len(specs)} 不符")
+    for spec, row in zip(specs, rows):
+        if not isinstance(row, dict):
+            raise ProbeError(f"读数行不是对象：{row!r}")
+        missing = [f for f in ROW_FIELDS if f not in row]
+        if missing:
+            raise ProbeError(f"读数缺字段 {missing}（{row.get('sel')!r}）")
+        if row["sel"] != spec["sel"]:
+            raise ProbeError(f"读数与声明错位：期望 {spec['sel']!r}，拿到 {row['sel']!r}")
+        # ready_ok 为 0 与"这个选择器根本不是媒体元素"长得一样——后者是声明错误，
+        # 必须报仪器故障；否则收敛判定永不成立，被掩盖成 unresolved。
+        if spec["ready"] is not None and (
+                row["ready_ok"] is None or (row["found"] > 0 and row["media_capable"] == 0)):
+            raise ProbeError(
+                f"{spec['sel']!r} 声明了 ready>={spec['ready']}，但匹配到的 {row['found']} 个"
+                "元素没有一个具备 readyState：该选择器不是媒体元素，这个阈值无从核验")
+
+
+def report(args, payload: dict) -> int:
+    rows = payload.get("rows") or []
+    # 未收敛（预算内既没达标也没报错）或滚动高度始终未稳，都是"没测出来"，不是"测出坏了"
+    unstable = not payload.get("resolved") or not payload.get("scroll_stable")
+    specs = [parse_expect(e) for e in args.expect]
+    try:
+        validate_rows(specs, rows)  # 主路径已在收敛判定前校验过；这里兜住其它入口
+    except ProbeError as exc:
+        print(f"page-acceptance: {exc}", file=sys.stderr)
+        return 2
+    failures = []
+    for spec, row in zip(specs, rows):
+        want = spec["count"]
+        if row["found"] != want:
+            failures.append(f"{row['sel']}: found {row['found']} ≠ 声明 {want}")
+        if row["ever_intersected"] != want:
+            failures.append(
+                f"{row['sel']}: ever_intersected {row['ever_intersected']}/{want}")
+        if spec["ready"] is not None and row["ready_ok"] != want:
+            failures.append(
+                f"{row['sel']}: ready>={spec['ready']} 只有 {row['ready_ok']}/{want}")
+        if row["errored"]:
+            failures.append(f"{row['sel']}: {row['errored']} 个元素报 error")
+
+    if args.json:
+        print(json.dumps({
+            "url": args.url, "expect": args.expect, "failures": failures,
+            "unstable": unstable, "not_covered": NOT_COVERED,
+            "not_covered_owners": NOT_COVERED_OWNERS, **payload,
+        }, ensure_ascii=False, indent=1))
+    else:
+        print(f"page-acceptance {args.url}")
+        for e in args.expect:
+            print(f"  --expect '{e}'")
+        for row in rows:
+            ready = "-" if row["ready_ok"] is None else row["ready_ok"]
+            print(f"  → {row['sel']}: found {row['found']}, "
+                  f"ever_intersected {row['ever_intersected']}, "
+                  f"ready_ok {ready}, errored {row['errored']}")
+        print("  不覆盖：" + " / ".join(NOT_COVERED))
+        print("  ↑ " + "；".join(f"{k} 归 {v}" for k, v in NOT_COVERED_OWNERS.items())
+              + "。本探针全绿不代表页面读得懂。")
+        if unstable:
+            why = ("滚动高度始终未稳定" if not payload.get("scroll_stable")
+                   else f"轮询 {payload.get('polls')} 次仍未达标且无 error")
+            print(f"  ⚠ unresolved（{why}）——没测出来，既非通过也非失败；"
+                  "可增大 --settle-ms / --max-settle-polls 后重跑")
+        elif failures:
+            print("  ❌ " + "；".join(failures))
+        else:
+            print("  ✅ 声明的元素全部经祖先裁剪后仍进入过视口，且达到声明的就绪阈值")
+
+    if unstable:
+        return 3
+    return 1 if failures else 0
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except subprocess.TimeoutExpired:
+        # 这是探针/daemon 自己超时（仪器故障），与"页面未收敛"是两件事，不共用退出码
+        print("page-acceptance: agent-browser 调用超时——仪器故障（退出 2），"
+              "不是页面读数", file=sys.stderr)
+        sys.exit(2)

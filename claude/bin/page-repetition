@@ -1,0 +1,372 @@
+#!/usr/bin/env python3
+"""交付一个页面之前，机械量出「同一段文字被复制了多少遍、占了正文多少篇幅」。
+
+## 它补的是哪个盲区
+
+`web-ui-observation.md`「交付前的最低证据」第一条要求**以读者身份读一遍**，并把
+「同一句话重复多遍」列为常见失败形状。但**那个方法找不到这一种**：读者读一屏觉得没问题，
+问题恰恰是这一屏被复制了 14 遍；要在几十屏里察觉"这句我见过 391 次"，通读做不到。
+
+实测出处：一页 105,690 字里 74.2% 是重复文字，同一句免责最多出现 112 次。此前对该页做过
+元素计数、盒子测量、`innerText.length`、外链状态码、sha256——**全部通过**。后来据第一条
+逐屏读过并截图、还按读者路径重写了整页，再量仍有 55.9%——**通读两次都没读出它**。
+
+## 它量什么、不量什么
+
+**量**：字面重复。两种粒度都数，因为它们各自漏掉对方——
+- **整行**：innerText 的一行（浏览器已按块级边界断好）
+- **句 / 子句**：行内按句末**与子句**标点（含冒号、逗号）再切一次。只切句末不够：
+  `第 3 条：<同一句免责>` 这种**带唯一前缀**的重复整行唯一、整句也唯一——实测 20 行
+  只因序号不同，整行粒度报"最多重复 1 次 / 0%"，切到子句才报出 20 次 / 95%。
+
+**不量**：同义反复、废话、术语黑话、层级混乱、答案藏得深。那些仍归 `web-ui-observation.md`
+的通读。**读数干净不等于这一页的字对读者有用。**
+
+## 三件事必须分得开，否则这件仪器不如没有
+
+1. **没有重复** —— 读到了目标页面的正文，数出来确实没有。
+2. **没读到目标页面** —— 登录页 / 错误页 / 内容在 iframe 里 / 懒加载没跑完。此时任何计数
+   都会得到零或偏低，而零看起来像很干净。**一律不报读数**，报未核实（退出 2）。
+   正文非空**不构成**读到了目标：`Sign in to continue` 也非空。所以要么用 `--expect-text`
+   声明目标页面上必然出现的一段字，要么接受输出里那句"未声明目标标记"——**后者的 exit 0
+   不是通过信号**。
+3. **未判定** —— 读数产出了，但没人声明什么算过。不给 `--max-repeat` 时就是这一态；
+   它退出 0，**而 0 在这里只表示"读数已产出"**，不表示页面没问题。
+
+## 退出码
+
+- `0` 读数已产出。**同时**声明了 `--max-repeat` 与 `--expect-text` 且未超 → 通过；
+  缺任一个 → **未判定**（不是通过）
+- `1` 两者都声明了、身份也对上了，而至少一个单元重复超过上限。**身份没确认时永远不是 1**——
+  读到的可能不是目标页，把它的重复算成目标超限同样是错的归因
+- `2` 仪器故障 / 未核实：打开失败、eval 失败、读数不可解析、正文为空、
+  `--expect-text` 没命中、滚动未收敛
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import re
+import shutil
+import subprocess
+import sys
+import uuid
+from collections import Counter
+
+LINE_SPLIT = re.compile(r"\n+")
+# 切分点含**句末标点与子句标点**（含冒号、逗号）。只切句末不够：评审给的反例
+# `第 3 条：<同一句免责>` 整行唯一、整句也唯一，前缀不切掉就整批漏掉。
+# 切完仍带标点，避免"同一句去掉句号后与另一句相同"的假重复。
+SENT_SPLIT = re.compile(r"(?<=[。！？；：，!?;:,])\s*")
+WS = re.compile(r"\s+")
+
+
+def normalize(s: str) -> str:
+    return WS.sub(" ", s).strip()
+
+
+def units_of(text: str, min_chars: int) -> tuple[list[str], list[str], dict[str, int]]:
+    """整行与句两种粒度，外加每个单元的**首现行号**。
+
+    行号是低成本的粗定位：动态生成或 i18n 拼接的文字在源码里 grep 不到，而"页面正文第几行"
+    总能把人带到现场。逐 DOM 取位置更准，但要遍历整棵树，代价与收益不成比例。
+    """
+    # 用 splitlines() 的**物理行号**：`\n+` 会把连续空行并成一个分隔符，于是行号随
+    # 空白段累积漂移（实测正文实际在第 4 行、却记成第 3 行），把人带到错的位置。
+    lines: list[str] = []
+    sents: list[str] = []
+    first_line: dict[str, int] = {}
+    for idx, physical in enumerate(text.splitlines(), start=1):
+        line = normalize(physical)
+        if len(line) < min_chars:
+            continue
+        lines.append(line)
+        first_line.setdefault(line, idx)
+        for s in SENT_SPLIT.split(line):
+            s = normalize(s)
+            if len(s) >= min_chars:
+                sents.append(s)
+                first_line.setdefault(s, idx)
+    return lines, sents, first_line
+
+
+def tally(units: list[str], text_len: int) -> dict:
+    counts = Counter(units)
+    # 冗余字数＝每个重复单元**多出来的那几遍**所占的字数。把第一遍也算进去会系统性高估。
+    redundant = sum((n - 1) * len(u) for u, n in counts.items() if n > 1)
+    covered = sum(len(u) for u in units)
+    return {
+        "worst": max(counts.values(), default=1),
+        "redundant_chars": redundant,
+        # 分子分母同口径：都用**进入统计的**归一化字符数。用原始 innerText 当分母会把
+        # 换行、空白与被 min_chars 排除的短单元也算进去，得到一个偏小且不可跨页比较的数。
+        "share_of_counted": (redundant / covered) if covered else 0.0,
+        "counted_chars": covered,
+        # 覆盖率单独报：它说明这个占比是在多大一片正文上算出来的。
+        "coverage_of_text": (covered / text_len) if text_len else 0.0,
+        "top": counts.most_common(),
+    }
+
+
+def run(cmd: list[str], timeout: int = 120) -> subprocess.CompletedProcess:
+    return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+
+
+def unwrap(stdout: str) -> str:
+    for line in reversed(stdout.strip().splitlines()):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            value = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        return value if isinstance(value, str) else json.dumps(value)
+    raise ValueError("agent-browser 没有回显可解析的 eval 结果")
+
+
+PROBE_JS = """(() => {
+  %s
+  window.scrollTo(0, document.documentElement.scrollHeight);
+  // 只滚 window 不够：内容由 overflow:auto 的容器滚动触发时，两次快照会一模一样而被判收敛。
+  document.querySelectorAll('*').forEach((el) => {
+    if (el.scrollHeight > el.clientHeight + 1) el.scrollTop = el.scrollHeight;
+  });
+  const details = [...document.querySelectorAll('details')];
+  return JSON.stringify({
+    href: location.href,
+    text: document.body ? document.body.innerText : "",
+    collapsed: details.filter((d) => !d.open).length,
+    detailsTotal: details.length,
+    scrollH: document.documentElement.scrollHeight,
+    frames: document.querySelectorAll('iframe').length,
+  });
+})()"""
+
+EXPAND = "document.querySelectorAll('details').forEach((d) => { d.open = true; });"
+
+
+def snapshot(session: str, expand: bool) -> dict:
+    proc = run(["agent-browser", "--session", session, "eval",
+                PROBE_JS % (EXPAND if expand else "")], timeout=120)
+    if proc.returncode != 0:
+        raise RuntimeError(f"读取正文失败：{proc.stderr.strip() or proc.stdout.strip()}")
+    data = json.loads(unwrap(proc.stdout))
+    if not isinstance(data, dict) or not isinstance(data.get("text"), str):
+        raise ValueError("读数形状不对——不是预期的对象")
+    return data
+
+
+def collect(session: str, url: str, expand: bool, settle_ms: int, max_rounds: int) -> dict:
+    opened = run(["agent-browser", "--session", session, "open", url])
+    if opened.returncode != 0:
+        raise RuntimeError(f"打开页面失败：{opened.stderr.strip() or opened.stdout.strip()}")
+
+    # 滚到底 → 等 → 再读，直到正文长度与文档高度都不再变。只滚一次时，懒加载、无限滚动、
+    # 虚拟列表的正文根本没进 DOM，而它同样会被复制——漏掉它会系统性低估。
+    prev = None
+    converged = False
+    data: dict = {}
+    for _ in range(max_rounds):
+        data = snapshot(session, expand)
+        # 比内容摘要，不只比长度：虚拟列表把 AAAA 换成等长的 BBBB 时长度与高度都不变，
+        # 只看长度会误判成已收敛，而正文其实还在换。
+        key = (hashlib.sha256(data["text"].encode()).hexdigest(), data.get("scrollH"))
+        if key == prev:
+            converged = True
+            break
+        prev = key
+        wait = run(["agent-browser", "--session", session, "eval",
+                    f"new Promise(r=>setTimeout(r,{settle_ms}))"], timeout=90)
+        if wait.returncode != 0:
+            raise RuntimeError(f"等待页面稳定失败：{wait.stderr.strip()}")
+    data["converged"] = converged
+    data["rounds"] = max_rounds
+    return data
+
+
+def verdict(worst: int, max_repeat: int | None, expect_hit: bool | None) -> str:
+    """唯一的裁决处。人类输出、JSON 与退出码都从这里取，不各算一份。
+
+    身份未确认时**任何**裁决都不成立——不只是不能报通过。读到的可能根本不是目标页面，
+    把它的重复算成目标「超限」同样是错的归因，而 exit 1 会让上游据此动手。
+    """
+    if not expect_hit or max_repeat is None:
+        return "undecided"
+    return "over" if worst > max_repeat else "pass"
+
+
+EXIT_FOR = {"over": 1, "pass": 0, "undecided": 0}
+
+
+def render(url: str, page: dict, line_stats: dict, sent_stats: dict,
+           top_n: int, min_chars: int, expanded: bool,
+           max_repeat: int | None, expect_hit: bool | None,
+           first_line: dict[str, int] | None = None) -> tuple[str, int]:
+    worst = max(line_stats["worst"], sent_stats["worst"])
+    # 两个粒度的占比都报：只报其一而 worst 取两者最大值，会拼出一个没有单一口径的首行
+    # （实测：10 条完全相同的长行、其子句均短于门槛 → "最多重复 10 次 · 0.0%"）。
+    shares = (f"字面重复占已统计正文 整行 {line_stats['share_of_counted'] * 100:.1f}%"
+              f" / 子句 {sent_stats['share_of_counted'] * 100:.1f}%")
+    status = verdict(worst, max_repeat, expect_hit)
+
+    lines = []
+    # 首行就是结论，且四态里的哪一态写在最前——读者跑这条命令是为了回答"要不要动手"。
+    if status == "undecided":
+        why = ("没有声明 --max-repeat，所以本探针不判过不过" if max_repeat is None
+               else "声明了上限，但**没有确认读到的是目标页面**（缺 --expect-text）")
+        lines.append(f"未判定 · 最多重复 {worst} 次 · {shares}（{why}）")
+    elif status == "over":
+        lines.append(f"超限 · 最多重复 {worst} 次 > 声明的 {max_repeat} 次 · {shares}")
+    else:
+        lines.append(f"通过 · 最多重复 {worst} 次 ≤ 声明的 {max_repeat} 次 · {shares}")
+    lines.append(f"  {page.get('href') or url}")
+    if (page.get("href") or url) != url:
+        lines.append(f"  ⚠ 与请求的 URL 不同（请求 {url}）——确认这是你要量的那一页")
+    lines.append("")
+
+    for label, stats in (("整行完全相同", line_stats), ("行内同一句", sent_stats)):
+        rep = [(u, n) for u, n in stats["top"] if n > 1]
+        if not rep:
+            lines.append(f"{label}：没有重复")
+            lines.append("")
+            continue
+        lines.append(f"{label}（≥{min_chars} 字，共 {len(rep)} 个重复单元）")
+        for unit, n in rep[:top_n]:
+            shown = unit if len(unit) <= 66 else unit[:64] + "…"
+            at = (first_line or {}).get(unit)
+            # 首现行号让长单元被截断后仍能定位——否则几条同前缀的长句在输出里长得一样。
+            lines.append(f"  {n:>4} ×  {shown}" + (f"   [首现第 {at} 行]" if at else ""))
+        if len(rep) > top_n:
+            lines.append(f"  （另有 {len(rep) - top_n} 个未列出，用 --top 调）")
+        lines.append("")
+
+    unread = []
+    if not expanded and page.get("collapsed"):
+        unread.append(f"{page['collapsed']} 个折叠区未展开（共 {page.get('detailsTotal', 0)} 个 "
+                      f"<details>；读者默认也看不到。要计入加 --expand-details）")
+    if page.get("frames"):
+        unread.append(f"{page['frames']} 个 iframe 的内容（本探针只读主文档）")
+    if expect_hit is None:
+        unread.append("**没有声明 --expect-text**，所以无法确认读到的就是目标页面"
+                      "（登录页 / 错误页的正文同样非空）")
+    lines.append("未读到 / 未核实的范围（不计入上面的比例）")
+    if unread:
+        lines.extend(f"  · {item}" for item in unread)
+    else:
+        lines.append("  · 无")
+    lines.append("")
+    lines.append(f"已统计正文占全页文字：整行口径 {line_stats['coverage_of_text'] * 100:.0f}%"
+                 f" / 子句口径 {sent_stats['coverage_of_text'] * 100:.0f}%"
+                 f"（{line_stats['counted_chars']:,} 与 {sent_stats['counted_chars']:,} / "
+                 f"{len(page.get('text') or ''):,} 字；其余是短于 {min_chars} 字的单元与空白）")
+    lines.append("本探针只数字面重复。同义反复、黑话、层级混乱、答案藏得深都不在内，仍归")
+    lines.append("~/.claude/references/web-ui-observation.md 的通读——读数干净不等于文字对读者有用。")
+    return "\n".join(lines), EXIT_FOR[status]
+
+
+def main(argv: list[str] | None = None) -> int:
+    ap = argparse.ArgumentParser(
+        prog="page-repetition",
+        description="量一个页面里同一段文字被复制了多少遍、占已统计正文多少篇幅。",
+        epilog="退出码：0 读数已产出（未声明上限时为「未判定」，不是通过）/ "
+               "1 超过声明的上限 / 2 仪器故障或未核实。",
+    )
+    ap.add_argument("url")
+    ap.add_argument("--expect-text", action="append", default=[],
+                    help="目标页面上必然出现的一段字，可重复。没命中即退出 2——"
+                         "不声明它时本探针无法区分目标页与登录页/错误页。")
+    ap.add_argument("--min-chars", type=int, default=12,
+                    help="只统计长度 ≥ 该值的单元（默认 12）。中文 12 字是一句短话；"
+                         "**纯英文页面请调大**（12 个字母只是一个词），否则标签会淹没真问题。")
+    ap.add_argument("--top", type=int, default=8)
+    ap.add_argument("--expand-details", action="store_true")
+    ap.add_argument("--max-repeat", type=int, default=None,
+                    help="声明你预期的重复上限（≥1）；超过则退出 1。不给则只报读数、不判过不过。")
+    ap.add_argument("--settle-ms", type=int, default=800)
+    ap.add_argument("--max-rounds", type=int, default=8,
+                    help="滚动+等待的收敛轮数上限（默认 8）。用尽仍未收敛即退出 2。")
+    ap.add_argument("--json", action="store_true")
+    args = ap.parse_args(argv)
+
+    if any(not s.strip() for s in args.expect_text):
+        print("page-repetition: --expect-text 不能是空串或纯空白——空标记会命中任何正文，"
+              "等于把身份确认悄悄关掉（shell 变量为空时最常撞）。", file=sys.stderr)
+        return 2
+    if args.max_repeat is not None and args.max_repeat < 1:
+        print("page-repetition: --max-repeat 至少为 1（0 次重复意味着连唯一出现都不允许）",
+              file=sys.stderr)
+        return 2
+    if shutil.which("agent-browser") is None:
+        print("page-repetition: 需要 agent-browser，未找到", file=sys.stderr)
+        return 2
+
+    session = f"page-repetition-{uuid.uuid4().hex[:8]}"
+    try:
+        page = collect(session, args.url, args.expand_details, args.settle_ms, args.max_rounds)
+    except (subprocess.TimeoutExpired, RuntimeError, ValueError, json.JSONDecodeError) as exc:
+        print(f"page-repetition: 仪器故障——{exc}", file=sys.stderr)
+        return 2
+    finally:
+        # 清理失败不得改变本次的结论，更不得撞上"超过上限"的退出码 1。
+        try:
+            closed = run(["agent-browser", "--session", session, "close"], timeout=60)
+            if closed.returncode != 0:
+                print(f"page-repetition: 清理 session 未成功（不影响上面的读数）："
+                      f"{closed.stderr.strip()[:120]}", file=sys.stderr)
+        except Exception as exc:  # noqa: BLE001 —— 清理的任何失败都不得改变本次结论
+            print(f"page-repetition: 清理 session 出错（不影响上面的读数）：{exc}",
+                  file=sys.stderr)
+
+    text = page.get("text") or ""
+    if not text.strip():
+        print("page-repetition: 未核实——正文为空。这不是「没有重复」，是没读到内容："
+              "页面可能未渲染、需要登录、或内容全在 iframe 里。", file=sys.stderr)
+        return 2
+    if not page.get("converged"):
+        print(f"page-repetition: 未核实——滚动 {args.max_rounds} 轮后正文仍在增长，"
+              "说明还有没加载完的内容。读数会偏低，故不产出。用 --max-rounds 调大。",
+              file=sys.stderr)
+        return 2
+
+    expect_hit = None
+    if args.expect_text:
+        missing = [s for s in args.expect_text if s not in text]
+        if missing:
+            print(f"page-repetition: 未核实——声明的标记没出现在正文里：{missing}。"
+                  "读到的多半不是目标页面（登录页 / 错误页的正文同样非空）。", file=sys.stderr)
+            return 2
+        expect_hit = True
+
+    lines_u, sents_u, first_line = units_of(text, args.min_chars)
+    line_stats, sent_stats = tally(lines_u, len(text)), tally(sents_u, len(text))
+    worst = max(line_stats["worst"], sent_stats["worst"])
+    status = verdict(worst, args.max_repeat, expect_hit)
+
+    if args.json:
+        print(json.dumps({
+            "requested_url": args.url, "final_url": page.get("href"),
+            "status": status,
+            "target_confirmed": bool(expect_hit),
+            "min_chars": args.min_chars, "expanded_details": args.expand_details,
+            "collapsed_details": page.get("collapsed"), "iframes": page.get("frames"),
+            "worst_repeat": worst,
+            "by_line": {k: v for k, v in line_stats.items() if k != "top"},
+            "by_sentence": {k: v for k, v in sent_stats.items() if k != "top"},
+            "top_line": [{"count": n, "unit": u, "first_line": first_line.get(u)}
+                         for u, n in line_stats["top"] if n > 1][:args.top],
+            "top_sentence": [{"count": n, "unit": u, "first_line": first_line.get(u)}
+                             for u, n in sent_stats["top"] if n > 1][:args.top],
+        }, ensure_ascii=False, indent=2))
+        return EXIT_FOR[status]
+
+    out, code = render(args.url, page, line_stats, sent_stats, args.top, args.min_chars,
+                       args.expand_details, args.max_repeat, expect_hit, first_line)
+    print(out)
+    return code
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

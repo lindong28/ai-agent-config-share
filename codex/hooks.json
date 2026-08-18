@@ -1,0 +1,152 @@
+{
+  "description": "Codex mappings for the active Claude user-policy hooks; see hook-parity.json for per-handler evidence.",
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$HOME/.claude/hooks/ghostty-tab-title.sh\" busy >/dev/null",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$HOME/.claude/hooks/ghostty-tab-title.sh\" busy >/dev/null",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "apply_patch",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh -c 'PATH=\"/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH\"; exec node \"$HOME/.codex/bin/codex-hook-dispatch.js\" writer'",
+            "timeout": 15
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh -c 'PATH=\"/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH\"; exec node \"$HOME/.codex/bin/codex-hook-dispatch.js\" bash'",
+            "timeout": 60
+          }
+        ]
+      },
+      {
+        "matcher": "mcp__ask_user__AskUserQuestion",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh -c 'PATH=\"/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH\"; exec node \"$HOME/.codex/bin/codex-hook-dispatch.js\" ask'",
+            "timeout": 45
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$HOME/.claude/hooks/ghostty-tab-title.sh\" busy >/dev/null",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "matcher": "manual|auto",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh -c 'PATH=\"/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH\"; exec node \"$HOME/.claude/scripts/hooks/pre-compact.js\"'",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "startup|resume",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$HOME/.claude/hooks/ghostty-tab-title.sh\" idle >/dev/null",
+            "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "sh -c 'PATH=\"/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH\"; exec node \"$HOME/.codex/bin/codex-hook-dispatch.js\" session-start'",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh -c 'PATH=\"/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH\"; exec node \"$HOME/.claude/scripts/hooks/post-compact-restore.js\"'",
+            "timeout": 5,
+            "additionalContextLimit": 5000
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh -c 'PATH=\"/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH\"; exec node \"$HOME/.codex/bin/codex-hook-dispatch.js\" subagent-start'",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh -c 'PATH=\"/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH\"; exec node \"$HOME/.codex/bin/codex-hook-dispatch.js\" stop'",
+            "timeout": 60
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh -c 'PATH=\"/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH\"; exec node \"$HOME/.codex/bin/codex-hook-dispatch.js\" subagent-stop'",
+            "timeout": 45
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh -c 'PATH=\"/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH\"; exec node \"$HOME/.codex/bin/codex-hook-dispatch.js\" session-end'",
+            "timeout": 3
+          }
+        ]
+      }
+    ]
+  }
+}

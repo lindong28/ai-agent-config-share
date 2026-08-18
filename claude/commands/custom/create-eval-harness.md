@@ -39,12 +39,12 @@ origin: 2026-06-04
 
 ## eval 套件落点与形态
 
-与目标组件**就近**：`<组件目录>/eval/<组件名>/`（stop-gate 落 `claude/hooks/eval/stop-gate/`）。含三件：
+与目标组件**就近**：`<组件目录>/eval/<组件名>/`。含三件：
 - `scenarios/` — **数据，独立文件可扩展**（加一条 = 丢一个文件，不改 runner）；每条带 `期望判定` + 一句"为什么守这条"；反向场景也要有。
 - runner — 喂真实组件、读真实判定、每场景跑 N 次、出通过率 + 阈值、达标退 0 否则非 0。
 - `README` — 怎么跑（含依赖要求）、怎么加场景（强调反向场景）、指回本命令讲方法。
 
-**worked example**：`claude/hooks/eval/stop-gate/`（runner = node 打 hook 读 exit code；场景 = `# expect:` / `# note:` 头 + transcript）。**形态随目标组件而变**——python 分类器 → python + 返回值；HTTP 服务 → 请求 + 响应码；抽取 prompt → 比对抽出结构与 gold。别硬套 stop-gate 的 node/exit-code 形态。
+**worked example**（形态参考，本仓不收录判官闸的场景集，见仓内 `docs/scope-policy.md`）：判官 hook 的 eval —— runner = node 打 hook 读 exit code；场景 = `# expect:` / `# note:` 头 + transcript。**形态随目标组件而变**——python 分类器 → python + 返回值；HTTP 服务 → 请求 + 响应码；抽取 prompt → 比对抽出结构与 gold。别硬套 stop-gate 的 node/exit-code 形态。
 
 ## 迭代
 

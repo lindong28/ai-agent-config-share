@@ -22,13 +22,29 @@
 
 - **机制**：cron 定时任务，或 `Monitor` 工具盯一个 staleness 条件；派发的同一轮就建立，不等转入 idle 后补。
 - **看的信号**：后台任务的 `.output` 文件（`run_in_background` 对其 stdout+stderr 的捕获，spawn 时从后台 Bash 任务结果取得路径；**不是** wrapper banner 里 `Log:` 指向的 `codeagent-wrapper-<PID>.log`）——看其 mtime / 大小增长。**但输出停滞 ≠ 挂起**：GB 级快照 / 迁移 / 全量验证这类合法命令会几十分钟零 stdout。所以"进程存活 + 输出停滞"不足以判挂起，须再查一层计算活性（判据与 `task_computing` 探针见「卡死处置」）：输出停滞且计算/本地 IO 也停滞才算疑似挂起。
+- **探针绑定到具体任务**：活性判定用派发时拿到的那个任务自己的句柄（后台任务根 pid、它的 `.output` 路径），不用全局的命令行模式匹配（`pgrep -f "codeagent-wrapper --backend codex"` 一类）判活——并发派发下全局匹配命中的是"任意一个同类进程"：命中非空 ≠ 被盯的还活着，它早退了也会因别的同类还在跑而被判健康，完成回报被拖到最后一个同类退出才发出。反向的"空匹配 ≠ 已退出"（根因是模式没写对，不是并发）与按 pid 的认领写法，见「卡死处置」的先认对进程。
 - **间隔**：按该任务单步合法静默的最长时长取值（一个 20 分钟的生成步不该被当成挂起）；15 分钟是没有依据时的起点，不是应当留着的默认值。上调的理由不只是避免误报——**每次触发都是一个完整 turn，单次代价随 session context 单调增长**。实测一次 44.8 小时的 supervise：15 分钟间隔全程未调，跑出 296 个 turn、吃掉 167.3M context 令牌（该 supervisor 全部 context 预算的 28%），而全程 0 次探测到挂起（三次 kill 都是由完成回调发现的）。长任务上这项开销直接推高 compaction 概率，而 compaction 会逐出已读过的 BINDING reference。所以派发时就按任务形态定值，别留给"事后想起来再调"。
+
+## 前台上限与等价同步等待
+
+**触发**：一次本该**同步等待**的委派（gate 类 review、决策评审）——**一律适用，不预判这次会不会超时**。
+
+「超出前台上限时才改后台」是行不通的写法：那个条件在**发起之前观测不到**，判"这次应该不会超"与"这次确实不会超"读数相同，于是整节连同下面的 record 取句柄、禁 pgrep 一并被跳过。已复现：评审仍在活跃读文件，却在 10.00 分钟被杀。事故经过与它换来的风险（漏轮询时的静默挂起，已知情接受）见 `~/research/ai-agent-config/docs/issues/harness-issues.md`「规则完备、却因入口挂在不可判条件上而从未被读到」。
+
+**动作**：后台派发 + 主动轮询，等价保持同步语义。**后台派发规避前台击杀，主动轮询防静默挂起**——只派不轮询，等于把一个明确失败换成一个没人发现的挂起。两条约束缺一不可（它们各自管的不是发现挂起，别指望）：
+
+- **期间不派发其它工作**——否则它不再是同步等待而是并发，调用方会在结果未定时继续推进，gate 的阻塞语义就没了。
+- **不另建巡检**——主动轮询本身就是巡检。本文件开头那条巡检义务在 supervisor 仍在轮询、未 yield 时**不适用**（见「为什么需要主动巡检」那段的限定）；再建一层只是重复烧 turn，而每次触发都是一个完整 turn。
+
+**被杀之后**：先 `resume <session_id>` 续跑，**不要从零重派**——评审者已读过的文件会白读一遍，且新起的一轮在语义上不是续审。handle 取不到再重新发起。
+
+**消费者**：`~/.claude/skills/decision-review/SKILL.md` 的「等待」条款与 `~/.claude/skills/review-gate/SKILL.md` 的高档档位各以一句指针引本节，不各自复述——三处曾各写一份且措辞已分叉（只有一份同时写全了上面两条约束）。
 
 ## 退出 ≠ 成功（干净退出的语义失败）
 
 前述巡检防的是"该结束却没结束"（静默挂起）。另一个方向相反的盲区：**进程正常退出（exit 0）、输出/进度条一路正常，但结果在语义上整批失败**——典型是把失败记成**数据而非崩溃**的 stage（数据管线的门控/打标 stage 每行写 `<x>_status=failed` 仍 `exit 0`；缺 gated 权重 / 权限 / 配额 / 网络时整批 fail 而进程干净退出）。所以"进程已完成 + 退出码 0 + 输出文件已生成"都不是成功证据。此类失败是**暂时**的（授权/配额修好后可重试），不是终态判决——别把 errored 结果当定论落库。
 
-- 盯后台 run 时，过滤器（`Monitor` 或轮询 grep）要覆盖**失败签名**（`gated|403|401|Traceback|Error|backend_unavailable|Cannot access|Could not download` 等），失败一出现就报，而非只等完成回调——即 `Monitor` 工具"silence is not success"（覆盖失败终态、而非只匹配成功标志）。
+- 盯后台 run 时，过滤器（`Monitor` 或轮询 grep）只匹配**终态**与**委派体级**失败签名：wrapper / harness 自身的错误（如 `codex_core::tools::router: error=`、可归到委派体的 `Traceback`、超时 / 取消）及最终报告里的失败标记；不匹配 per-command 的 `exit=N`，也不匹配裸 `failed|error:`。派发前按任务性质裁剪：TDD、重试循环和迭代类委派里的命令级非零退出是预期中间态，不是委派失败；把它放进 filter 等于每次 RED 都换一个完整 turn。反例：`exit=[1-9]` 在 TDD 委派上必然高频命中，还会用 `exit=1` 前缀误中 `exit=127`，派发时即可预见。收窄的是「什么算失败信号」，不是放弃 `silence is not success`：委派体级失败终态仍必须命中，失败一出现就报，而非只等成功标志或完成回调。
 - 宣告"进度正常 / 已完成"前，查**结果的状态分布**（accepted/rejected/failed 计数），不只看退出码或输出文件是否生成。
 - 一次早期抽查若显示"0/N 但进程存活"，顺手 grep 一次日志失败签名，而不是据此判"正常"。
 
@@ -150,6 +166,12 @@ task_computing() {
 
 不得因 agent 状态仍为 running 而无限等待，也不得仅因一轮无消息就 kill。
 
+**「输出文件不再增长」不是完成信号，把它当成完成信号会杀掉正在工作的 agent。** in-process 委派的 `.output` 文件是**完整 JSONL transcript 的 symlink**（实测 `lrwxr-xr-x` → `subagents/agent-*.jsonl`）。**禁的是整份读入**——那会撑爆 context；`stat` 看 mtime/size、有界 `tail`、按字段筛选都可以，排查停滞时它们往往是唯一能看到进度的东西。**但这些读数只说明它在动，不能证明它完成**，它的增长受 transcript 落盘节奏支配，与"任务推进到哪一步"没有固定关系：一个正在读大文件、正在算、或正在等子进程的 agent 可以数十秒不产生新行。于是"mtime + size 连续 N 秒不变"在**已完成**与**仍在工作**两种情况下给出同一个读数——它测的是磁盘，不是任务。
+
+实测：一次 review 委派因输出文件稳定 60 秒被判为"已完成但静默不回传"，据此 `SendMessage` 索取一次、无果后 `TaskStop`；事后查该 agent 的 sidechain，它在被杀那一刻仍在连续读文件与检查，最后一条是 `[Request interrupted by user]`。**代价还不止一次误杀**：由此得出的"该 agent type 的返回契约有缺口"是个反向断言，它当场把真正的原因从检查范围里删掉了，后续的调查全部走错方向。
+
+所以：完成只认**完成回调**（harness 的 task notification）或 agent 自己发来的报告；两者都没有时，走上表——按**阶段与可观察进度**判，而不是按文件是否长大。自建的"稳定即完成"探针属于「派发前自限」明确点掉的那类不可判条件，别再造。
+
 ## Teammate 生命周期与回收义务
 
 **先判该不该走本节**：本节只管以 `name` spawn 的 in-process teammate。这类子代理的最终报告**不作为工具结果回流**，事后 mailbox 索取也不可靠（见 `delegation-policy.md` §Harness transport），所以 caller 依赖返回内容时正确做法是一开始就**不传 `name`**——那样产出随工具结果回流、子代理自行终止，本节的回收义务与下方索取路径都不适用。下面这些只服务两种情形：caller 不消费其产出的长驻实例，以及**已经传了 `name`** 之后的止损。下文把 execute-plan 的 implementer / reviewer / UX agent 列作例子，是因为它们历史上以 `name` spawn；按上述判据，凡 caller 要消费其 findings 的（reviewer 尤其如此）都应改为不传 `name`，其回收随之退化为普通返回值消费。
@@ -183,7 +205,9 @@ teammate 基础设施会整片不可用（实测在一次 20-agent fan-out 内�
 
 ```bash
 # 首选：独立 codex session。实测同期 4 次派发全部首次即完整交付
-CODEX_SANDBOX=read-only ~/.claude/bin/codeagent-wrapper --backend codex "<prompt>" <workdir> </dev/null
+CODEX_SANDBOX=read-only ~/.claude/bin/codeagent-wrapper --backend codex - <workdir> <<'EOF'
+<prompt>
+EOF
 
 # 次选：无头 claude。绝对路径是硬要求——用户 shell 的 `claude` 是 wrapper 函数，
 # 非交互子进程里缺 `_agent_cwd_exec` 会直接 command not found

@@ -8,6 +8,7 @@ HTTP_PROXY，此后线路再切都与它无关。每条线路的端口固定且�
 
 import os
 import tempfile
+import threading
 import unittest
 from unittest import mock
 
@@ -212,6 +213,30 @@ class EgressSessionTests(unittest.TestCase):
             session = cli._egress_session(route)
         self.assertEqual(session.verify, "/etc/corp/ca.pem")
 
+    def test_stopforumspam_gets_a_larger_read_budget(self):
+        """连接仍要尽快失败，但正常的慢响应不该继续卡在 6 秒。"""
+        seen = {}
+
+        class Response:
+            @staticmethod
+            def json():
+                return {"ip": {"appears": 0}}
+
+        class Session:
+            @staticmethod
+            def get(*args, **kwargs):
+                timeout = kwargs["timeout"]
+                seen["timeout"] = timeout
+                if not isinstance(timeout, tuple) or timeout[1] <= 6:
+                    raise requests.exceptions.ReadTimeout("read timeout")
+                return Response()
+
+        with mock.patch.object(cli, "_egress_session", return_value=Session()):
+            lines = cli.get_stopforumspam("203.0.113.9", {"source": "published"})
+
+        self.assertNotIn("查询失败", lines[0])
+        self.assertEqual(seen["timeout"], (6, 10))
+
 
 class OneRouteQerRoundTests(unittest.TestCase):
     """整轮只选一次路——记下的出口必须是请求真正用过的那个。"""
@@ -263,6 +288,77 @@ class OneRouteQerRoundTests(unittest.TestCase):
         )
         self.assertEqual(out["proxy_effective"]["address"], "http://127.0.0.1:59520")
         self.assertEqual(out["proxy_effective"]["source"], "published")
+
+    def test_risk_and_spam_probes_overlap_after_public_info(self):
+        """两个独立的慢查询要相互重叠，不能继续串行挤占 30 秒总预算。"""
+        barrier = threading.Barrier(2)
+
+        def fake_risk(ip, route=None):
+            barrier.wait(timeout=1)
+            return "0/100 low", 0
+
+        def fake_spam(ip, route=None):
+            barrier.wait(timeout=1)
+            return ["未收录  低风险 ✓"]
+
+        route = {
+            "address": "http://127.0.0.1:59520",
+            "source": "published",
+            "reason": "",
+            "path": "/p",
+        }
+        public = {
+            "status": "success",
+            "query": "203.0.113.9",
+            "country": "SG",
+            "proxy": True,
+            "hosting": False,
+            "timezone": "Asia/Singapore",
+        }
+        with mock.patch.object(cli, "resolve_route", return_value=route), \
+                mock.patch.object(cli, "get_public_info", return_value=public), \
+                mock.patch.object(cli, "get_ip_risk", side_effect=fake_risk), \
+                mock.patch.object(cli, "get_stopforumspam", side_effect=fake_spam), \
+                mock.patch.object(cli, "get_dns_servers", return_value=[]), \
+                mock.patch.object(cli, "get_ipv6", return_value=None):
+            out = cli.collect_all()
+
+        self.assertEqual(out["risk"]["score"], 0)
+        self.assertEqual(out["spam"]["raw_lines"], ["未收录  低风险 ✓"])
+        self.assertFalse(any(e["section"] in ("risk", "spam") for e in out["errors"]))
+
+    def test_executor_start_failure_stays_with_the_optional_probes(self):
+        route = {
+            "address": "http://127.0.0.1:59520",
+            "source": "published",
+            "reason": "",
+            "path": "/p",
+        }
+        public = {
+            "status": "success",
+            "query": "203.0.113.9",
+            "country": "SG",
+            "proxy": True,
+            "hosting": False,
+            "timezone": "Asia/Singapore",
+        }
+        with mock.patch.object(cli, "resolve_route", return_value=route), \
+                mock.patch.object(cli, "get_public_info", return_value=public), \
+                mock.patch.object(cli, "get_dns_servers", return_value=[]), \
+                mock.patch.object(cli, "get_ipv6", return_value=None), \
+                mock.patch.object(
+                    cli.concurrent.futures,
+                    "ThreadPoolExecutor",
+                    side_effect=RuntimeError("cannot start new thread"),
+                ):
+            out = cli.collect_all()
+
+        self.assertIsNone(out["risk"])
+        self.assertIsNone(out["spam"])
+        self.assertEqual(
+            {e["section"] for e in out["errors"] if e["section"] in ("risk", "spam")},
+            {"risk", "spam"},
+        )
 
     def test_snapshot_carries_the_path_not_just_the_address(self):
         """报告靠 path 告诉读者去哪看。漏掉它时终端看着仍然正确——因为报告的兜底字符串

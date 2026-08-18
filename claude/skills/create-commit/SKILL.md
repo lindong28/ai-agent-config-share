@@ -58,6 +58,7 @@ description: >-
 - 语言：整条 message（subject + body）默认英文；仅在用户明确要求、仓库近期 commit 多为中文、或某专有概念无准确英文对应时用中文（末者只该词保留中文）
 - Types: `feat` `fix` `refactor` `docs` `test` `chore` `perf` `ci` `style` `build` `revert`
 - Body 仅在 subject + diff 不足以让 reviewer 推出非显然设计决策时加
+- **调用方关联标记**：上层 command 或 skill 传入时，即使按上一条本可省略 body，也必须创建 body，并把标记原文作为末行；该行同样必须 ≤72 字符。超长属于调用方错误：不得截断或换行，停止并要求调用方提供合规标记。调用方未传入时不添加
 - Per-bullet derivability test：每条候选 bullet 自问「reviewer 能从 subject + diff 推出来吗」，能 → drop
   - **diff 含本次一并提交的注释与文档**——复述自己刚写下的注释即判定为可推导。注释在使用现场被读到，commit message 不会；留两份只会各自漂移
   - 例外：**行为变更**即使可推导也留一条。扫 `git log` 找「什么时候变的」的人不会去读注释

@@ -1,0 +1,303 @@
+{
+  "schemaVersion": 1,
+  "authority": "claude/settings.json#hooks",
+  "parityMeaning": "User-observable policy, blocking, recovery, and notification behavior; not event-name or payload byte identity.",
+  "handlers": [
+    {
+      "id": "ask-recommend",
+      "source": {
+        "event": "PreToolUse",
+        "matcher": "AskUserQuestion",
+        "type": "command",
+        "command": "node \"$HOME/.claude/hooks/ask-recommend-gate.js\""
+      },
+      "status": "fixture-verified",
+      "codex": {
+        "event": "PreToolUse",
+        "matcher": "mcp__ask_user__AskUserQuestion",
+        "mode": "ask"
+      },
+      "reason": "A real Codex call established the canonical matcher; the dispatcher normalizes it to the shared gate's AskUserQuestion name."
+    },
+    {
+      "id": "bash-block-no-verify",
+      "source": {
+        "event": "PreToolUse",
+        "matcher": "Bash",
+        "type": "command",
+        "command": "node \"$HOME/.claude/hooks/run-with-flags.js\" block-no-verify block-no-verify.js"
+      },
+      "status": "live-verified",
+      "codex": {
+        "event": "PreToolUse",
+        "matcher": "Bash",
+        "mode": "bash"
+      },
+      "reason": "A real Codex shell call was blocked before execution with the shared gate's stderr."
+    },
+    {
+      "id": "bash-codeagent-stdin",
+      "source": {
+        "event": "PreToolUse",
+        "matcher": "Bash",
+        "type": "command",
+        "command": "node \"$HOME/.claude/hooks/run-with-flags.js\" codeagent-stdin-guard codeagent-stdin-guard.js"
+      },
+      "status": "fixture-verified",
+      "codex": {
+        "event": "PreToolUse",
+        "matcher": "Bash",
+        "mode": "bash"
+      },
+      "reason": "Codex canonical Bash payload uses the same tool_input.command contract."
+    },
+    {
+      "id": "writer-registry",
+      "source": {
+        "event": "PreToolUse",
+        "matcher": "Edit|Write|MultiEdit|NotebookEdit",
+        "type": "command",
+        "command": "node \"$HOME/.claude/hooks/run-with-flags.js\" writer-registry-gate writer-registry-gate.js"
+      },
+      "status": "fixture-verified",
+      "codex": {
+        "event": "PreToolUse",
+        "matcher": "apply_patch",
+        "mode": "writer"
+      },
+      "reason": "The shared writer registry extracts Codex apply_patch targets from tool_input.command, keeping one path parser for both harnesses."
+    },
+    {
+      "id": "memory-carrier-gate",
+      "source": {
+        "event": "PreToolUse",
+        "matcher": "Edit|Write|MultiEdit|NotebookEdit",
+        "type": "command",
+        "command": "node \"$HOME/.claude/hooks/run-with-flags.js\" memory-carrier-gate memory-carrier-gate.js"
+      },
+      "status": "harness-specific-excluded",
+      "reason": "The gate intercepts writes to Claude's file-based auto-memory directory (~/.claude/projects/*/memory), a Claude-only feature; Codex uses its built-in memories and never writes that path."
+    },
+    {
+      "id": "bash-block-broad-kill",
+      "source": {
+        "event": "PreToolUse",
+        "matcher": "Bash",
+        "type": "command",
+        "command": "node \"$HOME/.claude/hooks/run-with-flags.js\" block-broad-kill block-broad-kill.js"
+      },
+      "status": "fixture-verified",
+      "codex": {
+        "event": "PreToolUse",
+        "matcher": "Bash",
+        "mode": "bash"
+      },
+      "reason": "Codex canonical Bash payload uses the same tool_input.command contract."
+    },
+    {
+      "id": "bash-push-approval",
+      "source": {
+        "event": "PreToolUse",
+        "matcher": "Bash",
+        "type": "command",
+        "command": "node \"$HOME/.claude/hooks/run-with-flags.js\" push-approval-gate push-approval-gate.js"
+      },
+      "status": "fixture-verified",
+      "codex": {
+        "event": "PreToolUse",
+        "matcher": "Bash",
+        "mode": "bash"
+      },
+      "reason": "Codex canonical Bash payload uses the same tool_input.command contract."
+    },
+    {
+      "id": "bash-commit-language",
+      "source": {
+        "event": "PreToolUse",
+        "matcher": "Bash",
+        "type": "command",
+        "command": "node \"$HOME/.claude/hooks/run-with-flags.js\" commit-message-language commit-message-language.js"
+      },
+      "status": "fixture-verified",
+      "codex": {
+        "event": "PreToolUse",
+        "matcher": "Bash",
+        "mode": "bash"
+      },
+      "reason": "Codex canonical Bash payload uses the same tool_input.command contract."
+    },
+    {
+      "id": "bash-commit-discipline",
+      "source": {
+        "event": "PreToolUse",
+        "matcher": "Bash",
+        "type": "command",
+        "command": "node \"$HOME/.claude/hooks/run-with-flags.js\" commit-discipline-gate commit-discipline-gate.js"
+      },
+      "status": "fixture-verified",
+      "codex": {
+        "event": "PreToolUse",
+        "matcher": "Bash",
+        "mode": "bash"
+      },
+      "reason": "The shared gate now recognizes the Codex transcript call that reads create-commit/SKILL.md."
+    },
+    {
+      "id": "stop-desktop-notify",
+      "source": {
+        "event": "Stop",
+        "matcher": "*",
+        "type": "command",
+        "command": "node \"$HOME/.claude/hooks/desktop-notify.js\""
+      },
+      "status": "fixture-verified",
+      "codex": {
+        "event": "Stop",
+        "matcher": "*"
+      },
+      "reason": "Mapped via codex-hook-dispatch's stop handler, which invokes desktop-notify.js after the stop gates pass; covered by codex-hook-dispatch.edge.test.js with a stubbed desktop-notify."
+    },
+    {
+      "id": "stop-plan-gate",
+      "source": {
+        "event": "Stop",
+        "matcher": "*",
+        "type": "command",
+        "command": "node \"$HOME/.claude/hooks/stop-gate.js\""
+      },
+      "status": "fixture-verified",
+      "codex": {
+        "event": "Stop",
+        "mode": "stop"
+      },
+      "reason": "The ordered Stop dispatcher launches the shared gate with the native inline last_assistant_message."
+    },
+    {
+      "id": "stop-continuation-gate",
+      "source": {
+        "event": "Stop",
+        "matcher": "*",
+        "type": "command",
+        "command": "node \"$HOME/.claude/hooks/continuation-claim-gate.js\""
+      },
+      "status": "fixture-verified",
+      "codex": {
+        "event": "Stop",
+        "mode": "stop"
+      },
+      "reason": "The shared process-tree helper recognizes Codex roots; native subagent lifecycle state suppresses false blocking while an agent remains active and is cleared at startup/resume recovery boundaries."
+    },
+    {
+      "id": "stop-prose-choice-gate",
+      "source": {
+        "event": "Stop",
+        "matcher": "*",
+        "type": "command",
+        "command": "node \"$HOME/.claude/hooks/prose-choice-gate.js\""
+      },
+      "status": "fixture-verified",
+      "codex": {
+        "event": "Stop",
+        "mode": "stop"
+      },
+      "reason": "Codex supplies last_assistant_message inline and the shared transcript fallback now supports rollout records."
+    },
+    {
+      "id": "stop-capability-claim-gate",
+      "source": {
+        "event": "Stop",
+        "matcher": "*",
+        "type": "command",
+        "command": "node \"$HOME/.claude/hooks/capability-claim-gate.js\""
+      },
+      "status": "fixture-verified",
+      "codex": {
+        "event": "Stop",
+        "mode": "stop"
+      },
+      "reason": "The shared evidence scan recognizes Codex function/custom calls and canonical aliases."
+    },
+    {
+      "id": "stop-reverse-assertion-gate",
+      "source": {
+        "event": "Stop",
+        "matcher": "*",
+        "type": "command",
+        "command": "node \"$HOME/.claude/hooks/reverse-assertion-gate.js\""
+      },
+      "status": "fixture-verified",
+      "codex": {
+        "event": "Stop",
+        "mode": "stop"
+      },
+      "reason": "Codex supplies the same inline final-message contract used by the gate."
+    },
+    {
+      "id": "stop-bg-shell-reclaim",
+      "source": {
+        "event": "Stop",
+        "matcher": "*",
+        "type": "command",
+        "command": "node \"$HOME/.claude/hooks/bg-shell-reclaim-check.js\""
+      },
+      "status": "fixture-verified",
+      "codex": {
+        "event": "Stop",
+        "mode": "stop"
+      },
+      "reason": "The shared process-tree helper now recognizes the nearest Codex root without broad helper matching."
+    },
+    {
+      "id": "prompt-teammate-reclaim",
+      "source": {
+        "event": "UserPromptSubmit",
+        "matcher": "*",
+        "type": "command",
+        "command": "node \"$HOME/.claude/hooks/teammate-reclaim-check.js\""
+      },
+      "status": "harness-specific-excluded",
+      "reason": "The hook parses Claude teammate mailbox records and calls Claude lifecycle tools; Codex collaboration lifecycle is tracked by SubagentStart/SubagentStop and remains caller-owned."
+    },
+    {
+      "id": "sessionstart-teammate-reclaim",
+      "source": {
+        "event": "SessionStart",
+        "matcher": "startup|resume",
+        "type": "command",
+        "command": "node \"$HOME/.claude/hooks/teammate-reclaim-check.js\""
+      },
+      "status": "harness-specific-excluded",
+      "reason": "The hook consumes Claude teammate mailbox/transcript records; Codex active-agent state is maintained from native SubagentStart/SubagentStop instead."
+    },
+    {
+      "id": "sessionstart-compact-restore",
+      "source": {
+        "event": "SessionStart",
+        "matcher": "compact",
+        "type": "command",
+        "command": "node \"$HOME/.claude/scripts/hooks/post-compact-restore.js\""
+      },
+      "status": "fixture-verified",
+      "codex": {
+        "event": "SessionStart",
+        "matcher": "compact"
+      },
+      "reason": "The existing Codex compaction restore mapping and tests remain authoritative."
+    },
+    {
+      "id": "subagent-stop-gate",
+      "source": {
+        "event": "SubagentStop",
+        "matcher": "*",
+        "type": "command",
+        "command": "node \"$HOME/.claude/hooks/stop-gate.js\""
+      },
+      "status": "fixture-verified",
+      "codex": {
+        "event": "SubagentStop",
+        "mode": "subagent-stop"
+      },
+      "reason": "Codex exposes SubagentStop; the dispatcher removes lifecycle state only after the shared gate allows the stop."
+    }
+  ]
+}

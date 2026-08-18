@@ -19,7 +19,7 @@ description: 审查一份 ux-contract.md（通常在 docs/contracts/ 下）是�
 
 ### 1. 审查（分组并行 subagent）
 
-将 principles 按 `max-principle-per-subagent` 均匀分组，每组 spawn 一个 general-purpose subagent **并行**审查。spawn 时**不传 `name`**——判据见 `~/.claude/references/delegation-policy.md` §Harness transport。
+将 principles 按 `max-principle-per-subagent` 均匀分组，每组 spawn 一个 reviewer **并行**审查。通道按 `~/.claude/references/delegation-policy.md` §Transport selection 判；走 in-process 时用 `general-purpose` 且**不传 `name`**。
 
 按目标 contract 在 L1 声明的产品类型，查 `~/.claude/references/domain-registry.md` 加载适用的 domain 原则文件，一并纳入上述分组；承接该 domain 原则的 subagent 额外收到对应文件、以及主 session 从 registry 查得的该类型对应契约段名，按其 review flag lens 审该契约段是否到位（subagent 不读 registry，契约段名由主 session 解析后写入其 prompt）。
 

@@ -30,7 +30,18 @@ disable-model-invocation: false
 
 ## handoff 适用边界
 
-三态分流，判据是 `~/.claude/state/active-plan-<session_id>.json` 这个 marker（`~/.claude/bin/active-plan show` 可查）：
+按 `~/.claude/state/active-plan-<session_id>.json` marker（`~/.claude/bin/active-plan show` 可查）的类型、是否仍指向当前执行载体，以及交接对象分流。
+
+### program 分流
+
+| 情形 | 动作 |
+|---|---|
+| 当前 program marker 指向可读 ledger，交接整个 program supervisor session | **不写 handoff。** 台账目录（`program.md` + `journal.md`）是整个 program 的唯一交接物 |
+| 当前 program marker 指向可读 ledger，且 program 内某个 task 已由 `run-program` 明确路由到 create-handoff | **写 task 级 handoff。** program marker 管的是 supervisor 的执行载体，不能替代 leaf task 向 supervisor 交付其独立上下文 |
+| program marker 指向可读且未结束的 ledger，但该 program 不是本 session 当前执行对象 | 先判断本 session 是否应恢复该 program：是则恢复后按前两行重新分流；否则执行 `active-plan clear`，再按实际交接对象重新分流 |
+| program marker 指向已结束的 program，或其 ledger 不可读 | 先定位 ledger；若 program 确已结束，则执行 `active-plan clear`。marker 恢复为当前可读状态或被清除后，再按交接对象重新分流；仍有值得续做的实质工作且已无 plan/program 时，写 handoff |
+
+### plan / 无 marker 分流
 
 | 情形 | 动作 |
 |---|---|
@@ -38,9 +49,9 @@ disable-model-invocation: false
 | 本轮确实在执行某个 plan，但 marker 缺失或指向已结束的别的 plan | **`~/.claude/bin/active-plan set <当前 plan.md>`，而不是写 handoff。** 注意此格只能 `set`——单独 `clear` 会留下无 marker 状态，下次 compaction 的 briefing 就恢复不出当前 plan。（`clear` 只用于真正离开 plan、之后不再执行任何 plan 的情形，见 long-task-protocol）缺 marker 是状态外部化漏了一步，写 handoff 只是绕过它 |
 | 确无 plan，而本轮有值得续做的实质工作 | **写 handoff。** 典型是探索型 session、跨 harness 交接、或用户要一个人工检查点 |
 
-模型可自行调用本 command（`disable-model-invocation: false`），但只在第三种情形下自行调用；用户显式要求时照常调用，不因 marker 存在而拒绝——用户要一份人工检查点是正当理由。
+模型可自行调用本 command（`disable-model-invocation: false`），但只在「确无 plan」或当前可读 program 的 task 已明确路由到 create-handoff 的情形下自行调用。program marker 已过期或 ledger 不可读时，先按 program 分流恢复或清除 marker，再重新判断。用户显式要求时照常调用，不因普通 plan marker 存在而拒绝——用户要一份人工检查点是正当理由；program marker 则仍先按上表区分交接整个 supervisor session 还是其中一个 task。
 
-marker 只承诺"指得到 plan 目录"。`state.md` / `journal.md` 的内容是否够接手，取决于它们是否被按 `~/.claude/references/long-task-protocol.md`「声明 active plan」与 §3 持续维护——判断"不写 handoff"前先扫一眼这两份文件是否真的当前。
+marker 只声明 session 关联的执行载体：`type=plan` 指向 plan，`type=program` 指向 ledger。判断“不写 handoff”前，必须确认 marker 仍指向当前执行载体且载体可读；plan 的 `state.md` / `journal.md` 是否够接手，还取决于它们是否按 `~/.claude/references/long-task-protocol.md`「声明 active plan」与 §3 持续维护。
 
 ---
 

@@ -1,0 +1,24 @@
+{
+  "name": "ai-agent-config-share",
+  "version": "1.0.0",
+  "description": "Claude Code 与 Codex 共享的精选配置子集 —— hooks、skills、commands、references 的公开发布仓。",
+  "main": "index.js",
+  "directories": {
+    "doc": "docs"
+  },
+  "scripts": {
+    "test": "bash claude/hooks/run-tests.sh"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lindong28/ai-agent-config-share.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/lindong28/ai-agent-config-share/issues"
+  },
+  "homepage": "https://github.com/lindong28/ai-agent-config-share#readme"
+}

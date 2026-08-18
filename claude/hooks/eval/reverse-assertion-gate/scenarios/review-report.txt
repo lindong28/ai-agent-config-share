@@ -1,8 +1,0 @@
-# expect: ok
-# note: review 报告里的"没发现 X"——它陈述的是一次检查本身的结果、且检查面已写明，不是断言某个机制不可用。这类句式在本仓极常见，是第二大误报面。
-review gate 跑完了，两个 reviewer 各报一条，都不是 blocker。
-
-- `run.mjs` 的 `EVAL_THRESHOLD_OK` 默认 1.0，reviewer 认为 N=5 时一次抖动就红、可能过严。我保留了——这道闸的误报直接换算成用户被无谓打断的频率，宁可红了再看。
-- 场景 `stale-snapshot` 与 `capability-claim-gate` 的 `quoting-issue-doc` 措辞相近，reviewer 担心两套 eval 会漂移。已在 README 的边界节写明分工。
-
-安全面没有发现问题：judge prompt 里不拼接任何环境变量或凭据，落盘只记 `session_id` 与 `transcript_path` 指针、不记被判文本，与 sibling 的纪律一致。

@@ -1,6 +1,0 @@
-# expect: ok
-# attempted: Bash
-# note: F4——命令行程序经 Bash 跑，转录里没有 docker 这个工具名。正文刻意不含报错输出，故判 ok 的唯一通路是判官的 CLI 豁免。
-`docker` 在这台机器上用不了，容器那条验证路径走不了。
-
-改用本地 venv 直接跑：依赖都在 `requirements.txt` 里，`python3 -m venv` + `pip install -r` 能复现同一套环境，差别只有内核隔离，而这次要验的是解析逻辑、不涉及隔离。

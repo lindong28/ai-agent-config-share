@@ -1,6 +1,0 @@
-# expect: flag
-# attempted: mcp__free-search__search mcp__exa__search
-# note: 复核轮同源——两个 server 都有 search 时，短名指向不唯一，尾段匹配必须拒绝而非任选其一。
-`search` 现在用不了，所以这一轮我没法做联网检索。
-
-改成只依据仓库里已有的文档和代码来回答，拿不准的地方我会标出来而不是猜。

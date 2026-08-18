@@ -11,7 +11,6 @@
 #     <repo>/claude/bin/poll-progress.sh  → ~/.claude/bin/poll-progress.sh
 #     <repo>/claude/bin/active-plan       → ~/.claude/bin/active-plan
 #     <repo>/claude/hooks/*.js            → ~/.claude/hooks/*.js  (wire via README prompt)
-#     <repo>/claude/hooks/eval/<gate>/    → ~/.claude/hooks/eval/<gate>/
 #     <repo>/claude/statusline.sh        → ~/.claude/statusline.sh
 #     <repo>/claude/statusline-fields.py → ~/.claude/statusline-fields.py
 #     <repo>/claude/statusline-transcript.py → ~/.claude/statusline-transcript.py
@@ -425,31 +424,18 @@ if [ -d "$HOOKS_SRC" ]; then
     echo
     echo "Installing Claude hook scripts (wire into settings.json via the README 安装 prompt):"
     mkdir -p "$HOME/.claude/hooks/lib"
-    for rel in ask-recommend-gate.js desktop-notify.js desktop-notify.test.js \
-               codeagent-stdin-guard.js codeagent-stdin-guard.test.js \
-               run-with-flags.js \
-               writer-registry-gate.js writer-registry-gate.test.js \
-               block-broad-kill.js block-broad-kill.test.js \
-               commit-message-language.js commit-message-language.test.js \
-               continuation-claim-gate.js continuation-claim-gate.test.js \
-               continuation-claim-gate.control-flow.test.js \
-               prose-choice-gate.js prose-choice-gate.control-flow.test.js \
-               capability-claim-gate.js \
-               reverse-assertion-gate.js reverse-assertion-gate.test.js \
-               bg-shell-reclaim-check.js \
-               lib/llm-judge.js lib/utils.js lib/hook-flags.js \
-               lib/judge-log.js lib/transcript.js; do
-        src="$HOOKS_SRC/$rel"
-        [ -f "$src" ] && link_one "$src" "$HOME/.claude/hooks/$rel"
-    done
-    # Eval scenario suites for the four LLM judge gates. Not needed at runtime —
-    # they are how you re-measure a gate's precision/recall after editing its rubric
-    # (`cd ~/.claude/hooks/eval/<gate> && node run.mjs`), so they only help if the
-    # scenarios travel with the hook rather than staying behind in the repo.
-    for gate in capability-claim-gate continuation-claim-gate prose-choice-gate reverse-assertion-gate; do
-        [ -d "$HOOKS_SRC/eval/$gate" ] || continue
-        link_one "$HOOKS_SRC/eval/$gate" "$HOME/.claude/hooks/eval/$gate"
-    done
+    # Glob-driven (was a hand-maintained list that drifted every sync): every
+    # top-level hook script and its tests, plus lib/. run-tests.sh is repo-run-only
+    # (its ../../codex relative paths do not resolve from ~/.claude/hooks).
+    while IFS= read -r -d '' src; do
+        rel="${src#"$HOOKS_SRC"/}"
+        [ "$rel" = "run-tests.sh" ] && continue
+        link_one "$src" "$HOME/.claude/hooks/$rel"
+    done < <(find "$HOOKS_SRC" -maxdepth 1 -type f \( -name '*.js' -o -name '*.sh' \) -print0)
+    while IFS= read -r -d '' src; do
+        rel="${src#"$HOOKS_SRC"/}"
+        link_one "$src" "$HOME/.claude/hooks/$rel"
+    done < <(find "$HOOKS_SRC/lib" -maxdepth 1 -type f \( -name '*.js' -o -name '*.json' \) -print0)
 fi
 
 # --- codeagent-wrapper binary (darwin/arm64 + linux/amd64; required by /custom:execute-plan) ---
@@ -535,6 +521,27 @@ if [ -f "$ACTIVE_PLAN" ]; then
     chmod +x "$ACTIVE_PLAN"
     link_one "$ACTIVE_PLAN" "$HOME/.claude/bin/active-plan"
 fi
+
+# --- probe / observability CLIs (referenced by references/ and skills) ---
+for b in page-acceptance page-repetition first-screen-density; do
+    src="$SCRIPT_DIR/claude/bin/$b"
+    [ -f "$src" ] && link_one "$src" "$HOME/.claude/bin/$b"
+done
+
+# --- claude/scripts (session locator, MCP dedup, compaction hooks) ---
+SCRIPTS_SRC="$SCRIPT_DIR/claude/scripts"
+if [ -d "$SCRIPTS_SRC" ]; then
+    echo
+    echo "Installing claude/scripts:"
+    for rel in find-claude-session.sh mcp-dedup.py; do
+        [ -f "$SCRIPTS_SRC/$rel" ] && link_one "$SCRIPTS_SRC/$rel" "$HOME/.claude/scripts/$rel"
+    done
+    while IFS= read -r -d '' src; do
+        rel="${src#"$SCRIPTS_SRC"/}"
+        link_one "$src" "$HOME/.claude/scripts/$rel"
+    done < <(find "$SCRIPTS_SRC/hooks" -maxdepth 1 -type f -name '*.js' -print0)
+fi
+
 
 # --- statusline scripts (produce ~/.claude/tt-status.json for tt-web) ---
 
@@ -662,6 +669,38 @@ if [ -x "$TT_WEB_INSTALL" ]; then
     "$TT_WEB_INSTALL"
 fi
 
+# --- Sweep symlinks left behind by earlier versions of this repo ---
+# Removing a file from the repo stops install.sh from linking it, but does nothing
+# about the link an earlier install already created — and verify.sh cannot see it
+# either, because every check walks the *source* tree. A consumer who installed a
+# previous version and pulled this one would keep dangling links (e.g. to hooks/eval/,
+# rules/, bin/gate-stats) forever. Only links whose target points inside THIS repo and
+# whose target no longer exists are removed; foreign links and live links are untouched.
+sweep_stale_links() {
+    local root="$1" link target swept=0
+    [ -d "$root" ] || return 0
+    while IFS= read -r -d '' link; do
+        target="$(readlink "$link")"
+        case "$target" in
+            "$SCRIPT_DIR"/*)
+                if [ ! -e "$link" ]; then
+                    rm -f "$link" && swept=$((swept+1))
+                    echo "  [swept] $link → $target (source removed from repo)"
+                fi
+                ;;
+        esac
+    done < <(find "$root" -type l -print0 2>/dev/null)
+    [ "$swept" -gt 0 ] && echo "  swept $swept stale link(s) under $root"
+    return 0
+}
+
+echo
+echo "Sweeping stale links from earlier installs:"
+sweep_stale_links "$HOME/.claude"
+sweep_stale_links "$HOME/.codex"
+# Empty dirs the swept links used to live in (hooks/eval/<gate>/, rules/common/…).
+find "$HOME/.claude/hooks/eval" "$HOME/.claude/rules" -type d -empty -delete 2>/dev/null || true
+
 # --- ask-user-mcp sub-installer (Claude-compatible AskUserQuestion for Codex) ---
 # Symlink the server into ~/.codex so config.toml's static path resolves regardless
 # of where this repo is cloned, then install its runtime node deps.
@@ -677,9 +716,24 @@ if [ -x "$ASK_USER_INSTALL" ]; then
       || echo "WARN: ask-user-mcp deps install failed — AskUserQuestion MCP server will not start" >&2
 fi
 
+# --- Codex hook parity layer (mirrors the Claude gates on Codex events) ---
+# ~/.codex/hooks.json is read by the Codex CLI; the dispatcher resolves hook
+# scripts through its own realpath back into this repo, so a symlink suffices.
+mkdir -p "$HOME/.codex/bin"
+link_one "$SCRIPT_DIR/codex/hooks.json" "$HOME/.codex/hooks.json"
+link_one "$SCRIPT_DIR/codex/bin/codex-hook-dispatch.js" "$HOME/.codex/bin/codex-hook-dispatch.js"
+
+
 # --- Dependency validation + settings.json wiring (macOS-assumed) ---
 
 ensure_python3 || true
+
+# --- ~/.agents/skills wrapper farm (gives Codex $custom-<x> entries for commands) ---
+if command -v python3 >/dev/null 2>&1; then
+    echo
+    echo "Building ~/.agents/skills wrapper farm (gen-agents-skills.py):"
+    python3 "$SCRIPT_DIR/codex/bin/gen-agents-skills.py" || echo "  [WARN] gen-agents-skills.py failed — Codex loses \$custom-<x> wrappers until rerun"
+fi
 ensure_jq || true
 ensure_local_bin_in_path || true
 check_codex_cli || true

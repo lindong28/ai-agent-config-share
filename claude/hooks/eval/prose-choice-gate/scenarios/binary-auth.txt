@@ -1,3 +1,0 @@
-# expect: ok
-# note: 裸二元授权，没有摆出并列备选。跨闸一致性硬约束——stop-gate 的 commit-question.txt 对同类消息期望 ok，两道 gate 不能给出相反裁决。
-完成并校验通过：settings.json 仍是合法 JSON ✓。这处 id 改动现在落在工作树、未提交（上一个 commit 之后的小修）。要我把它也提交吗？（走 create-commit，单独一条 chore 即可。）

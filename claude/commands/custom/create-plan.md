@@ -140,6 +140,18 @@ planner 和 user 对齐的过程中，至少要让以下几类信息变清晰。
 - 代码复杂度 vs 可演进性
 - 当下交付速度 vs 长期维护成本
 
+### 运行时成本审计（条件化）
+
+**触发条件**：plan 含成本要素——`~/.claude/references/surface-choices-rubric.md`「运行时成本要素」所定义（带实质用户可见运行时成本；典型载体是 plan 里的步骤，一个步骤可含多个要素）。
+
+**对齐**：每个成本要素的去留与形态。
+
+**lens**：逐要素过 rubric 该节的 so-what 测试，按其处置分支走。
+
+**取舍是否需用户拍**：surface 支必须在 plan 期经 `AskUserQuestion` 决，选项带成本量化与最便宜替代——不留给 implementer 或 review 期，那时改选项要重建产物。
+
+**plan 中的产出**：「运行时成本审计」段——保留的成本要素逐条记 so-what 结论 + 用户裁决（若经问询），是 review-gate「成本正当性」问的免报依据；无成本要素时一句「无运行时成本要素」（让 reviewer 分得清"审过没有"与"没审"）。
+
 ### rigor 校准（必答；反转成本高）
 
 读取 `~/.claude/references/rigor-tiers.md`。这是 mandatory intake，不因 spec 已覆盖其他 facet 而跳过，也不得作为软性取舍维度自行 default。
@@ -182,7 +194,7 @@ planner 和 user 对齐的过程中，至少要让以下几类信息变清晰。
 
 **取舍是否需用户拍**：走 §2 开头 borderline 决策两条 path——直观、无新增取舍的翻译 planner 自己拍；浮现超出现有 L1/L2 的取舍则 `AskUserQuestion` 对齐、记决策。
 
-**plan 中的产出**：「UX 契约影响」段写明——(a) 有无影响（无则一句理由即 skip）；(b) 动哪个 / 哪些 ux-contract section + 该 section 投影出的 L2 条目（进 user-facing surface）；(c) 对齐过的取舍决策（若有）；(d) 给 execute-plan 的指令：apply 投影出的契约 delta 进 ux-contract §X、按列出的 L2 条目验证——已批准意图，apply 之，不要自行新增本段未记录的改动。
+**plan 中的产出**：「UX 契约影响」段写明——(a) 有无影响（无则一句理由即 skip）；(b) 动哪个 / 哪些 ux-contract section + 该 section 投影出的 L2 条目（进 user-facing surface；投影出的 L2 条目须与 delta 中新增 / 修改的每条 L1 承诺成对——docs-organization-protocol contracts/ 段「L1/L2 成对写入不变量」的 plan 侧，缺配对的 plan 会在 execute-plan §4a apply 时被停下）；(c) 对齐过的取舍决策（若有）；(d) 给 execute-plan 的指令：apply 投影出的契约 delta 进 ux-contract §X、按列出的 L2 条目验证——已批准意图，apply 之，不要自行新增本段未记录的改动。
 
 ### 设计决策 + 内部 verify（L3）
 
@@ -255,8 +267,10 @@ planner 和 user 对齐的过程中，至少要让以下几类信息变清晰。
 | 用户视角 verify（L2：覆盖 happy + error path 的可观测条件，独立于内部实现；必须 implementer-executable form——命令+预期输出 / subagent 模拟用户流程 / 截图比对脚本 / 评测分数断言 / 结构化 rubric。有 spec 时是 spec dimension 的翻译版，每条 spec dimension 必须有 plan 对应步骤） | "跑一下应该 OK" / "实现完了再看" / "类型对了就行" / "使用者满意"（spec 措辞照搬不翻译） |
 | 内部 verify（L3：每个非平凡设计决策对应的 verify——unit test / 类型签名 / contract test / 关键不变式断言；agent 可独立跑） | "走个 lint" / "看下编译过没过" |
 | UX 契约影响（用户可感知行为变化且产品有 ux-contract.md 时）：动哪个 / 哪些 ux-contract section + 该 section 投影出的 L2 条目（用 ux-contract 验收 lens 写、进 user-facing surface）+ 对齐过的取舍决策（若有）+ 给 execute-plan 的 apply 指令；无影响 / 产品无 ux-contract 需一句理由 skip | 用户可感知行为变化但 plan 对 ux-contract 只字未提（默认 drift）/ 记了契约 delta 却无对应 L2 verify |
+| 运行时成本审计（plan 含成本要素时）：「运行时成本审计」段逐条记保留要素的 so-what 结论 + 用户裁决（若经问询）；无成本要素需一句「无运行时成本要素」 | plan 让用户等长过程 / 付大 I/O 却无该段（成本默认未经审计）/ 有段但只有机制陈述 |
 | verify 步骤的人机边界：每条 verify 标识 agent 可独立完成 vs 需人工介入；人工项必须说明自动化先兜底了哪些 | 没标 → implementer 不知道哪步会被 block |
 | 用户需要在 phase 边界做什么决策、为什么做、看什么材料做、怎么最短路径打开材料、如何回复；无用户决策 gate 则说明"全自动执行、无需用户介入" | "用户选一个方案" / "用户看一下 mock" |
+| 每个交付物的**到达位置与判据**（交付物需他人合并 / 审批 / 发布才到得了使用者时必答；纯本仓自持的可略）：使用者实际从哪里取用它、"到达"怎么验证、该动作归谁 | 写了产物形态却没说它怎么到使用者手里；或只写"提交 MR / 推上分支"就当交付完成 |
 | 用户首见面 / 顶层入口文档是否需要同步 | 没提 |
 | 哪些决策是访谈中没问、planner 自己拍的（"我默认 X，因为 Y"） | 没列 → reviewer 无从审 |
 
@@ -270,7 +284,7 @@ planner 和 user 对齐的过程中，至少要让以下几类信息变清晰。
 
 **fan-out 时机**：alignment（§2 全部 facets）只跑一次，结果对 N 个 writer 共享；fan-out 发生在 alignment 完全收敛之后、写 plan 之前。alignment 不并行——alignment 的价值在于深度，不是吞吐。
 
-**writer 独立性**（anti-default 警告）：每份 plan 由独立 sub-agent 产生（Agent tool 并发调用，单条响应里发 N 次）。每个 sub-agent 必须独立做技术调研——读 CLAUDE.md / README / 相关代码自己形成判断，不复用主 session 的研究 cache。否则 N 份 plan 会高度雷同，Best-of-N 失去意义。
+**writer 独立性**（anti-default 警告）：每份 plan 由独立 writer 产生（通道按 `~/.claude/references/delegation-policy.md` §Transport selection 判；走 in-process 时用 Agent tool 并发调用、单条响应里发 N 次）。每个 sub-agent 必须独立做技术调研——读 CLAUDE.md / README / 相关代码自己形成判断，不复用主 session 的研究 cache。否则 N 份 plan 会高度雷同，Best-of-N 失去意义。
 
 **alignment 结论进 writer prompt**：writer 在隔离上下文里看不到主 session——§2 对齐出的 L1 / 取舍偏好 / L2 + 范围约束是它落地的契约，必须写进每个 writer 的 prompt（此时 plan 未写、spec 可能缺，prompt 是唯一通道）。同时把 plan 质量契约以路径形式指给 writer——§3 必答项 + `~/.claude/references/plan-review-principles.md`（能读文件的自己读，不复述），并给定输出路径 `plan-<i>.md`，使 N 份 plan 都过同一 review bar、可比可审。框定"必须含什么"，不封顶 writer 按运行时上下文补充。
 

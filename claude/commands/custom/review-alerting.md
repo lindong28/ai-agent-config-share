@@ -27,7 +27,7 @@ grep 出该项目**决定 fire、格式化消息、配置阈值、文档化告�
 
 ### 1. 审查（per-principle 并行 subagent）
 
-`alerting-review-principles.md` 的**每条原则各 spawn 一个 general-purpose subagent 并行**审查整个告警面，确保每条原则获得充分注意力。spawn 时**不传 `name`**——判据见 `~/.claude/references/delegation-policy.md` §Harness transport。
+`alerting-review-principles.md` 的**每条原则各 spawn 一个 reviewer 并行**审查整个告警面，确保每条原则获得充分注意力。通道按 `~/.claude/references/delegation-policy.md` §Transport selection 判；走 in-process 时用 `general-purpose` 且**不传 `name`**。
 
 每个 subagent 的输入：
 - `~/.claude/references/alerting-review-principles.md`（完整——相邻原则提供边界；明确告知只应用指定那一条）

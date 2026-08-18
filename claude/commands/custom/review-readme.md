@@ -19,7 +19,7 @@ description: 审查单个 README 文件，逐条对照 README 写作原则评审
 
 ### 1. 审查（分组并行 subagent）
 
-将 principles 按 `max-principle-per-subagent` 均匀分组，每组 spawn 一个 general-purpose subagent **并行**审查。值越小，每条原则获得越多注意力。spawn 时**不传 `name`**——判据见 `~/.claude/references/delegation-policy.md` §Harness transport。
+将 principles 按 `max-principle-per-subagent` 均匀分组，每组 spawn 一个 reviewer **并行**审查。值越小，每条原则获得越多注意力。通道按 `~/.claude/references/delegation-policy.md` §Transport selection 判；走 in-process 时用 `general-purpose` 且**不传 `name`**。
 
 每个 subagent 的输入：
 - `~/.claude/references/readme-review-principles.md`（传完整文件——相邻原则提供边界上下文，帮助 subagent 避免报告属于其他组的发现；明确告知只应用分配给该 subagent 的那几条 principle）

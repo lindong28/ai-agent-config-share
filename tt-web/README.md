@@ -87,13 +87,7 @@ it pinned. Later syncs fail closed if that identity changes. Use `--yes` to skip
 the prompt in a script — check your SSH config first, because that flag is the
 whole of the verification.
 
-**Refresh and status**: the page pulls from the remotes on load when its data is
-older than 10 minutes, and the Refresh button forces a pull. The first response
-never waits for the network — the page renders what it already has, marks itself
-syncing, and updates when the pull lands. Each machine's card distinguishes
-*not reachable now* from *data is old*: both can be true at once, and a machine
-that has never been reached successfully is excluded from `All` while still
-counting in the `coverage N/M` denominator.
+**Refresh and status**: `tt-web open` requests a fresh cross-machine generation every time before it opens the page; an already-running sync is reused. Ordinary page loads pull from the remotes when data is older than 10 minutes, and the Refresh button forces a pull. The first response never waits for the network — the page renders what it already has, marks itself syncing, and updates when the pull lands. If the CLI cannot request a refresh, it warns, opens the existing data, and tells you to retry with the page's Refresh button. Each machine's card distinguishes *not reachable now* from *data is old*: both can be true at once, and a machine that has never been reached successfully is excluded from `All` while still counting in the `coverage N/M` denominator.
 
 **Retention**: each machine keeps its current snapshot and the previous one;
 older ones are removed as new ones publish. A snapshot in use by a reader is not

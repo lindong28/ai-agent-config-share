@@ -1,6 +1,0 @@
-# expect: flag
-# attempted: mcp__free-search__search
-# note: 复核轮 HIGH——调过 A server 的 search 不能给"B server 的 search 不可用"背书。断言写的是 canonical 名，必须精确匹配，不得走尾段。
-`mcp__context7__search` 这个工具在本 session 不可用，所以我没法用它去查这个库的官方文档。
-
-先按本地 `node_modules` 里的类型定义推断接口形态，等它可用了再核对。

@@ -1,0 +1,17 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Postmortem</title>
+<style>
+:root{--s8:8px;--s16:16px;--s24:24px;--s32:32px}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#fbfaf8;color:#1d1b19;font-family:Georgia,serif;font-size:18px;line-height:28px;padding:48px}
+main{max-width:640px;margin:0 auto}
+h1{font-size:32px;line-height:40px;font-weight:600;margin-bottom:24px}
+h2{font-size:24px;line-height:32px;font-weight:600;margin-bottom:16px;margin-top:32px}
+p{margin-bottom:16px}
+</style></head><body><main>
+<h1>Incident postmortem</h1>
+<p>On the morning of the outage the ingest tier stopped acknowledging writes.</p>
+<h2>Timeline</h2>
+<p>The first alert fired and the on-call engineer acknowledged it within minutes.</p>
+<h2>Remediation</h2>
+<p>We added a backpressure signal between the two tiers and re-ran the load test.</p>
+</main></body></html>

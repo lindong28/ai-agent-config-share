@@ -85,10 +85,15 @@ function scanTailForAssistantText(path, chars) {
     if (!s) continue;
     let obj;
     try { obj = JSON.parse(s); } catch { continue; }
-    const content = obj && obj.type === 'assistant' && obj.message && obj.message.content;
+    const claudeContent = obj && obj.type === 'assistant' && obj.message && obj.message.content;
+    const codexPayload = obj && obj.type === 'response_item' && obj.payload;
+    const codexContent = codexPayload && codexPayload.type === 'message' && codexPayload.role === 'assistant'
+      ? codexPayload.content
+      : null;
+    const content = claudeContent || codexContent;
     if (Array.isArray(content)) {
       const t = content
-        .filter((b) => b && b.type === 'text' && typeof b.text === 'string')
+        .filter((b) => b && (b.type === 'text' || b.type === 'output_text') && typeof b.text === 'string')
         .map((b) => b.text)
         .join('\n')
         .trim();

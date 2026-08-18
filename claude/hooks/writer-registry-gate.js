@@ -28,8 +28,9 @@
 const fs = require('fs');
 const path = require('path');
 const { execFileSync } = require('child_process');
+const { isAgentRoot } = require('./lib/session-tree');
 
-const GATED_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
+const GATED_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit', 'apply_patch']);
 const REGISTRY_DIRNAME = 'agent-writers';
 const PS_ANCESTOR_HOPS = 16;
 
@@ -179,7 +180,7 @@ function claudePid() {
   }
   let p = process.pid;
   for (let i = 0; i < PS_ANCESTOR_HOPS && p > 1; i++) {
-    if ((comm.get(p) || '').split('/').pop().includes('claude')) return p;
+    if (isAgentRoot(comm.get(p))) return p;
     p = parent.get(p) || 1;
   }
   return null;
@@ -375,6 +376,12 @@ function targetPaths(toolName, toolInput) {
   if (Array.isArray(toolInput.edits)) {
     for (const e of toolInput.edits) {
       if (e && typeof e.file_path === 'string' && e.file_path) out.add(e.file_path);
+    }
+  }
+  if (toolName === 'apply_patch' && typeof toolInput.command === 'string') {
+    for (const line of toolInput.command.split('\n')) {
+      const match = line.match(/^\*\*\* (?:(?:Add|Update|Delete) File|Move to): (.+)$/);
+      if (match && match[1].trim()) out.add(match[1].trim());
     }
   }
   return [...out];
@@ -741,7 +748,7 @@ function cli(argv) {
   return 2;
 }
 
-module.exports = { run, evaluate, validSessionId, dirtySet, envSessionId, canonical, pidFingerprint, entryAlive };
+module.exports = { run, evaluate, validSessionId, dirtySet, envSessionId, canonical, pidFingerprint, entryAlive, targetPaths };
 
 if (require.main === module) {
   if (process.argv.length > 2) {

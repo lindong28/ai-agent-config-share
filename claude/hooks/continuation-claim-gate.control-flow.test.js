@@ -37,13 +37,64 @@ delete cleanEnv[NEST_GUARD];
 
 let logSeq = 0;
 
+// ── 伪造 `ps` / `lsof`：整个文件的运行态都由它们钉死，不依赖宿主环境 ────────────────────
+//
+// 为什么必须是全文件默认、而不只给运行态那一组用：本文件其余用例（口令语义、输入缺失…）都
+// 隐含前提"此刻零运行态"，而它们此前之所以稳定，**是因为探测有 bug、恒返回 false**。缺陷修好后
+// 真实环境里前台工具调用自己的 `tasks/<id>.output` 就会被看成活任务，那些用例便随宿主环境漂移
+// （实测：修复后它们从 skipped 变成 ok_live_task）。所以把三态完全交给 shim 决定。
+//
+// shim 拿得到 hook 的 pid：`execFileSync("ps"|"lsof", …)` 不经 shell，故 shim 的 $PPID 就是
+// hook 进程本身——这是把真 pid 接进伪造进程表的唯一一环。
+const SHIM_OUT = "/tmp/claude-501/proj/run/tasks/abc123.output"; // 需匹配 hook 的 OUTPUT_RE
+const F = { shell: 900001, claude: 900002, other: 900003, holder: 900004 };
+const shimDir = path.join(tmp, "shims");
+fs.mkdirSync(shimDir, { recursive: true });
+fs.writeFileSync(
+  path.join(shimDir, "ps"),
+  `#!/bin/sh
+H=$PPID
+case "$SCEN" in
+  b) printf '%s 1 node\\n' "$H" ;;                     # 链上无 claude → 上溯必须失败
+  *) printf '%s ${F.shell} node\\n' "$H"
+     printf '${F.shell} ${F.claude} bash\\n'
+     printf '${F.claude} 1 claude\\n'
+     printf '${F.other} ${F.claude} sleep\\n'          # 子树内的非 holder，保证 c ≠ b
+     if [ "$SCEN" = a ]; then printf '${F.holder} ${F.claude} bash\\n'
+     else printf '${F.holder} 1 bash\\n'; fi ;;        # 非 a：holder 在子树之外
+esac
+`,
+  { mode: 0o755 }
+);
+// 只在被问到 holder 时才回答；hook 用 -p <逗号分隔 pid> 提问，故"问没问到"本身就是判据。
+//
+// 没问到 holder 时**成功退出 0 并列出一条不匹配的普通文件**，而不是 `exit 1`。真实 lsof 对活着的
+// 进程本来就会列出它们的 fd（每个进程都有打开的文件），零活任务表现为"列了但没有匹配 OUTPUT_RE 的"，
+// 不是"什么都没列"。用 `exit 1` 表达零任务会把**探测不完整**（lsof 部分可见 / 进程中途消失也退 1）
+// 固化成"确定没有活任务"，于是这份 authority 测试反过来会把"退 1 应 fail-open"的修法判成错——
+// 那条 `hasLiveTask` 的既有缺陷另行跟踪（harness-issues），本测试不得替它把错误语义钉死。
+fs.writeFileSync(
+  path.join(shimDir, "lsof"),
+  `#!/bin/sh
+for a in "$@"; do
+  case ",$a," in *",${F.holder},"*) printf 'p${F.holder}\\naw\\nn${SHIM_OUT}\\n'; exit 0 ;; esac
+  case "$a" in "${F.holder}") printf 'p${F.holder}\\naw\\nn${SHIM_OUT}\\n'; exit 0 ;; esac
+done
+printf 'p${F.other}\\nar\\nn/dev/null\\n'   # 活着但没有活任务：列得出 fd，只是没有匹配的
+exit 0
+`,
+  { mode: 0o755 }
+);
+// 默认 c：有 claude 祖先、子树非空、但没有活任务 —— 即"零运行态"，其余用例的隐含前提。
+const SHIM_ENV = { SCEN: "c", PATH: `${shimDir}:${process.env.PATH}` };
+
 /** 跑一次 hook，返回 { status, record }。record 取本次调用独占日志里最后追加的那条。 */
 function run(payload, extraEnv) {
   const logPath = path.join(tmp, `verdicts-${logSeq++}.jsonl`);
   const r = spawnSync(process.execPath, [hook], {
     input: JSON.stringify(payload),
     encoding: "utf8",
-    env: { ...cleanEnv, ...extraEnv, CLAUDE_JUDGE_LOG_PATH: logPath },
+    env: { ...cleanEnv, ...SHIM_ENV, ...extraEnv, CLAUDE_JUDGE_LOG_PATH: logPath },
     timeout: 20000,
   });
   assert.notStrictEqual(r.status, null, `hook 未正常退出: ${r.stderr}`);
@@ -168,42 +219,71 @@ try {
     );
   }
 
-  // 有活任务时：即便声明 INTENT-CONTINUE 也必须放行——那时"我接着做"是**真的**，拦它才是误报。
-  // 这条同时守住位序：运行态探测必须在逃生口之前，否则口令分支拿不到"零运行态"这个判据。
-  // 造一个 hasLiveTask 认得的活任务：路径形如 <tmp>/claude-<uid>/<proj>/<run>/tasks/<id>.output，
-  // 且要有进程**以写模式**持有它（只建文件不够——那正是 hook 刻意过滤掉的假阳性）。
+  // ── 运行态探测的三态：ok_live_task / detect_unavailable / false 后续分支 ──────────────
+  //
+  // 用 **PATH shim 伪造 `ps` 与 `lsof`**，而不是造真进程。理由是这组断言要守的不变量是
+  // "子树的根取在哪里"：真进程版只能在**恰好有 claude 祖先**的环境（如从 Claude Code 里跑）
+  // 成立，换到 CI 或普通终端就会滑向 detect_unavailable 而**静默通过**（那也是放行），
+  // 于是它想守的东西在最需要它的环境里恰好失效。shim 版把拓扑完全钉死，与宿主环境无关。
+  //
+  // shim 拿得到 hook 的 pid：`execFileSync("ps"|"lsof", …)` 不经 shell，故 shim 的 $PPID
+  // 就是 hook 进程本身——这是能把真 pid 接进伪造进程表的唯一一环。
+  //
+  // 三场景的期望 verdict 两两不同，故本组在探测返回 true / null / false 三种情况下读数不同：
+  //   a 有 claude 祖先 + holder 在其子树   → true  → ok_live_task
+  //   b 链上无 claude 祖先                 → null  → detect_unavailable（fail-open）
+  //   c 有 claude 祖先 + holder 在子树外   → false → ok_override（口令分支，判官不被调用）
+  // c 的伪造表里**必须留一个子树内的非 holder 进程**：否则 descendants() 交出空集，
+  // hasLiveTask 首行 `pids.size === 0` 会返回 null，c 就塌成 b——两者同为放行，测试会
+  // **碰巧通过**而不变量根本没被守住。若拓扑写错，c 实得 detect_unavailable，下面的断言会报出来。
   {
-    const taskDir = path.join(tmp, "claude-501", "proj", "run", "tasks");
-    fs.mkdirSync(taskDir, { recursive: true });
-    const outFile = path.join(taskDir, "abc123.output");
-    fs.writeFileSync(outFile, "");
-    const holder = spawnSync === null ? null : require("child_process").spawn(
-      process.execPath,
-      ["-e", `const fs=require("fs");fs.openSync(${JSON.stringify(outFile)},"a");setTimeout(()=>{},30000)`],
-      { stdio: "ignore", detached: false }
-    );
-    try {
-      // 给 holder 一点时间把 fd 开出来；lsof 看不到还没 open 的句柄。
-      const deadline = Date.now() + 5000;
-      let seen = false;
-      while (Date.now() < deadline && !seen) {
-        const probe = spawnSync("lsof", ["-F", "n", "-p", String(holder.pid)], { encoding: "utf8" });
-        seen = (probe.stdout || "").includes(outFile);
-      }
-      assert.ok(seen, "测试自身的前置条件不成立：holder 没能持有 output 文件，本条断言无意义");
-      // 两条都必须放行：声明 CONTINUE 是**真的**；而口令格式没写对时更不该拦——
-      // 拦一个正在干活的 agent 是纯误报，比漏掉一次格式检查糟得多。
-      for (const tail of ["CONTINUATION-OK: 真要后台跑 INTENT-CONTINUE", "CONTINUATION-OK: 忘了写标记"]) {
-        const { status, record } = run({ ...base, last_assistant_message: `${FLAGGABLE}\n\n${tail}` });
-        assert.strictEqual(status, 0, `有活任务时必须放行：${tail}`);
-        assert.strictEqual(
-          record && record.verdict,
-          "ok_live_task",
-          `有活任务时应记 ok_live_task（证明探测在一切口令判定之前就短路了），实得 ${record && record.verdict}`
-        );
-      }
-    } finally {
-      if (holder && holder.pid) { try { process.kill(holder.pid); } catch {} }
+    const withShims = (scen) => ({ SCEN: scen });
+
+    // a：有活任务时即便声明 INTENT-CONTINUE 也必须放行——那时"我接着做"是**真的**，拦它才是误报。
+    // 口令格式没写对时更不该拦：拦一个正在干活的 agent 比漏一次格式检查糟得多。
+    // 这条同时守住位序：探测必须在逃生口之前，否则口令分支拿不到"零运行态"这个判据。
+    for (const tail of ["CONTINUATION-OK: 真要后台跑 INTENT-CONTINUE", "CONTINUATION-OK: 忘了写标记"]) {
+      const { status, record } = run(
+        { ...base, last_assistant_message: `${FLAGGABLE}\n\n${tail}` },
+        withShims("a")
+      );
+      assert.strictEqual(status, 0, `有活任务时必须放行：${tail}`);
+      assert.strictEqual(
+        record && record.verdict,
+        "ok_live_task",
+        `有活任务时应记 ok_live_task（证明探测在一切口令判定之前就短路了），实得 ${record && record.verdict}`
+      );
+    }
+
+    // b：上溯找不到 claude 祖先 → 不下结论。**不得回落到 process.ppid**——那正是本次修的缺陷，
+    // 悄悄回落会让修复在"上溯失败"时静默恢复旧行为，且日志上与修好了同形。
+    {
+      const { status, record } = run(
+        { ...base, last_assistant_message: FLAGGABLE },
+        withShims("b")
+      );
+      assert.strictEqual(status, 0, "上溯失败必须 fail-open");
+      assert.strictEqual(
+        record && record.verdict,
+        "detect_unavailable",
+        `无 claude 祖先应记 detect_unavailable，实得 ${record && record.verdict}`
+      );
+    }
+
+    // c：确实零运行态。走口令 + HANDOFF 分支落 ok_override 并放行，**判官不被调用**
+    // （judge() 位于该分支之后）——这正是本组能保持确定性、不依赖判官与网络的原因。
+    {
+      const { status, record } = run(
+        { ...base, last_assistant_message: `${FLAGGABLE}\n\nCONTINUATION-OK: 真的到此为止 INTENT-HANDOFF` },
+        withShims("c")
+      );
+      assert.strictEqual(status, 0, "零运行态 + HANDOFF 必须放行");
+      assert.strictEqual(
+        record && record.verdict,
+        "ok_override",
+        `零运行态 + HANDOFF 应记 ok_override；实得 ${record && record.verdict}` +
+          "（若为 detect_unavailable，说明伪造子树成了空集、c 塌回 b，拓扑要修）"
+      );
     }
   }
 
@@ -226,6 +306,93 @@ try {
       timeout: 20000,
     });
     assert.strictEqual(r.status, 0, `stdin 为 ${JSON.stringify(raw)} 时必须干净放行`);
+  }
+
+  // ── in-process subagent 的活性信号（2026-08-10 加）─────────────────────────
+  // 背景：lsof 探测只看"子孙进程持有 tasks/*.output"，对 `Agent` 工具起的 in-process
+  // teammate **间歇性**失效——它跑 Bash 时被测到、思考/读文件时测不到，于是这道闸拦过一个
+  // 正在正确工作的 agent。补的信号是 subagents/agent-*.jsonl 的 mtime 新鲜度。
+  //
+  // 三条一起测，缺一条都测不出回归：只测(2)的话，把窗口改成无穷大也全绿，而那等于废掉整道闸。
+  {
+    const sessDir = path.join(tmp, "livesess");
+    const transcript = `${sessDir}.jsonl`;
+    fs.writeFileSync(transcript, "");
+    const subs = path.join(sessDir, "subagents");
+    fs.mkdirSync(subs, { recursive: true });
+
+    // (1) 零运行态 + 无 subagent 目录内容 → 必须照常落到判官并开火
+    const noAgent = run({ ...base, transcript_path: transcript, last_assistant_message: FLAGGABLE });
+    assert.strictEqual(noAgent.record && noAgent.record.verdict, "flag",
+      "没有 subagent 活动时必须照常开火，新信号不得把闸放宽");
+
+    // (2) subagent 刚写过 → 放行，且 verdict 与 lsof 那条**分得开**
+    const live = path.join(subs, "agent-live.jsonl");
+    fs.writeFileSync(live, "{}");
+    const fresh = run({ ...base, transcript_path: transcript, last_assistant_message: FLAGGABLE });
+    assert.strictEqual(fresh.status, 0, "subagent 在跑时必须放行");
+    assert.strictEqual(fresh.record && fresh.record.verdict, "ok_live_subagent",
+      "须用独立 verdict：与 ok_live_task 混在一起就分不出这个新信号是否在误报");
+
+    // (3) 超出窗口 → 回落到判官。样本取**刚好超窗**(25s)而非一小时前：用一小时前的样本时，
+    // 窗口被误改成 200s / 30min 测试照样全绿，等于只钉住了"窗口 < 1h"这个无用的下界。
+    const stale = Date.now() / 1000 - 25;
+    fs.utimesSync(live, stale, stale);
+    const old = run({ ...base, transcript_path: transcript, last_assistant_message: FLAGGABLE });
+    assert.strictEqual(old.record && old.record.verdict, "flag",
+      "陈旧的 subagent 转录不得再算作活任务");
+
+    // (3b) 未来时间戳(时钟回拨)不得被当成新鲜——`now - mtime` 为负会恒满足上界，
+    // 实际窗口变成"未来偏移量 + WINDOW"。
+    const future = Date.now() / 1000 + 3600;
+    fs.utimesSync(live, future, future);
+    const ahead = run({ ...base, transcript_path: transcript, last_assistant_message: FLAGGABLE });
+    assert.strictEqual(ahead.record && ahead.record.verdict, "flag",
+      "未来 mtime 不得被当成活任务");
+    // 且不能只是"暂时不算"：取绝对值的写法会让未来时间戳在时钟走近其 mtime 时**无写入地**
+    // 重新落回窗口而复活。用一个刚进入窗口的未来时间戳（+10s）钉住这一点。
+    const nearFuture = Date.now() / 1000 + 10;
+    fs.utimesSync(live, nearFuture, nearFuture);
+    const soon = run({ ...base, transcript_path: transcript, last_assistant_message: FLAGGABLE });
+    assert.strictEqual(soon.record && soon.record.verdict, "flag",
+      "未来 mtime 即使落在窗口宽度内也不得算活任务（否则会定时复活）");
+    fs.utimesSync(live, stale, stale);
+
+    // (3c) 补充探测自己失败时必须 fail-open（detect_unavailable），不得拿不完整的 false 开火。
+    // 造法用 ENOTDIR（把 subagents 位置放一个普通文件）而不是 chmod 000：后者在 root 下不生效，
+    // 断言会被整段跳过而空转；ENOTDIR 与权限无关，任何用户下都稳定触发。
+    {
+      const brokenSess = path.join(tmp, "brokensess");
+      const brokenTranscript = `${brokenSess}.jsonl`;
+      fs.writeFileSync(brokenTranscript, "");
+      fs.mkdirSync(brokenSess, { recursive: true });
+      fs.writeFileSync(path.join(brokenSess, "subagents"), "not a directory");
+      const broken = run({ ...base, transcript_path: brokenTranscript, last_assistant_message: FLAGGABLE });
+      assert.strictEqual(broken.record && broken.record.verdict, "detect_unavailable",
+        "subagent 探测失败时必须 fail-open，而不是按不完整的 false 开火");
+      // 不断言 reason：`logVerdict` 当前只对 flag / skipped 持久化 reason，故
+      // detect_unavailable 的 `probe.reason` 到不了日志——这是本改动之前就存在的缺口
+      // （该 gate 有整段注释要求 fail-open 可归因），修法在 lib/judge-log.js。
+      // 那个文件此刻有另一个 session 的在途改动，故本轮不动，已记入 harness-issues。
+    }
+
+    // (3d) 单个候选文件 stat 失败时，"没有活任务"这个结论不再可信——失败的那个可能正是
+    // 新鲜的那一个。必须 fail-open 而不是返回 false。造法：悬空 symlink（statSync 抛 ENOENT）。
+    // 注意此时目录里的另一个候选是陈旧的，若实现直接返回 false 就会开火，测试即抓住。
+    {
+      const dangling = path.join(subs, "agent-dangling.jsonl");
+      fs.symlinkSync(path.join(subs, "does-not-exist.jsonl"), dangling);
+      const partial = run({ ...base, transcript_path: transcript, last_assistant_message: FLAGGABLE });
+      fs.unlinkSync(dangling);
+      assert.strictEqual(partial.record && partial.record.verdict, "detect_unavailable",
+        "有候选文件 stat 失败时，不得拿一个可能不完整的 false 去开火");
+    }
+
+    // (4) 目录里的非 agent-*.jsonl 文件不参与判定
+    fs.writeFileSync(path.join(subs, "notes.txt"), "x");
+    const noise = run({ ...base, transcript_path: transcript, last_assistant_message: FLAGGABLE });
+    assert.strictEqual(noise.record && noise.record.verdict, "flag",
+      "subagents 目录里的其它文件不得被当成 subagent 活动");
   }
 
   console.log("continuation-claim-gate.control-flow.test.js: ok");

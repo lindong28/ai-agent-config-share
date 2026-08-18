@@ -172,6 +172,18 @@ check("F stdin 非法 JSON → 早退留痕", () => {
   assert.strictEqual(rec.verdict, "skipped");
 });
 
+// ---- G：阻断反馈先服从 ownership，再决定是否转 AskUserQuestion。 ----
+// 这是确定性反馈契约，不依赖判官在某条语义样本上是否稳定开火；直接钉住实际 hook 发给 agent 的文字。
+check("G 阻断反馈声明 stop-gate 的 ownership 优先级", () => {
+  const source = fs.readFileSync(hook, "utf8");
+  assert.ok(
+    source.includes(
+      "若 sibling `stop-gate` 同时判定这是 agent 自己的剩余工作（同一轮出现两条 hook feedback 即是信号），以它为准直接执行，不调用 `AskUserQuestion`"
+    ),
+    "反馈必须先处理 sibling stop-gate 的 agent-owned 裁决，再决定是否调用 AskUserQuestion"
+  );
+});
+
 console.log(`\n${pass}/${pass + fails.length} 通过`);
 if (fails.length) {
   console.log(`失败: ${fails.join(", ")}`);

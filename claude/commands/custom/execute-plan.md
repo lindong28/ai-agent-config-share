@@ -91,7 +91,7 @@ Bash({
   - 项目根、适用的 repo instructions / tool-routing 规则路径，以及 plan 落盘后新增的用户决定（如有）
   - 协议绑定：plan 顶部有 Long-task banner → 严格按 `~/.claude/references/long-task-protocol.md`；任何 stop 判断按 `~/.claude/references/plan-execution-principles.md` 的 Stop Gate
   - Trajectory Gate：若新证据可能否定当前执行方案，回报目标增量、支撑投入与实际风险作为 Trajectory Gate 输入；裁决归 supervisor，不自行授权下一轮
-  - 若 plan 含「UX 契约影响」段（非 skip）：代码完成后按该段记录的 apply 指令，把其 L2 条目 + section delta + 已对齐决策 apply 进 `docs/contracts/ux-contract.md`（含目标 §X）并冻结；若发现 ux-contract 需要 plan 未记录的改动则停下并 report，不静默扩展（no-silent-edit）
+  - 若 plan 含「UX 契约影响」段（非 skip）：代码完成后按该段记录的 apply 指令，把其 L2 条目 + section delta + 已对齐决策 apply 进 `docs/contracts/ux-contract.md`（含目标 §X）并冻结；新增或修改任一 L1 承诺须同一次编辑内带其对应 L2 验证条件，plan 没提供的同样停下 report；若发现 ux-contract 需要 plan 未记录的改动则停下并 report，不静默扩展（no-silent-edit）
   - Commit 纪律：不自行 commit——每个工作单元完成后停在 working tree 并 report，commit 由 supervisor 过单元 review gate 后执行（§3.5）
   - Review ownership：生成后单元 review gate 由 supervisor 统一编排；implementer 不自行发起 generic / final / closure review。plan 或 plan 落盘后用户明确决定要求的生成后 reviewer multiplicity / 专项审查，先把 charter 回报 supervisor 统一启动；产品语义 judge、LLM report gate、UX 测试等验证照 plan 执行。实施前为解决未决风险而做的设计审查可跑，但必须有不同于单元 gate 的明确失败类别，并回报 reviewer handle / verdict
   - Rigor：读取 `~/.claude/references/rigor-tiers.md`，把 plan 默认 `(A,V)` 与本工作单元 per-phase override 传给 implementer / supervisor；授权控制、验证深度、reviewer multiplicity 与对抗适用面按（默认 ⊔ override）向量缩放、不按 label（review-gate 本地定档在 §3.5 gate 处再逐维并入）
@@ -202,6 +202,7 @@ Codex harness 对原 collaboration agent 发 follow-up task，语义与上面 re
 本步是 docs-organization-protocol 的 contracts/ 段主路径的【自主执行阶段】。由 Codex implementer context 把 plan「UX 契约影响」段记录的 L2 条目 + section delta + 已对齐决策 apply 进 `docs/contracts/ux-contract.md` §X；该 apply 任务随完成代码的那个工作单元的 spawn-prompt 下达（§1.5 轮换后未必是 §1 首个 context，apply 指令见 create-plan facet 产出 (d)）。这是执行 plan 已批准意图、**非静默改**。
 
 - **no-silent-edit 不变量**：若 Codex 在应用时发现 ux-contract 需要 plan 未记录的改动（出现了 plan 没覆盖的取舍）→ 停下，supervisor `AskUserQuestion` 让用户拍，不静默扩展 ux-contract。
+- **L1/L2 成对写入不变量**（docs-organization-protocol contracts/ 段同名不变量的创作侧，apply 步是它的强制点）：新增或修改任一 L1 承诺时，同一次编辑内写出其对应 L2 验证条件；plan 没提供的，按 no-silent-edit 停下交 supervisor，不落无验证条件的承诺。
 
 **4b 契约驱动验证（借方法、不嵌命令）**
 

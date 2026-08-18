@@ -41,7 +41,11 @@
  */
 "use strict";
 const fs = require("fs");
-const { callJudge, NEST_GUARD } = require("./lib/llm-judge");
+const { execFileSync } = require("child_process");
+const { judgeWithRoute, NEST_GUARD } = require("./lib/llm-judge");
+// share 适配：上游此处引入 lib/autopilot-*（ADR-008 Phase 1 探针的三个模块）并在 main()
+// 内挂一段默认关闭的 autopilot 分支。本仓经用户裁决不收录 autopilot，为免 MODULE_NOT_FOUND
+// 加载即崩，requires 与该分支一并移除；推荐判官行为与上游一致。
 // 裁决落盘。本 gate 只在 block 时说话，于是"没被拦"同时对应"判 ok"与"判官不可用"两件事。
 // 三态 verdict 见 lib/judge-log.js。
 const { logVerdict } = require("./lib/judge-log");
@@ -119,13 +123,17 @@ function judge(toolInputJson) {
     "只回一行：\nok\n或\nflag: <一句话指出哪个问题缺推荐或缺理由>\n\n" +
     `<AskUserQuestion参数>\n${toolInputJson}\n</AskUserQuestion参数>`;
 
-  const text = callJudge(prompt, 0); // temp=0：压低但不消除方差（sibling prose-choice-gate 实测 1/15；见 lib/llm-judge.js 的 callJudge）
-  if (text === null) return null; // 后端不可用 / 出错 / 超时 → fail-open
+  // route 随本次调用返回、由调用方一路带到 logVerdict（ADR-019）；temp=0 压低但不消除方差
+  // （sibling prose-choice-gate 实测 1/15，见 lib/llm-judge.js 的 judgeWithRoute）。
+  // fallback: 主判官不可用时改投火山 Ark。启用集合与理由见 lib/llm-judge.js 的 judgeWithRoute。
+  const { text, route } = judgeWithRoute(prompt, 0, { fallback: true });
+  if (text === null) return { concern: null, route }; // 后端不可用 / 出错 / 超时 → fail-open
   if (/^flag/i.test(text))
-    return text.replace(/^flag\s*:?\s*/i, "").trim() || "（未给理由）";
-  return "";
+    return { concern: text.replace(/^flag\s*:?\s*/i, "").trim() || "（未给理由）", route };
+  return { concern: "", route };
 }
 
+/** 只测 hook cwd 对应仓库的 git 可见状态；它是事后线索，不参与是否代答。 */
 function main() {
   if (process.env[NEST_GUARD]) return allow(); // 在嵌套判官调用内——防递归，直接放行
   let raw, input;
@@ -141,17 +149,17 @@ function main() {
   if (!ti || !Array.isArray(ti.questions) || ti.questions.length === 0)
     return allow();
 
-  const concern = judge(JSON.stringify(ti));
+  const { concern, route } = judge(JSON.stringify(ti));
   if (concern === null) {
-    logVerdict(GATE, "judge_unavailable", null, input);
+    logVerdict(GATE, "judge_unavailable", null, input, { route });
     return notifyAndAllow(raw);
   }
   if (concern === "") {
-    logVerdict(GATE, "ok", null, input);
+    logVerdict(GATE, "ok", null, input, { route });
     return notifyAndAllow(raw);
   }
 
-  logVerdict(GATE, "flag", concern, input);
+  logVerdict(GATE, "flag", concern, input, { route });
   process.stderr.write(
     `[ASK-GATE] 这次 AskUserQuestion 缺【显式】推荐或缺理由（光给选项、或推荐只藏在“最干净/零风险”这类形容词里、或标了推荐却没理由）：${concern}\n` +
       "按 CLAUDE.md「Surface Choices (Real Ones), Recommend One」：每个让用户【取舍 / 决策】的问题，都要显式" +

@@ -44,8 +44,13 @@
 "use strict";
 
 const { execFileSync } = require("child_process");
-const { callJudge, NEST_GUARD } = require("./lib/llm-judge");
+const fs = require("fs");
+const path = require("path");
+const { judgeWithRoute, NEST_GUARD } = require("./lib/llm-judge");
 const { logVerdict, lastVerdictOfGate } = require("./lib/judge-log");
+// 进程树遍历与根进程判定住在共享模块：本 hook 与 bg-shell-reclaim-check 曾各写一份，
+// 两份的根判定不同且各修对了对方的 bug，最终在同一次停止里互相矛盾。见 lib/session-tree.js。
+const { sessionDescendants } = require("./lib/session-tree");
 
 const GATE = "continuation-claim-gate";
 const allow = () => process.exit(0);
@@ -59,38 +64,39 @@ const INTENT_HANDOFF_RE = /\bINTENT-HANDOFF\b/;
 // 只要求以 /tasks/<id>.output 结尾太松——本会话起的普通程序写出同形路径会被误当成任务。
 const OUTPUT_RE = /\/claude-\d+\/[^/]+\/[^/]+\/tasks\/[A-Za-z0-9_-]+\.output$/;
 
-/** 本进程的全部后代 pid。拿不到就返回 null → 调用方 fail-open。 */
-function descendants() {
-  let out;
-  try {
-    out = execFileSync("ps", ["-eo", "pid=,ppid="], {
-      encoding: "utf8",
-      timeout: 5000,
-    });
-  } catch {
-    return null;
-  }
-  const kids = new Map();
-  for (const line of out.split("\n")) {
-    const m = line.match(/^\s*(\d+)\s+(\d+)/);
-    if (!m) continue;
-    const [pid, ppid] = [+m[1], +m[2]];
-    if (!kids.has(ppid)) kids.set(ppid, []);
-    kids.get(ppid).push(pid);
-  }
-  // 从 hook 进程往上找到 claude 主进程，再收集其整棵子树。
-  const seen = new Set();
-  const stack = [process.ppid];
-  while (stack.length) {
-    const p = stack.pop();
-    if (seen.has(p)) continue;
-    seen.add(p);
-    for (const c of kids.get(p) || []) stack.push(c);
-  }
-  seen.delete(process.pid);
-  return seen;
-}
+// in-process teammate（`Agent` 工具起的 subagent）不是独立进程，上面那条基于"子孙进程持有
+// output 句柄"的探测对它**间歇性**失效：2026-08-10 实测，同一个 subagent 在跑 Bash 时被测到
+// （它的 shell 是真实子进程），在思考 / 调 Read 一类不起子进程的工具时测不到——于是这道闸
+// 拦住了一个正在正确工作的 agent（实测发生过一次）。间歇比稳定错更麻烦：判定取决于拦截那一刻
+// 它恰好在干什么。
+//
+// 该场景没有精确信号可用，两条都实测排除了：claude 根进程不持久持有 subagent 转录的写句柄
+// （append-and-close，运行中 `lsof -p <root>` 命中 0）；转录末条也区分不出运行中与已完成
+// （两者同为 type=assistant，stop_reason 反而在运行中样本上是 end_turn）。
+//
+// 故退回 mtime 新鲜度。它把假阴性换成一个有界的假阳性窗口——agent 结束后 WINDOW 内仍判 live，
+// 这道闸会少拦一次。这个取舍是刻意的：假阴性拦住的是**正在干活**的 agent（本文件下方注释
+// 「拦一个正在干活的 agent 是纯误报，而误报正是这道闸最不能犯的错」），代价不对称。
+// WINDOW 取 20s：实测 reviewer 单次思考间隔可超 8s，而 20s 短到不足以让一整轮虚假承诺溜过去。
+const SUBAGENT_WINDOW_MS = 20_000;
 
+/**
+ * 本 session（= claude 进程）的全部后代 pid。拿不到就返回 null → 调用方 fail-open。
+ *
+ * **必须先上溯找到 claude 祖先，不能直接拿 `process.ppid` 当根。** hook 进程与 claude 之间
+ * 隔着一层 shell（settings 里的命令写作 `node "$HOME/…"`，`$HOME` 需 shell 展开），所以以
+ * `process.ppid` 为根的子树只含 `{shell, hook}` 两个进程，**永远不含 claude 的后台任务子进程**。
+ * 后果不是偶尔漏判，而是本闸「有活任务 → 一律先放行」这个压低误报的主手段**恒不生效**：
+ * 实测 878 条裁决记录 / 34 小时内 `ok_live_task` 与 `detect_unavailable` 均为 0，而通过路径
+ * 已倒转成 `ok_override`(9) > `ok`(7)——agent 主要靠自贴口令过关，正是本闸要防的那件事。
+ * 决定性证据是同一次停止内相隔 1 秒的两条 hook 输出：`bg-shell-reclaim-check` 点名枚举出
+ * 两个持写句柄的 pid，本闸同时宣布"没有任何 task 在运行"。取法与 16 层上限对齐
+ * `bg-shell-reclaim-check.js` 的 `sessionDescendants()`；完整取证与作用域见
+ * `docs/adr/003-continuation-gate-session-tree-root.md`。
+ *
+ * 注意返回集**不含 claude 自身**（与 bg-shell 一致）——旧实现的集合含 `process.ppid` 自身，
+ * 故本改动不是恒等变换：若 claude 根进程自己持有 `tasks/*.output` 写句柄，读数会变。
+ */
 /**
  * 这些 pid 里有没有**以写模式**持有 tasks/<id>.output 的？
  * 返回 true=有活任务 / false=确定没有 / null=探测不可用（fail-open）。
@@ -104,8 +110,51 @@ function descendants() {
  *     把截断结果当完整的用会漏掉排在后面的持有者，从而误判"没有活任务"而错误开火。
  *     只有干净的 status 1（部分 pid 无权限）才信其 stdout。
  */
-function hasLiveTask(pids) {
-  if (!pids || pids.size === 0) return null; // 连自己的进程树都拿不到 → 不下结论
+/**
+ * 本 session 是否有 subagent 在近 SUBAGENT_WINDOW_MS 内写过转录。
+ *
+ * subagents 目录由 transcript_path 去掉 `.jsonl` 后缀得到（实测的 harness 形态）。
+ * 目录不存在 = 本 session 从未起过 subagent，返回 false 而不是 null：这不是探测故障，
+ * 是一个确定的"没有"。只有读目录本身抛错才算不可判（返回 null 交给调用方 fail-open）。
+ */
+function hasRecentSubagentWrite(transcriptPath, now = Date.now()) {
+  if (typeof transcriptPath !== "string" || !transcriptPath.endsWith(".jsonl")) return false;
+  const dir = path.join(transcriptPath.slice(0, -".jsonl".length), "subagents");
+  let names;
+  try {
+    names = fs.readdirSync(dir);
+  } catch (e) {
+    // ENOENT = 没起过 subagent，是确定的"没有"；其余（权限、IO）才是不可判。
+    return e && e.code === "ENOENT" ? false : null;
+  }
+  let statFailed = false;
+  for (const name of names) {
+    if (!name.startsWith("agent-") || !name.endsWith(".jsonl")) continue;
+    try {
+      // 必须同时要求 age >= 0。取绝对值不行:未来时间戳的文件会在时钟走近其 mtime 时
+      // **无任何写入地**重新落回窗口内而再次判 live(定时假阳性)。负 age = 未来 mtime,
+      // 它不表达"刚写过",直接不算。
+      const age = now - fs.statSync(path.join(dir, name)).mtimeMs;
+      if (age >= 0 && age <= SUBAGENT_WINDOW_MS) return true;
+    } catch {
+      // 单个文件 stat 失败(刚被清理等)不影响其余文件的判定,但会让最终的 false 不再可信:
+      // 那个文件可能正是新鲜的那一个。故记下来,末尾据此返回 null 而非 false。
+      statFailed = true;
+    }
+  }
+  // 没有任何新鲜文件时,若途中有 stat 失败,则"确定没有"这个结论不成立 → 交调用方 fail-open。
+  return statFailed ? null : false;
+}
+
+function hasLiveTask(tree) {
+  const pids = tree && tree.pids;
+  // 每条 null 都带上**可区分的**原因。三种故障（找不到 claude 祖先 / 进程树为空 /
+  // lsof 失败）此前在日志里同形，只留一个无 reason 的 `detect_unavailable`——
+  // 于是这道闸每次 fail-open 都不可归因，实测排查时只能靠猜。
+  // 本文件对 `skipped` 早就守住了同一条纪律（见上文"记 skipped 而非静默 allow"），
+  // 唯独 detect_unavailable 漏了。fail-open 的守门员必须让人事后查得出它为什么开门。
+  if (!pids) return { live: null, reason: (tree && tree.reason) || "tree-unavailable" };
+  if (pids.size === 0) return { live: null, reason: "empty-descendants" };
   let out = "";
   try {
     out = execFileSync("lsof", ["-F", "pan", "-p", [...pids].join(",")], {
@@ -115,7 +164,10 @@ function hasLiveTask(pids) {
     });
   } catch (e) {
     const clean = e && e.status === 1 && !e.signal && !e.killed;
-    if (!clean) return null;
+    if (!clean) {
+      const why = (e && (e.code || (e.killed ? "lsof-timeout" : `lsof-status${e.status}`))) || "lsof-failed";
+      return { live: null, reason: why };
+    }
     out = (e && e.stdout) || "";
   }
   let mode = "";
@@ -124,11 +176,13 @@ function hasLiveTask(pids) {
     else if (line.startsWith("a")) mode = line.slice(1).trim();
     else if (line.startsWith("n")) {
       const f = line.slice(1).trim();
-      if (OUTPUT_RE.test(f) && (mode.includes("w") || mode.includes("u"))) return true;
+      if (OUTPUT_RE.test(f) && (mode.includes("w") || mode.includes("u"))) {
+        return { live: true, reason: null };
+      }
       mode = "";
     }
   }
-  return false;
+  return { live: false, reason: null };
 }
 
 /** 返回 block 理由；'' 表示没问题；null 表示判官不可用 → fail-open。 */
@@ -160,13 +214,15 @@ function judge(lastMsg) {
     "只输出一行：ok  或  flag: <不超过40字，指出那句前向承诺>\n\n" +
     `<agent最后的话>\n${lastMsg}\n</agent最后的话>`;
 
-  const text = callJudge(prompt, 0);
-  if (text == null) return null;
+  // route 随本次调用返回、由调用方一路带到 logVerdict（ADR-019）。
+  // fallback: 主判官不可用时改投火山 Ark。启用集合与理由见 lib/llm-judge.js 的 judgeWithRoute。
+  const { text, route } = judgeWithRoute(prompt, 0, { fallback: true });
+  if (text == null) return { concern: null, route };
   const t = String(text).trim();
-  if (/^ok\b/i.test(t)) return "";
+  if (/^ok\b/i.test(t)) return { concern: "", route };
   const m = t.match(/^flag\s*[:：]?\s*(.*)$/is);
-  if (m) return (m[1] || "").trim().slice(0, 200) || "最后一句承诺了后续动作";
-  return ""; // 判官答非所问 → 当 ok，宁漏勿误拦
+  if (m) return { concern: (m[1] || "").trim().slice(0, 200) || "最后一句承诺了后续动作", route };
+  return { concern: "", route }; // 判官答非所问 → 当 ok，宁漏勿误拦
 }
 
 function main() {
@@ -232,16 +288,48 @@ function main() {
   // 已知并接受的缺口：探测不可用（live === null）时下面的意图检查整段跳过，"光贴口令就放行"
   // 的旧行为在那种情况下会恢复。这是本闸 fail-open 原则的延伸——不确定就不拦——代价是
   // 探测故障期间逃生口回到旧语义；`detect_unavailable` 会留痕，可事后统计其频率。
-  const live = hasLiveTask(descendants());
+  // eval 专用：探测读的是**运行环境**的实时状态，而合成 transcript 无法控制它。
+  // 于是在有后台任务的 session 里跑 eval，每条场景都会在下面短路成 ok_live_task，
+  // 判官一次都不被调用——套件全绿或全红都与判官质量无关。实测过一次（8/8 no-verdict）。
+  // 这个开关只让 eval 把探测钉成"确定没有活任务"，从而真正走到判官那一段；
+  // 它不改变任何判定语义，生产路径不设置它。
+  // **必须与 CLAUDE_JUDGE_LOG_PATH 同时出现才生效**：单看这一个变量，它一旦被 export 进
+  // 交互 shell（调试时很容易），此后每一次真实 Stop 都会跳过 live-task 短路去叫判官——
+  // 真有后台任务时被无谓阻断，且没有任何回显提示开关还开着。裁决日志改道是 eval 独有的，
+  // 生产路径从不设置它，两者取合取即可把这个开关钉死在 eval 里。
+  const probe =
+    process.env.CONTINUATION_GATE_FORCE_NO_LIVE_TASK && process.env.CLAUDE_JUDGE_LOG_PATH
+      ? { live: false, reason: null }
+      : hasLiveTask(sessionDescendants());
+  let live = probe.live;
+  let liveVia = "task-output";
+  // lsof 探测只覆盖起了子进程的任务。它判 false 时，in-process teammate 可能仍在跑
+  // （见 SUBAGENT_WINDOW_MS 上方的注释），故再查一次 subagent 转录的新鲜度。
+  // 只在 false 上追加、不在 null 上追加：null 是探测故障，此时本就 fail-open，
+  // 再叠一个信号只会让"为什么开门"更难归因。
+  if (live === false) {
+    const recent = hasRecentSubagentWrite(payload.transcript_path);
+    if (recent === true) {
+      live = true;
+      liveVia = "subagent-transcript";
+    } else if (recent === null) {
+      // 补充探测自己坏了(目录读不动、非 ENOENT)。此时"确定没有活任务"不再成立——lsof 只
+      // 证明了没有子进程任务,而 in-process 那一侧现在无从判断。按本闸 fail-open 原则退回
+      // detect_unavailable,而不是拿一个已知不完整的 false 去开火。缺这一支,
+      // hasRecentSubagentWrite 的 docstring 承诺的 fail-open 就是假的。
+      live = null;
+      probe.reason = "subagent-probe-failed";
+    }
+  }
   if (live === null) {
-    logVerdict(GATE, "detect_unavailable", null, payload);
+    logVerdict(GATE, "detect_unavailable", probe.reason, payload);
     return allow();
   }
   if (live === true) {
     // 用独立 verdict 而非 reason：judge-log 只对 flag/skipped 落 reason，
     // 若两个放行分支都记成 "ok"，事后无法分辨"判官说没问题"与"探测说有任务在跑"。
     // 这个区别正是排查本 gate 是否误判的唯一依据。
-    logVerdict(GATE, "ok_live_task", null, payload);
+    logVerdict(GATE, liveVia === "subagent-transcript" ? "ok_live_subagent" : "ok_live_task", null, payload);
     return allow();
   }
 
@@ -300,7 +388,7 @@ function main() {
   // 引入新违规的时刻。改为按闸计——只在本闸自己上一停开过火时跳过。判据与实测见 lib/judge-log.js 的
   // lastVerdictOfGate。两个跳过理由刻意不同形：日志里要分得开逃生口与"历史不可考"。
   if (payload.stop_hook_active === true) {
-    const prev = lastVerdictOfGate(GATE, payload.session_id);
+    const prev = lastVerdictOfGate(GATE, payload.session_id, payload.agent_id);
     if (prev === "flag") {
       logVerdict(GATE, "skipped", "stop_hook_active，上一停是本闸拦的（原样再停即放行）", payload);
       return allow();
@@ -312,17 +400,17 @@ function main() {
     // 其余取值说明拦下本停的是别的闸 —— 本闸没判过这段新文本，继续往下判。
   }
 
-  const concern = judge(lastMsg);
+  const { concern, route } = judge(lastMsg);
   if (concern === null) {
-    logVerdict(GATE, "judge_unavailable", null, payload);
+    logVerdict(GATE, "judge_unavailable", null, payload, { route });
     return allow();
   }
   if (!concern) {
-    logVerdict(GATE, "ok", null, payload);
+    logVerdict(GATE, "ok", null, payload, { route });
     return allow();
   }
 
-  logVerdict(GATE, "flag", concern, payload);
+  logVerdict(GATE, "flag", concern, payload, { route });
   process.stderr.write(
     `[CONTINUATION] 你的最后一句承诺了后续动作，但**此刻没有任何 task / monitor / ` +
       `subagent 在运行**——这个回合结束后不会有任何事情自动发生，那句承诺对调用方是假的。\n` +

@@ -1,0 +1,453 @@
+#!/usr/bin/env python3
+"""量「进入时的那一屏，装得下几条完整的」，以及「最高的一条占几屏」。
+
+## 它防的是哪一次失守
+
+一个新闻列表站的首屏在 1440×900 下**完整可见条目数 = 0**：首张卡片 949px、高过视口，
+第二条的顶边在 y=1276。而仓里三条本该防住它的断言全部通过——`max(imgH/innerH) <= 0.4`
+（口径是单图不是整卡）、`firstViewportCards >= 2`（判据是**相交**不是完整可见，占满整屏
+的卡片照样计 1）、`avgHeight <= 520`（**均值**把一条 998px 摊进九条 210px 里）。
+
+## 为什么这件事必须是程序，不能是文档里的一段配方
+
+同一段量法在 reference 里被写错过四次，四次都只有真实浏览器跑得出来：只用 rect（不受
+祖先 `overflow:hidden` 影响）→ 用 `IntersectionObserver` v1 并声称能判遮挡（实测对遮挡 /
+`opacity:0` / `visibility:hidden` / 零高一律给 `ratio 1.0`）→ 四角 `elementFromPoint`
+（`r.right`/`r.bottom` 是排他边界，对**正常元素**也判 false）→ 邻居卡片的 `box-shadow`
+压边让 8 条报成 5 条。散文没有回归测试，每一版都只能临时找人手工验。程序有
+（见 `first-screen-density.test.py` 的夹具矩阵）。
+
+## 读数的确切含义（字段名即测法）
+
+- `band`：**进入时**用户实际能读到的那条带。文档滚动时 = `documentElement.clientHeight`
+  （已扣经典滚动条；实测同一页 `innerHeight`/`clientHeight`/`body.clientHeight` 可差 15px）
+  **减去 fixed / sticky 覆盖层**。实测 800 视口 + 90px 固定头下，一条 730px 的条目穷举全部
+  滚动位置都无法完整可见，而不扣头的比值算出 0.912、判"装得下"。
+  指定 `--scroller` 时 = 该容器的 `intersectionRect`（天然含全部祖先裁剪；用它的
+  `getBoundingClientRect()` 会在容器被祖先裁剪时把 400 当成 196，比值低估 2.04×）。
+- `fully_visible`：**两道闸都过**才计一条。闸①几何——rect 在 band 内**两轴完整包含**
+  （轴向策略在这里显式定死，不靠 IO 的 threshold 隐式承担）。闸②真看得见——没被祖先裁掉、
+  被盖住、透明掉或退化成零高。
+- `max_ratio`：`max(itemHeight) / band.height`，**max 取未经筛选的全部条目**。高过一屏的那条
+  必然过不了闸①，若只在筛过的那批里取 max，这个比值就永远报不出 > 1，而抓那条正是它存在的
+  全部理由。
+- `shadow_free_fully_visible`：把候选条目的 `box-shadow` 临时置 `none` 之后重量一次。
+  实测相邻卡片的投影向上溢出 6px 压在前一张下边缘，`isVisible` 判 false——那确实是"画在它
+  上面的东西"，但人眼看不出任何遮挡，8 条被报成 5 条。**两次不一致时本工具报 unresolved，
+  不替你选一个**：偏低的错数比归零更难发现，因为它看起来合理。
+
+**不覆盖**：可读性、字号、对比度、感知质量、关系层对齐（那归
+`web-ui-observation.md`「测量技术」的其余行）、多状态真实使用（那归 `test-ux`）。
+
+## 三态之外：`unresolved` 不是"失败"的别名
+
+- **0 通过**：读数取到了，且（给了阈值时）满足阈值。
+- **1 未达标**：给了 `--min-visible` / `--max-item-ratio` 且实测短缺。只有读数可信时才会用这个码。
+- **2 仪器故障**：打开失败、eval 失败、读数不可解析、agent-browser 超时、`--inject-css` 未生效。
+- **3 unresolved**：读数本身不可信或无定义——band 面积为 0（列表进入时整个不在屏内）、
+  投影两测不一致、检测到会让闸②整体假阴性的合成祖先、`trackVisibility` 不可用而回退路径
+  未在本引擎验证过、或自检发现"零可见"与"仪器坏了"分不开。
+
+把 1 和 3 混成一个码，"页面不好"与"我没量准"就同形了——本工具存在的理由正是不让两种结局同形。
+
+## 副作用
+
+会设视口、注入一个临时 `<style>`（用完移除）、读 DOM。**不滚动、不点击、不导航**——本读数
+按定义取自"进入时"那一屏，滚过就废。要量滚动加载后的最高条目，另起一次并用
+`--band-height`（把进入时那次的 band 传进来当分母），见 `web-ui-observation.md` 的读数时点脚注。
+
+用法：
+    first-screen-density <url> --items '.timeline-card' [--scroller '.feed']
+        [--viewport 1440x900] [--min-visible 3] [--max-item-ratio 0.8]
+        [--band-height 810] [--settle-ms 800] [--inject-css '<css>'] [--json]
+
+`--inject-css` 供阴性对照用：把已知致病的 CSS 注入同一页面，本工具须转红。
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import shutil
+import subprocess
+import sys
+import time
+import uuid
+
+EXIT_OK, EXIT_SHORTFALL, EXIT_INSTRUMENT, EXIT_UNRESOLVED = 0, 1, 2, 3
+
+# 会让闸② (`isVisible`) 对整棵子树假阴性的合成属性。实测触发：filter / opacity<1 /
+# backdrop-filter / mix-blend-mode / 非轴对齐 transform。实测**不**触发（曾被误列）：mask、
+# will-change、translateZ(0)、box-shadow、contain:paint、isolation、scale(1)。
+COMPOSITING_NOTE = "filter / opacity<1 / backdrop-filter / mix-blend-mode / 非轴对齐 transform"
+
+
+class ProbeError(Exception):
+    pass
+
+
+MEASURE_JS = r"""
+(async () => {
+  const ITEMS = __ITEMS__, SCROLLER = __SCROLLER__, KILL_SHADOW = __KILL_SHADOW__;
+  const out = {ok: false};
+  const items = [...document.querySelectorAll(ITEMS)];
+  out.found = items.length;
+  if (!items.length) { out.ok = true; out.reason = 'no-items'; return JSON.stringify(out); }
+
+  let killer = null;
+  if (KILL_SHADOW) {
+    killer = document.createElement('style');
+    killer.setAttribute('data-fsd-killshadow', '1');
+    killer.textContent = ITEMS + ',' + ITEMS + ' *{box-shadow:none !important;}';
+    document.head.appendChild(killer);
+    // 强制一次重排，确保置 none 已生效再量
+    void document.documentElement.offsetHeight;
+  }
+
+  // ---- band ----
+  const vw = document.documentElement.clientWidth;
+  const vh = document.documentElement.clientHeight;   // 已扣经典滚动条
+  let band = {top: 0, bottom: vh, left: 0, right: vw};
+  out.band_source = 'viewport';
+
+  if (SCROLLER) {
+    const sc = document.querySelector(SCROLLER);
+    if (!sc) { out.error = 'scroller-not-found'; return JSON.stringify(out); }
+    // 用 intersectionRect 而非 getBoundingClientRect：后者是未经祖先裁剪的布局位置
+    const ir = await new Promise(res => {
+      const io = new IntersectionObserver(es => { io.disconnect(); res(es[0].intersectionRect); },
+                                          {root: null, threshold: 0});
+      io.observe(sc);
+    });
+    band = {top: ir.top, bottom: ir.bottom, left: ir.left, right: ir.right};
+    out.band_source = 'scroller-intersectionRect';
+  } else {
+    // 扣掉 fixed / sticky 覆盖层：横向覆盖 >=60% 且贴着带的上缘或下缘的那些
+    const overlays = [];
+    for (const el of document.querySelectorAll('body *')) {
+      const cs = getComputedStyle(el);
+      if (cs.position !== 'fixed' && cs.position !== 'sticky') continue;
+      if (cs.visibility === 'hidden' || cs.display === 'none') continue;
+      if (parseFloat(cs.opacity) === 0) continue;
+      if (items.some(it => it === el || el.contains(it) || it.contains(el))) continue;
+      const r = el.getBoundingClientRect();
+      if (r.height <= 0 || r.width < vw * 0.6) continue;
+      if (r.bottom <= band.top || r.top >= band.bottom) continue;
+      overlays.push({top: r.top, bottom: r.bottom,
+                     tag: el.tagName.toLowerCase() + (el.id ? '#' + el.id : '')});
+    }
+    for (const o of overlays) {
+      if (o.top <= band.top + 1 && o.bottom > band.top) band.top = Math.min(o.bottom, band.bottom);
+      if (o.bottom >= band.bottom - 1 && o.top < band.bottom) band.bottom = Math.max(o.top, band.top);
+    }
+    out.overlays = overlays;
+  }
+  band.height = Math.max(0, band.bottom - band.top);
+  band.width = Math.max(0, band.right - band.left);
+  out.band = band;
+
+  if (band.height <= 0 || band.width <= 0) {
+    out.error = 'band-empty';           // 进入时列表不在屏内；比值无定义，不是 0
+    if (killer) killer.remove();
+    return JSON.stringify(out);
+  }
+
+  // ---- 闸②：真的看得见 ----
+  // threshold 取 0：轴向策略由闸①显式承担，不让 threshold:[1] 隐式塞进"两轴完整"这半判据
+  // （实测 threshold:[1] 会让宽度超出视口的元素 isVisible=false，横向溢出页因此整页报 0）。
+  // 不在首批回调就收工：实测首批可能带未稳的 false（一个零高兄弟节点就足以让相邻条目
+  // 在第一拍里被判不可见，第二拍才回 true）。收齐之后再静默 250ms，期间持续覆盖读数。
+  let visible = null, clipped = null, gate2 = 'trackVisibility';
+  try {
+    const got = await new Promise((res, rej) => {
+      const vis = new Map(), inter = new Map();
+      let quiet = null;
+      const io = new IntersectionObserver(es => {
+        for (const e of es) { vis.set(e.target, e.isVisible === true); inter.set(e.target, e.intersectionRect); }
+        if (vis.size >= items.length) {
+          clearTimeout(quiet);
+          quiet = setTimeout(() => { io.disconnect(); res({vis, inter}); }, 250);
+        }
+      }, {threshold: [0], trackVisibility: true, delay: 100});
+      items.forEach(el => io.observe(el));
+      setTimeout(() => { io.disconnect(); vis.size ? res({vis, inter}) : rej(new Error('io-timeout')); }, 4000);
+    });
+    visible = got.vis; clipped = got.inter;
+  } catch (e) { visible = null; clipped = null; }
+
+  if (visible === null) {
+    gate2 = 'five-point';               // 引擎不支持 trackVisibility
+  }
+
+  const hit = (el, x, y) => {
+    const t = document.elementFromPoint(x, y);
+    return !!t && (t === el || el.contains(t));
+  };
+  const fivePoint = (el, r) => {
+    if (el.checkVisibility && !el.checkVisibility({opacityProperty: true, visibilityProperty: true}))
+      return false;
+    if (r.height <= 0 || r.width <= 0) return false;
+    // 四条边的中点内缩 1px + 矩形中心。不要用四个角点：r.right/r.bottom 是排他边界，
+    // 满宽卡片的正常对照四角只命中 1/4，整套检查会对完好页面一律返回 false。
+    const cx = (r.left + r.right) / 2, cy = (r.top + r.bottom) / 2;
+    const pts = [[cx, r.top + 1], [cx, r.bottom - 1], [r.left + 1, cy], [r.right - 1, cy], [cx, cy]];
+    return pts.every(([x, y]) => hit(el, x, y));
+  };
+
+  // ---- 逐条 ----
+  // 闸② 的两条路径**永远都跑**，不是二选一。`isVisible` 是保守偏 false 的：实测相邻卡片的
+  // box-shadow 向上溢出压边、以及一个零高的兄弟节点，都会让完整可见的条目判 false，
+  // 于是产出一个**看起来合理的偏低数**——比归零更难发现。两条不一致时由上层报 unresolved。
+  let maxH = 0, fullyIO = 0, fullyFP = 0, anyIO = 0;
+  const rows = [], disagree = [];
+  for (const el of items) {
+    const r = el.getBoundingClientRect();
+    maxH = Math.max(maxH, r.height);
+    const inBand = r.top >= band.top - 0.5 && r.bottom <= band.bottom + 0.5
+                && r.left >= band.left - 0.5 && r.right <= band.right + 0.5;
+    // 只比 rect 与 band 不够：祖先的 overflow:hidden 不进 band，一张被裁掉 96% 的卡片
+    // 照样"落在带内"。用 intersectionRect 是否覆盖整个 rect 把祖先裁剪补进闸①。
+    const ir = clipped ? clipped.get(el) : null;
+    const uncut = !ir ? true
+      : (ir.width >= r.width - 0.5 && ir.height >= r.height - 0.5);
+    const g1 = inBand && uncut;
+    const g2io = visible !== null ? (visible.get(el) === true) : null;
+    const g2fp = fivePoint(el, r);
+    if (g2io === true) anyIO++;
+    if (g1 && (g2io === null ? g2fp : g2io)) fullyIO++;
+    if (g1 && g2fp) fullyFP++;
+    // 只在**闸① 已通过**的条目上比两条路径：过不了闸① 的条目无论闸② 怎么判都不计数，
+    // 把它们的分歧也报出来会让工具在完全正常的页面上狂报 unresolved。
+    if (g1 && g2io !== null && g2io !== g2fp) {
+      disagree.push({top: Math.round(r.top), h: Math.round(r.height), isVisible: g2io, fivePoint: g2fp});
+    }
+    if (rows.length < 12) rows.push({h: Math.round(r.height), top: Math.round(r.top), g1, g2io, g2fp});
+  }
+
+  // ---- 仪器自检：闸② 全 false 时，是页面真的全不可见，还是仪器被合成祖先掀翻了 ----
+  let compositing = [];
+  if (anyIO === 0 && items.length) {
+    for (let el = items[0]; el && el !== document.documentElement; el = el.parentElement) {
+      const cs = getComputedStyle(el);
+      const tr = cs.transform;
+      const rotated = tr && tr !== 'none' && !/^matrix\(1, 0, 0, 1,/.test(tr);
+      if ((cs.filter && cs.filter !== 'none') || parseFloat(cs.opacity) < 1
+          || (cs.backdropFilter && cs.backdropFilter !== 'none')
+          || (cs.mixBlendMode && cs.mixBlendMode !== 'normal') || rotated) {
+        compositing.push(el.tagName.toLowerCase() + (el.id ? '#' + el.id : ''));
+      }
+    }
+  }
+
+  if (killer) killer.remove();
+  Object.assign(out, {
+    ok: true, gate2, fully_visible: fullyIO, fully_visible_five_point: fullyFP,
+    any_visible: anyIO, disagree,
+    max_item_height: Math.round(maxH), max_ratio: +(maxH / band.height).toFixed(3),
+    compositing_ancestors: compositing, sample: rows,
+  });
+  return JSON.stringify(out);
+})()
+"""
+
+
+def run(cmd: list[str], timeout: int = 180) -> subprocess.CompletedProcess:
+    return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+
+
+def _extract_json(stdout: str) -> dict | None:
+    """agent-browser 把 eval 结果作为带引号的 JSON 字符串回显。"""
+    text = stdout.strip()
+    for candidate in (text, text.strip('"')):
+        try:
+            value = json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(value, dict):
+            return value
+        if isinstance(value, str):
+            try:
+                inner = json.loads(value)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(inner, dict):
+                return inner
+    return None
+
+
+def build_js(items: str, scroller: str | None, kill_shadow: bool) -> str:
+    return (MEASURE_JS
+            .replace("__ITEMS__", json.dumps(items))
+            .replace("__SCROLLER__", json.dumps(scroller) if scroller else "null")
+            .replace("__KILL_SHADOW__", "true" if kill_shadow else "false"))
+
+
+def decide(args, base: dict, shadow_free: dict | None) -> tuple[int, list[str]]:
+    """返回 (exit_code, 说明行)。unresolved 与 shortfall 分开，理由见模块 docstring。"""
+    notes: list[str] = []
+
+    if base.get("error") == "scroller-not-found":
+        return EXIT_INSTRUMENT, [f"--scroller '{args.scroller}' 在页面上不存在"]
+    if base.get("error") == "band-empty":
+        return EXIT_UNRESOLVED, [
+            "band 面积为 0——进入时这个列表整个不在屏内，密度与比值都无定义。"
+            "不要读成 0 条：那与'一条都装不下'同形。改为报「进入时列表不在屏内」。"]
+    if base.get("reason") == "no-items":
+        return EXIT_UNRESOLVED, [f"--items '{args.items}' 一个都没匹配到——"
+                                 "选择器错了与页面真空同形，先确认选择器"]
+
+    fully = base["fully_visible"]
+
+    fp = base.get("fully_visible_five_point", fully)
+
+    if base.get("gate2") == "five-point":
+        notes.append("本引擎不支持 trackVisibility，闸② 只有五点采样这一条路径——"
+                     "它只在采样点上看得见遮挡，且只在 Chromium 上验证过；本次无交叉对照。")
+
+    if base.get("compositing_ancestors"):
+        return EXIT_UNRESOLVED, notes + [
+            f"`isVisible` 全部判不可见，而祖先链上有 {'/'.join(base['compositing_ancestors'])} "
+            f"带合成属性（{COMPOSITING_NOTE}）——这会让整棵子树假阴性。"
+            f"五点法读到 {fp} 条。当前读数分不出'页面真的全不可见'与'仪器被掀翻'，"
+            "先排除合成祖先再量。"]
+
+    if base.get("disagree"):
+        notes.append("两条路径逐条不一致：" + "；".join(
+            f"top={d['top']} h={d['h']} isVisible={d['isVisible']} 五点={d['fivePoint']}"
+            for d in base["disagree"][:4]))
+        if shadow_free is not None and shadow_free.get("ok"):
+            notes.append(f"投影对照：置 box-shadow:none 后 isVisible 路径为 "
+                         f"{shadow_free['fully_visible']} 条")
+        return EXIT_UNRESOLVED, notes + [
+            f"`isVisible` 读到 {fully} 条、五点法读到 {fp} 条——本工具不替你选一个。"
+            "`isVisible` 保守偏 false，已实测的假阴性成因：相邻元素的 box-shadow 溢出压边、"
+            "退化（零高）的兄弟节点、祖先合成属性。若上面那条投影对照能把两者拉平，"
+            "多半就是投影；否则逐条看 sample。"]
+
+    code = EXIT_OK
+    if args.min_visible is not None and fully < args.min_visible:
+        notes.append(f"完整可见 {fully} 条 < --min-visible {args.min_visible}")
+        code = EXIT_SHORTFALL
+    if args.max_item_ratio is not None and base["max_ratio"] > args.max_item_ratio:
+        notes.append(f"最高条目占 {base['max_ratio']} 个 band > --max-item-ratio "
+                     f"{args.max_item_ratio}")
+        code = EXIT_SHORTFALL
+    return code, notes
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(
+        description="量进入时那一屏装得下几条完整条目，以及最高一条占几屏",
+        formatter_class=argparse.RawDescriptionHelpFormatter, epilog=__doc__)
+    ap.add_argument("url")
+    ap.add_argument("--items", required=True, help="条目的 CSS 选择器")
+    ap.add_argument("--scroller", help="列表的滚动容器；不给则按文档滚动处理")
+    ap.add_argument("--viewport", default="1440x900", help="WxH，默认 1440x900")
+    ap.add_argument("--min-visible", type=int, help="完整可见条数下限，低于它退 1")
+    ap.add_argument("--max-item-ratio", type=float,
+                    help="最高条目 / band 的上限，超过它退 1")
+    ap.add_argument("--band-height", type=float,
+                    help="用进入时那次的 band 高度当分母（量滚动加载后的最高条目时用）")
+    ap.add_argument("--settle-ms", type=int, default=800)
+    ap.add_argument("--inject-css", help="阴性对照：注入已知致病 CSS，本工具须转红")
+    ap.add_argument("--json", action="store_true")
+    args = ap.parse_args()
+
+    if shutil.which("agent-browser") is None:
+        print("first-screen-density: 需要 agent-browser，未找到", file=sys.stderr)
+        return EXIT_INSTRUMENT
+
+    try:
+        w, h = (int(x) for x in args.viewport.lower().split("x"))
+    except ValueError:
+        print(f"first-screen-density: --viewport 应形如 1440x900，收到 {args.viewport}",
+              file=sys.stderr)
+        return EXIT_INSTRUMENT
+
+    session = f"fsd-{uuid.uuid4().hex[:8]}"
+    try:
+        vp = run(["agent-browser", "--session", session, "set", "viewport", str(w), str(h)])
+        if vp.returncode != 0:
+            raise ProbeError(f"设视口失败\n{vp.stderr.strip()[:300]}")
+        opened = run(["agent-browser", "--session", session, "open", args.url])
+        if opened.returncode != 0:
+            raise ProbeError(f"打开失败 {args.url}\n{opened.stderr.strip()[:400]}")
+
+        if args.inject_css:
+            css = json.dumps(args.inject_css)
+            inject = ("(()=>{const s=document.createElement('style');"
+                      "s.setAttribute('data-fsd','1');s.textContent=" + css + ";"
+                      "document.head.appendChild(s);return JSON.stringify({injected:"
+                      "document.querySelectorAll('style[data-fsd]').length});})()")
+            proc = run(["agent-browser", "--session", session, "eval", inject], timeout=90)
+            value = _extract_json(proc.stdout) if proc.returncode == 0 else None
+            if not value or value.get("injected", 0) < 1:
+                # 注入失败却继续测，等于拿原页面冒充对照
+                raise ProbeError("--inject-css 未生效，拒绝把原页面当作对照")
+
+        time.sleep(args.settle_ms / 1000.0)
+
+        def measure(kill_shadow: bool, label: str) -> dict:
+            js = build_js(args.items, args.scroller, kill_shadow)
+            proc = run(["agent-browser", "--session", session, "eval", js], timeout=90)
+            if proc.returncode != 0:
+                raise ProbeError(f"{label} eval 失败\n{proc.stderr.strip()[:400]}")
+            value = _extract_json(proc.stdout)
+            if value is None:
+                raise ProbeError(f"{label} 读数无法解析\n{proc.stdout.strip()[:400]}")
+            return value
+
+        base = measure(False, "主读数")
+        shadow_free = None
+        if base.get("ok") and base.get("found"):
+            shadow_free = measure(True, "投影对照")
+    except ProbeError as exc:
+        print(f"first-screen-density: {exc}", file=sys.stderr)
+        return EXIT_INSTRUMENT
+    except subprocess.TimeoutExpired:
+        print("first-screen-density: agent-browser 调用超时——仪器故障", file=sys.stderr)
+        return EXIT_INSTRUMENT
+    finally:
+        closed = run(["agent-browser", "--session", session, "close"], timeout=60)
+        if closed.returncode != 0:   # 只关自己这一个 session
+            print(f"first-screen-density: 清理 session {session} 失败（rc={closed.returncode}）",
+                  file=sys.stderr)
+
+    if args.band_height and base.get("ok") and base.get("band"):
+        base["max_ratio_entry_band"] = round(base["max_item_height"] / args.band_height, 3)
+
+    code, notes = decide(args, base, shadow_free)
+
+    if args.json:
+        print(json.dumps({"exit": code, "notes": notes, "base": base,
+                          "shadow_free": shadow_free}, ensure_ascii=False, indent=1))
+        return code
+
+    print(f"first-screen-density {args.url}")
+    print(f"  --items '{args.items}'"
+          + (f" --scroller '{args.scroller}'" if args.scroller else "")
+          + f" --viewport {args.viewport}")
+    if base.get("ok") and base.get("band"):
+        b = base["band"]
+        print(f"  → band {int(b['height'])}px（{base['band_source']}"
+              + (f"，扣掉 {len(base.get('overlays', []))} 个 fixed/sticky 覆盖层"
+                 if base.get("overlays") else "") + ")")
+        fpn = base.get("fully_visible_five_point")
+        both = (f"（isVisible {base['fully_visible']} / 五点法 {fpn}）"
+                if fpn is not None and fpn != base["fully_visible"] else "")
+        print(f"  → 完整可见 {base['fully_visible']}/{base['found']} 条{both}"
+              f"，最高条目 {base['max_item_height']}px = {base['max_ratio']} 个 band"
+              + (f"（按进入时 band 为 {base['max_ratio_entry_band']}）"
+                 if "max_ratio_entry_band" in base else ""))
+    for n in notes:
+        print(f"  · {n}")
+    print("  不覆盖：可读性 / 对比度 / 感知质量 / 关系层对齐 / 多状态真实使用")
+    print({EXIT_OK: "  ✅ 读数取到，且满足声明的阈值（未声明阈值时只报读数）",
+           EXIT_SHORTFALL: "  ❌ 未达标",
+           EXIT_UNRESOLVED: "  ⚠️  unresolved——读数不可信，**不要**读成 0 或读成通过",
+           EXIT_INSTRUMENT: "  🛠  仪器故障"}[code])
+    return code
+
+
+if __name__ == "__main__":
+    sys.exit(main())
