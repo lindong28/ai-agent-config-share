@@ -23,6 +23,8 @@ This skill judges; it does not supply parameters. When a finding's root cause is
 
 Evaluate the interface across these dimensions.
 
+For each one, name the reading that would settle it before you judge it, and where a reading exists but you did not take it, report the dimension as unmeasured rather than as a verdict. Only dimensions 4 and 10 have no reading — emotion and voice have no number, and inventing one is worse than judging.
+
 ### 1. AI Slop Detection (CRITICAL — start here)
 
 **The most important check.** Does this look like every other AI-generated interface? Scan against every tell in [ai-slop-antipatterns](reference/ai-slop-antipatterns.md) — AI palette, gradient text, glowing dark mode, glassmorphism, hero-metric layouts, identical card grids, generic fonts, and the rest.
@@ -33,7 +35,7 @@ Evaluate the interface across these dimensions.
 - Does the eye flow to the most important element first? Can you spot the primary action in 2 seconds?
 - Do size, color, and position communicate importance correctly?
 - Is there visual competition between elements that should have different weights?
-- **Distance to the answer**: name what the reader came for — often a row inside a component, not the component — and measure it per `web-ui-observation.md` `§测量技术`. Below the first screen is a defect unless the product documents that placement as deliberate; your own reading that the page "goes top to bottom" is not that. Vary the data volume as well: one screen deep on demo data can be five in production.
+- **Distance to the answer**: name what the reader came for — often a row inside a component, not the component — and measure it per `web-ui-observation.md`「测量技术」. Below the first screen is a defect unless the product documents that placement as deliberate; your own reading that the page "goes top to bottom" is not that. Vary the data volume as well: one screen deep on demo data can be five in production.
 
 ### 3. Information Architecture & Cognitive Load
 > *Consult [cognitive-load](reference/cognitive-load.md) for the working-memory rule and 8-item checklist.*
@@ -52,8 +54,8 @@ Evaluate the interface across these dimensions.
 - Do hover/focus states give useful feedback? Are there hidden features that should be more visible?
 
 ### 6. Composition & Balance
-- Does the layout feel balanced or uncomfortably weighted? Is whitespace intentional or leftover?
-- Is there visual rhythm in spacing and repetition? Does asymmetry feel designed or accidental?
+- Does the layout feel balanced or uncomfortably weighted? Is there visual rhythm in spacing and repetition? Does asymmetry feel designed or accidental?
+- **Whitespace, measured**: for each top-level region with its own heading or border, plus one representative repeated item, take how much of it carries content per `web-ui-observation.md`「测量技术」表「一个区域里有多少在承载内容」一行 — whitespace is its complement, and that file says which width to take it at. Leftover whitespace is a defect unless the design documents it as deliberate; a generous margin and a region the grid had nothing to fill look the same by eye. With no DOM to measure, report this dimension as unmeasured.
 
 ### 7. Typography as Communication
 - Does the type hierarchy signal what to read first, second, third? Is there enough contrast between heading levels?
@@ -96,6 +98,8 @@ The 3–5 most impactful problems, ordered by importance. Tag each with P0–P3 
 - **[P?] What**: name the problem clearly
 - **Why it matters**: how it hurts users or undermines goals
 - **Fix**: concrete direction
+
+A finding that carries a reading does not fall out of this section quietly. Score it on both axes in [heuristics-scoring](reference/heuristics-scoring.md): P0 and P1 belong here, P2 and P3 go to Minor Observations carrying their reading with them. If the P0/P1 set runs past the 3–5 above, keep it ordered and let it run long rather than dropping one.
 
 ### Persona Red Flags
 > *Consult [personas](reference/personas.md).*

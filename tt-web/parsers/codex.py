@@ -382,7 +382,29 @@ def _build_rate_limits(rate_limits, timestamp, session_id, models):
         seven_day_resets_at=seven_reset,
         model=models.get(session_id, DEFAULT_CODEX_MODEL),
         updated_at=timestamp,
+        # Same event as the percentages above, which is what makes it the one
+        # plan that can be shown beside them without pairing two clocks.
+        #
+        # "Same event" is the honest claim, not "same observation": the two
+        # branches above rewrite a percentage to 0.0 once its own reset time
+        # has passed, so after a reset the figure is derived here and was
+        # never reported at `updated_at`. A plan that changed during that
+        # window would then sit next to a zero it did not produce — the pair
+        # the credential comparison downstream is there to expose, since a
+        # changed plan is exactly what makes the two sources differ.
+        plan=_plan_type(rate_limits),
     )
+
+
+def _plan_type(rate_limits):
+    """The reading's own plan, or None when it does not usably state one.
+
+    Non-empty string or nothing: `rate_limits` has no wire schema, and a
+    truthy non-string here would travel all the way to a rendered label and to
+    the equality that decides whether the two plan sources disagree.
+    """
+    plan = rate_limits.get("plan_type")
+    return plan if isinstance(plan, str) and plan else None
 
 
 def _timestamp_key(value):

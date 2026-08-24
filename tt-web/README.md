@@ -1,8 +1,6 @@
 # tt-web
 
-Local dashboard for reviewing Claude Code and Codex token usage, cost, model mix, projects, and sessions.
-
-It binds `0.0.0.0` by default, not just the loopback interface — your browser is often not on the machine running the server (remote dev box, another device on the same network). The cost is that anything on your network segment can reach it, and what it serves is your token usage and spend. Set `TT_WEB_BIND=127.0.0.1 tt-web restart` to go back to loopback only; use `restart` rather than `start`, which no-ops when the server is already running and so never rebinds.
+Localhost-only dashboard for reviewing Claude Code and Codex token usage, cost, model mix, projects, and sessions.
 
 ## Install
 
@@ -19,15 +17,15 @@ It does not install the optional rollup LaunchAgent; that daemon is opt-in.
 
 ```bash
 tt-web start
+tt-web restart
 tt-web open
 tt-web status
-tt-web restart
 tt-web stop
 ```
 
-The server freezes its code in memory at startup, so after a `git pull` a bare `tt-web start` no-ops and keeps serving the old code. `tt-web open` detects that and restarts for you; `tt-web restart` does it explicitly.
+Default URL is `http://127.0.0.1:39001`; if that port is occupied, the CLI increments to the next free port and writes it to `state/port`.
 
-Default URL on the machine running it is `http://127.0.0.1:39001` (from another device, use that machine's address and the same port); if that port is occupied, the CLI increments to the next free port and writes it to `state/port`.
+The server freezes its code in memory at startup, so after a `git pull` a bare `tt-web start` no-ops and keeps serving the old code. `tt-web open` detects that and restarts for you; `tt-web restart` does it explicitly.
 
 `tt-web` is symlinked into `~/.local/bin` (usable from any directory). For the repo's uniform service-ops convention (see [`service-operations-protocol.md`](../claude/references/service-operations-protocol.md)), the equivalent entry points are `./tt-web/{install,start,stop,status,uninstall}.sh`. `start.sh` and `stop.sh` are thin wrappers over the dispatcher and **always act on the web server — they ignore any service-name argument**, so `./tt-web/stop.sh rollup-daemon` stops the web server and exits 0. `status.sh` and `uninstall.sh` do take a `[web|rollup-daemon]` argument. Called with no argument, `./tt-web/uninstall.sh` removes everything: it stops the server, removes the `~/.local/bin` symlinks, and also boots out and deletes the `com.ttweb.rollup` LaunchAgent if it is installed.
 
@@ -69,6 +67,12 @@ modules, `parsers/`, `pricing.json`, the `tt-web` launcher, `install.sh` and
 rather than publishing a snapshot whose code version cannot be named. Edits
 elsewhere in the checkout (docs, `web/`) do not block it.
 
+A remote only reports **which account it is signed in as** once its checkout has
+the account-stamping exporter; until then the dashboard shows its quota on its own
+row as `account unknown` rather than guessing. Bringing one up to date is the
+ordinary `git pull` in its checkout — no lockstep upgrade, because the stamp is an
+added field inside an unchanged schema, so old and new machines mix freely.
+
 **Adding a machine** takes two steps. Declare it in `machines.json`, then
 accept the binding:
 
@@ -76,13 +80,11 @@ accept the binding:
 tt-web machines accept <name>
 ```
 
-Binding an unseen SSH target requires your confirmation by design: the system can
+The first contact with an unseen SSH target is refused by design: the system can
 only promise "the same machine as last time" — it cannot verify that the alias
 points where you think it does. The command prints the name and SSH target, says
 so in those terms, and waits for confirmation; answer anything but `y` and no
-binding is written. Note the confirmation gates the *binding*, not the connection:
-a sync reaches the remote over SSH first and checks admission when installing what
-it pulled, so an unaccepted host is still contacted. It then pulls that machine's usage and reports the identity
+binding is written. It then pulls that machine's usage and reports the identity
 it pinned. Later syncs fail closed if that identity changes. Use `--yes` to skip
 the prompt in a script — check your SSH config first, because that flag is the
 whole of the verification.
@@ -102,7 +104,7 @@ the code version that produced them, so a rollback does not discard data.
 
 | Service | Supervisor | Purpose | Operations |
 | --- | --- | --- | --- |
-| `tt-web` | Manual PID-file daemon in `state/` | Dashboard server, bound to `0.0.0.0:<port>` by default (see the note at the top) | `tt-web start`, `tt-web stop`, `tt-web status`; script equivalents: `./tt-web/start.sh`, `./tt-web/stop.sh`, `./tt-web/status.sh web` |
+| `tt-web` | Manual PID-file daemon in `state/` | Local dashboard server at `127.0.0.1:<port>` | `tt-web start`, `tt-web stop`, `tt-web status`; script equivalents: `./tt-web/start.sh web`, `./tt-web/stop.sh web`, `./tt-web/status.sh web` |
 | `com.ttweb.rollup` | Optional macOS LaunchAgent | Hourly refresh of `state/rollup.db` using `tt-web rollup` | `./tt-web/install.sh rollup-daemon`, `./tt-web/status.sh rollup-daemon`, `./tt-web/uninstall.sh rollup-daemon`; default `./tt-web/install.sh` does not install it |
 
 Operational details live in [docs/operations/services.md](./docs/operations/services.md).
@@ -140,11 +142,7 @@ without the venv, `uvx --with requests pytest tt-web/tests -q` also works.
 
 ## Consumers
 
-- `/` shows KPI cards, including Claude 5h / 7d quota and Codex 7d quota. `Week cost`
-  is the local calendar week window, shown as Monday 00:00 through now with the
-  machine timezone offset. The first chart panel is titled `Cost over time`
-  (synced with `web/index.html`), is range-aware, and reads persisted history
-  from `state/rollup.db`.
+- `/` shows KPI cards for cost, and quota used as **one row per account** — Claude 5h / 7d and Codex 7d. The table separates Provider, Plan, and Account into aligned columns, with each live row naming the machines signed into that account. Quota is metered per account, so rows are never summed; a machine whose tt-web predates account stamping gets its own row labelled `account unknown`, never folded into a named account. A row's numbers are attributed to the account that machine is signed in as *now*, which is wrong for the window right after an account switch — see [ADR-024](../docs/adr/024-tt-web-quota-account-attribution.md) for why that is accepted and what it costs. Accounts observed while signed in remain as visibly historical `已登出` rows after they disappear from every admitted machine. Those rows retain their last observed values without claiming they are current; use the per-row `移除` control and confirm the account, observation time, and last reading to forget one permanently. Memory starts accumulating when this feature is installed, so accounts that were already signed out cannot be backfilled from older data. `Week cost` is the local calendar week window, shown as Monday 00:00 through now with the machine timezone offset. The first chart panel is titled `Cost over time` (synced with `web/index.html`), is range-aware, and reads persisted history from `state/rollup.db`.
 - `/explore` exposes pivot controls for x axis, grouping, metric, and range, plus
   agent/project/model filters (range-scoped options) that narrow the chart and
   table; active filters persist in the URL and honor deep links.

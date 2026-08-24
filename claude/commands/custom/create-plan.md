@@ -156,7 +156,7 @@ planner 和 user 对齐的过程中，至少要让以下几类信息变清晰。
 
 读取 `~/.claude/references/rigor-tiers.md`。这是 mandatory intake，不因 spec 已覆盖其他 facet 而跳过，也不得作为软性取舍维度自行 default。
 
-分别以轴名 R（反转成本 / blast radius）与 G（回归容忍度 / 生产稳定性）采集 stakes，独立推导 `(A,V)`（stakes 轴只写 R/G，assurance 维只写 A/V，不把轴 G 改称轴 V），各给一句理由，按 rigor-tiers.md 记录契约落盘。校准本身按本节所属 §2 的两条 path 处置——rigor 默认是高反转成本决策：推导出 `A1+` / `V1+`、或两轴判断非显然时，**必须**用 `AskUserQuestion` 让用户确认或改向量；仅当推导为 `(A0,V0)` 且两轴显然（可逆本地、回归易捕获）才可自行 default，但**必须**写进 plan 末 Defaulted Decision 表供 reviewer 审。二者必居其一：不得落一个既未经用户确认、也未进 Defaulted Decision 表的向量——否则 reviewer 无法区分"问过"与"静默默认"，退回本次要消灭的 checklist。
+分别以轴名 R（反转成本 / blast radius）与 G（回归容忍度 / 生产稳定性）采集 stakes，独立推导 `(A,V)`（stakes 轴只写 R/G，assurance 维只写 A/V，不把轴 G 改称轴 V），各给一句理由，按 rigor-tiers.md 记录契约落盘。校准本身按本节所属 §2 的两条 path 处置——rigor 默认是高反转成本决策：推导出 `A1+` / `V1+`、或两轴判断非显然时，**必须**用 `AskUserQuestion` 让用户确认或改向量；仅当推导为 `(A0,V0)` 且两轴显然（可逆本地且重跑成本可忽略、回归易捕获）才可自行 default，但**必须**写进 plan 末 Defaulted Decision 表供 reviewer 审。二者必居其一：不得落一个既未经用户确认、也未进 Defaulted Decision 表的向量——否则 reviewer 无法区分"问过"与"静默默认"，退回本次要消灭的 checklist。
 
 任务取代或续接已有 plan / charter 时，继承的 rigor 一律经 `AskUserQuestion` 重新抛给用户复核（继承本身即高反转成本），不得静默沿用；复核结论落盘。
 

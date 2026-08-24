@@ -620,3 +620,66 @@ test('共树：归属经真实时序建立 —— 对方已提交后我首次编
     'gate 放行的第一笔编辑，变成了让后续每一笔都被拦的那笔'
   );
 });
+
+// ---------------------------------------------------------------- Bash 写入面
+// 本闸此前只挂 Edit/Write 系，于是"走 Edit 被拦、走 `cat >>` 放行"——而 append 型台账
+// （issue / changelog / 日志）恰恰惯用后者，也正是跨 worktree 最需要协调的那一类。
+// 实测代价：一天三次 issue 编号冲突，三次写入全部经 `cat >>`，两侧零信号。
+// 每条都成对：能取到的必须取到（阳性），取不准的必须放行而不是瞎猜（阴性）。
+{
+  const tp = (cmd) => gate.targetPaths('Bash', { command: cmd });
+
+  assert.deepStrictEqual(tp('cat >> docs/issues.md'), ['docs/issues.md'], '追加重定向');
+  assert.deepStrictEqual(tp('echo x > a.txt'), ['a.txt'], '覆盖重定向');
+  assert.deepStrictEqual(tp('cmd 2> err.log'), ['err.log'], '带 fd 号的重定向');
+  assert.deepStrictEqual(tp('printf x | tee -a CHANGELOG.md'), ['CHANGELOG.md'], 'tee -a');
+  assert.deepStrictEqual(tp("sed -i '' 's/a/b/' README.md"), ['README.md'], 'sed -i 就地改写');
+  assert.deepStrictEqual(
+    tp('cat <<\'PY\' >> notes.md\n这里有个 > 号但它是数据\nPY'),
+    ['notes.md'],
+    'heredoc 正文里的 > 不得被当成重定向',
+  );
+
+  // 阴性：这些**不是**文件写入，取到就是误报，会把无辜命令拦下
+  assert.deepStrictEqual(tp('ls -la'), [], '无重定向');
+  assert.deepStrictEqual(tp('cmd 2>&1'), [], 'fd 复制不是文件');
+  assert.deepStrictEqual(tp('cmd > /dev/null'), [], '/dev/null 不是要协调的对象');
+  assert.deepStrictEqual(tp('diff <(a) <(b)'), [], '进程替换不是重定向');
+
+  // 阴性：解析不出真值时**放行**，不猜。这条是显式选择——拦错的代价是挡住真实写入，
+  // 漏掉的代价只是退回本支存在之前的状态，两者不对称。
+  assert.deepStrictEqual(tp('echo x > "$OUT"'), [], '变量路径不猜');
+  assert.deepStrictEqual(tp('echo x > out-$(date +%s).log'), [], '命令替换不猜');
+  assert.deepStrictEqual(tp('echo x > logs/*.txt'), [], 'glob 不猜');
+
+  // 阳性对照：证明上面那组"取不到"不是因为函数恒返回空
+  assert.deepStrictEqual(tp('echo x > plain.txt'), ['plain.txt'], '阳性对照：字面路径确实取得到');
+
+  // 非 Bash 工具不得受影响
+  assert.deepStrictEqual(tp === undefined ? [] : gate.targetPaths('Write', { file_path: 'w.txt' }),
+    ['w.txt'], 'Write 支路未被破坏');
+}
+
+// ---------------------------------------------------------------- Bash 支路：外部复核打回的形态
+// 这一组每条都对应一次实测误判。`~` 那条尤其重要：不展开时它会落一个**永不匹配对手方键**的
+// 条目，"看起来在管、实际不管"——比不登记更坏。
+{
+  const tp = (cmd) => gate.targetPaths('Bash', { command: cmd });
+  const home = require('os').homedir();
+
+  assert.deepStrictEqual(tp('cat >> ~/.claude/CLAUDE.md'), [`${home}/.claude/CLAUDE.md`],
+    '~ 必须展开：不展开则登记一个永不匹配的键');
+  assert.deepStrictEqual(tp("git commit -m 'fix: a > b'"), [], '单引号内的 > 不是重定向');
+  assert.deepStrictEqual(tp('echo "a > b" > real.txt'), ['real.txt'], '双引号内的 > 不算，引号外的算');
+  assert.deepStrictEqual(tp('sed -i s/a/b/ a.md b.md'), ['a.md', 'b.md'],
+    '未加引号的 sed 脚本不是文件；多个文件都要取');
+  assert.deepStrictEqual(tp("perl -pi -e 's/a/b/' f.md"), ['f.md'], 'perl -pi 与 sed -i 同类');
+  assert.deepStrictEqual(tp("sed --in-place 's/a/b/' g.md"), ['g.md'], '长选项形态');
+  assert.deepStrictEqual(tp('echo x >| out.txt'), ['out.txt'], '>| 是覆盖重定向');
+  assert.deepStrictEqual(tp('printf x | tee a.md b.md'), ['a.md', 'b.md'], 'tee 的全部目标');
+
+  // 阳性对照：证明上面那些"取到空"的用例不是因为函数恒空
+  assert.deepStrictEqual(tp('echo x > plain.txt'), ['plain.txt'], '阳性对照：字面路径取得到');
+  // 阳性对照：证明 ~ 那条走的是展开分支而不是恰好相等
+  assert.notDeepStrictEqual(tp('cat >> ~/x.md'), ['~/x.md'], '阳性对照：~ 确实被改写了');
+}

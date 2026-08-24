@@ -46,10 +46,16 @@
 #     again whenever you switch pane/window. The BEL bypasses tmux entirely (see
 #     emit_bel): gating a "look at the pane you are NOT watching" indicator on
 #     that pane being watched defeats it.
-#   - Over plain SSH we write to SSH_TTY, whose output flows back to the local
-#     terminal. TERM_PROGRAM is NOT forwarded over SSH / inside tmux, so we must
-#     NOT gate on TERM_PROGRAM=ghostty there — OSC 0 is a universal title
-#     sequence any terminal honors.
+#   - Over plain SSH we write to the login shell's controlling terminal, whose
+#     output flows back to the local terminal. That device is the same one
+#     SSH_TTY names (measured: a real non-tmux ssh session had SSH_TTY, the
+#     shell's ctty and pick_tty's result all = /dev/ttys001) — but the variable
+#     itself is no longer consulted, for the reasons in pick_tty's header.
+#     TERM_PROGRAM is NOT forwarded over SSH / inside tmux, so we must NOT gate
+#     on TERM_PROGRAM=ghostty there — OSC 0 is a universal title sequence any
+#     terminal honors. SSH_TTY/SSH_CONNECTION still gate that emission decision
+#     at the bottom of this file; being unfit to name a target does not make an
+#     env var unfit to say "there is a remote terminal somewhere".
 #
 # Why pane_title and not the tmux passthrough DCS, which this hook used before:
 # passthrough does not exist below tmux 3.3, and Ubuntu 22.04 (every DGX node)
@@ -145,17 +151,76 @@ find_ancestor_pty() {
 }
 
 # Pick the tty whose output reaches the user's terminal.
+#
+# Every source here has to be one this process can show it OWNS. SSH_TTY cannot,
+# so it is gone from this function entirely — it used to be the first choice
+# outside tmux.
+#
+# What it actually is: `ssh(1)` defines it as the tty ssh allocated for the
+# current shell, and nothing updates it afterwards. Under mosh it therefore
+# names the bootstrap pty rather than the one you are typing into. Two separate
+# readings, kept separate on purpose: mosh's man page supplies only the first
+# half — ssh starts `mosh-server`, then the ssh connection is closed — while
+# "the shell ends up on a different pty" comes from a live process reading here,
+# not from the manual. That reading: SSH_TTY=/dev/ttys003, absent from /dev,
+# while the same session's chain was mosh-server → zsh → claude on /dev/ttys006,
+# and every title write of that session was landing in tab-title.jsonl as a
+# failure.
+#
+# An existence check does not rescue it, and that is the whole reason it is
+# removed rather than guarded: `-c` proves "is a char device right now", never
+# "belongs to this session". macOS recycles pty numbers, so a dead SSH_TTY can
+# come back as a live device owned by another tab, and a `-c`-guarded write
+# would retitle that stranger. Worse, the case where a fallback would be reached
+# at all is the case where it is least trustworthy: the walk below returns empty
+# exactly when ownership could NOT be established from the process tree — no
+# ancestor held a controlling terminal, `ps` failed, the chain outran the hop
+# limit, or the device was revoked mid-walk. Whichever of those it was, nothing
+# about it makes a simultaneously-live SSH_TTY more likely to be ours; it is the
+# moment we know least about who owns what, which is the worst possible moment
+# to write somewhere on the strength of a stale name.
+#
+# What the walk gives instead: `ps -o tty=` reports the CONTROLLING terminal, so
+# it can only ever name a pty this process descends from. That is an ownership
+# guarantee, not a visibility one — the two come apart when something between
+# the ancestor and the user re-terminals the stream (screen, a session recorder,
+# any pty broker), where the ctty is the INNER pty and OSC 0 lands in the broker
+# rather than the outer tab. This host runs claude directly under mosh/ssh with
+# at most tmux in between, and tmux is handled by its own branch below, so no
+# such layer is in the path here; introduce one and this function needs revising.
+# Under plain ssh with no broker the ancestor pty and SSH_TTY are the same
+# device, which is why dropping SSH_TTY costs that path nothing.
+#
+# The tmux branch keeps its own exclusive return, and always did. Falling
+# through would be a regression rather than a rescue: inside a long-lived pane
+# SSH_TTY names whichever ssh session created the pane, which may be attached
+# elsewhere entirely (desktop-notify.js's pickTargets() documents an observed
+# case).
+#
+# That twin still tries SSH_TTY before its own walk outside tmux, with only the
+# `-c` guard, so the recycling hole above remains open on its side. Twins, not
+# clones — it should follow, but its delivery path (OSC 9, plus a mosh relay
+# with no analogue here) makes that its own change rather than a copy of this.
+#
+# Returning nothing is a deliberate outcome, not a gap: emit_osc logs the miss
+# and emit_bel returns quietly. A tab that fails to update is recoverable by the
+# next hook; a title written into someone else's tab is not.
 pick_tty() {
+  local pty
   if [ -n "${TMUX:-}" ]; then
     # tmux: the pane PTY; server unwraps passthrough and forwards to the client.
     find_ancestor_pty
-  elif [ -n "${SSH_TTY:-}" ]; then
-    echo "$SSH_TTY"
+    return
+  fi
+  pty="$(find_ancestor_pty)"
+  if [ -n "$pty" ]; then
+    echo "$pty"
   elif { exec 9>/dev/tty; } 2>/dev/null; then
+    # This process's own controlling terminal — ownership is definitional. In
+    # practice unreachable (hooks get ENXIO here, see the header), kept because
+    # it is the one remaining source that cannot name a stranger's device.
     exec 9>&-
     echo "/dev/tty"
-  else
-    find_ancestor_pty
   fi
 }
 

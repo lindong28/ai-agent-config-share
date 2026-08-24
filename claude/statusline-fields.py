@@ -29,7 +29,13 @@ import subprocess
 import sys
 import tempfile
 import time
+from datetime import datetime
 from pathlib import Path
+
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:  # stdlib only since 3.9; README pins no floor beyond "python3"
+    ZoneInfo = None  # type: ignore[assignment]
 
 HERE = Path(__file__).resolve().parent
 ESC = "\033"
@@ -388,6 +394,110 @@ emit("ST_TOTAL", st_in + st_out + st_cache)
 
 session_start = tdata.get("session_start_ts")
 emit("SST", "" if session_start is None else as_num(session_start))
+
+# 「最后对话」— when this session last exchanged a message, for telling apart the
+# many idle tabs a user keeps open. Three sources were possible and two are wrong:
+#   - the render clock: correct only by coincidence, and it silently becomes the
+#     answer whenever a timestamp fails to parse, which looks identical to a
+#     correct reading.
+#   - the transcript's mtime: measured across 59 live transcripts, it runs ahead
+#     of the last conversational entry by a median of 160s and by up to 2.6 days,
+#     because Claude Code keeps appending timestamp-less bookkeeping entries
+#     (`last-prompt` and kin were the final line of 48 of 60 sampled files) long
+#     after the exchange ended. It errs *fresh*, which is the direction that
+#     misranks a stale tab as recent — the one judgement this field exists for.
+# So: read the tail of the transcript directly. Not via statusline-transcript.py,
+# whose result cache is keyed on mtime+size and therefore stays valid — and stays
+# missing this field — for precisely the idle sessions being ranked.
+# Restricted to user/assistant entries. What that buys is dropping the *other*
+# timestamp-carrying entries — `system` (api_error) above all, so a retry storm
+# does not read as activity. It is not the same as "human turns only": tool
+# results are logged as `user` entries (3925 of 3925 sampled), and they stay in.
+# So the stamp tracks the exchange, and it does not advance during a long tool
+# call — a busy session and an abandoned one can read alike.
+_TAIL_WINDOWS = (128 * 1024, 4 * 1024 * 1024)
+
+
+def last_exchange_ts(path: str) -> float | None:
+    for window in _TAIL_WINDOWS:
+        try:
+            size = os.path.getsize(path)
+            with open(path, "rb") as fh:
+                if size > window:
+                    fh.seek(size - window)
+                    fh.readline()  # drop the line the window cut in half
+                chunk = fh.read()
+        except OSError:
+            return None
+        for raw in reversed(chunk.splitlines()):
+            try:
+                entry = json.loads(raw)
+            except Exception:
+                continue
+            if not isinstance(entry, dict) or entry.get("type") not in ("user", "assistant"):
+                continue
+            ts = entry.get("timestamp")
+            if not isinstance(ts, str):
+                continue
+            try:
+                # Own parse rather than the transcript parser's: that one returns
+                # `time.time()` on failure, which would hand back the render clock
+                # under the guise of a transcript reading. Here failure stays None.
+                return datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp()
+            except ValueError:
+                continue
+        if size <= window:
+            break
+    return None
+
+
+def machine_zone():
+    """The zone `/etc/localtime` names — the machine's, not this process's.
+
+    `time.localtime` honours $TZ, and this process does not necessarily hold the
+    machine's: `claude/settings.json` sets `env.TZ` (America/Los_Angeles as of
+    this writing) and that env reaches what Claude Code spawns, this script
+    included. Measured from the field itself, which read 15h off the host clock
+    until this stopped asking the process.
+
+    Read the TZif bytes rather than parse a zone key out of the symlink target:
+    `/etc/localtime` is a plain copy on some hosts, leaving no key to parse, and a
+    key re-resolved through Python's own tzdata may be a different vintage of the
+    same zone. The bytes are what the host itself keeps time by.
+
+    A shell that exports its own $TZ is out of scope — that is a per-shell
+    override, and this reports the machine.
+
+    None means "could not tell": no zoneinfo module (< 3.9), no readable
+    `/etc/localtime`, or unparseable data. The caller then falls back to $TZ, the
+    old behaviour — a stamp in the wrong zone still beats losing the field.
+    """
+    if ZoneInfo is None:
+        return None
+    try:
+        with open("/etc/localtime", "rb") as tzif:
+            return ZoneInfo.from_file(tzif)
+    except Exception:
+        return None
+
+
+last_fmt = ""
+try:
+    if transcript and os.path.isfile(transcript):
+        _ts = last_exchange_ts(transcript)
+        if _ts is not None:
+            _zone = machine_zone()
+            _dt = datetime.fromtimestamp(_ts, _zone)
+            # Year only when it is not the current one: a tab left open across New
+            # Year would otherwise read as this year, and the extra width costs
+            # nothing for the 364-days-out-of-365 case.
+            _pat = "%m-%d %H:%M" if _dt.year == datetime.now(_zone).year else "%Y-%m-%d %H:%M"
+            last_fmt = _dt.strftime(_pat)
+except Exception:
+    # Module contract (see docstring): a broken field degrades to the caller's
+    # default, never a traceback that would take the whole statusline down.
+    last_fmt = ""
+emit("LAST_FMT", last_fmt)
 
 running = []
 for tool in tdata.get("tools_running") or []:

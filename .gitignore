@@ -11,6 +11,8 @@
 
 # Scratch tree hook/skill test runs mkdtemp into; survives a crashed run
 .test-tmp/
+/claude/hooks/.session-inbox-test-tmp/
+/claude/scripts/.peer-session-watch-test-tmp/
 
 # plan 执行过程产物（plan.md / state.md / journal.md）；耐久结论收口时流向 tracked docs/
 /plans/

@@ -2,6 +2,17 @@
 
 > Append-only（最新在前）。仅记录用户可感知的变更。
 
+## 2026-08-24
+
+- 新增：命令六个 —— `/custom:away`（用户要离开电脑一段时间时，把「我不在」这个 agent 观测不到的事实告诉它，改的是提问时机与守望纪律、不替他裁决任何事；上游配套的 `/custom:autopilot` 经 scope gate 不收录）、`/custom:map-program-architecture`（把一个 program 的工作项逐条落到模块、显示改造前后架构与能力差异的单文件 HTML 地图）、`/custom:review-session-progress`（长任务 session 跑了很久、CLI 输出看不出进展时，从新 session 只读分析它、分诊要不要介入，可加 `--verify-deliverable` 以消费者身份验交付物）、`/custom:supervise-session`（监督一个你没有启动、已在跑的 Claude Code session——要监督由你启动的 agent 仍用 `supervise`；配套 `claude/scripts/peer-session-watch.js`）、`/custom:reuse-for-aigc`（复用别人的开源项目 / skill / 成文方法来产出 AIGC 内容）、`/custom:create-delivery-report`（把一次已完成的交付写成给同事判断要不要用、怎么上手的单文件 HTML 报告）。除 `reuse-for-aigc` 外五个都标了 `disable-model-invocation`（只能由用户点名触发）
+- 新增：hook 接线四条（三个 handler，均为确定性检查、按 required 默认接）—— `liveness-predicate-gate`（PreToolUse/Bash 与 PreToolUse/Monitor 两处，对 shell 等待循环与 Monitor watch 表达式分别报 [liveness-predicate]——`pgrep -f` 回答不了「它做完没有」，任何提到同一 pattern 的命令（包括检查自身）都能满足它——与 [unbounded-wait]——`while :` 的循环头在词法上无限，循环体内没有任何东西能停它——两类警告）、`guard-mutation-lint`（commit 时枚举这个 diff 新增的 fail-closed 守卫并要求答出「哪个 mutation 能让它变红」——刚写好的守卫默认未被覆盖，套件在加它前后都通过，pass 数对它不携带信息）、`in-turn-cadence-advisor`（同形 Bash 命令第 6 次时注入一次「连跑 ≥6 次同构机械步骤前先答一句委派与否」的提醒，同一形状每 session 只提醒一次；advisory、从不禁）。另有 `session-inbox.js` 收录进 `claude/hooks/`（peer session 间的 best-effort 收件箱，ADR `20260823-dddf`）但上游未接线：settings.json 无对应 stanza，verify.sh 也不给它设 HOOK_WIRING 接线位（其 symlink 安装仍在 hooks glob 检查内）
+- 变更：`writer-registry-gate` 的 matcher 扩到 `Edit|Write|MultiEdit|NotebookEdit|Bash`（经 Bash 做的 commit 与写文件此前对登记表不可见），并从「一条 stanza 挂两个 handler」拆成与 `memory-carrier-gate` 各自独立的两条 stanza。README 安装 prompt 第 3 步的「整条照抄」提示按新形态改写
+- 新增：`claude/bin/` 两个探针 —— `visual-budget`（视觉预算核查，outlier-only 口径见 ADR-028）与 `interaction-latency`（交互延迟测量），均为纯 stdlib、各带测试与 fixtures；`install.sh` 的探针循环、`claude/scripts/` 清单（新增 `peer-session-watch.js`）与 `bg-shell-reclaim-check.fixtures/` 的安装覆盖同步扩
+- 新增：skill 两个 —— `precompact`（compact 前把只活在 context 里、压缩后续跑要用的事实补进本 session 既有的台账，并报出仍未落盘与仍未核实的项）与 `im-notify`（把通知经 IM 推到用户手机，包装 channel-agnostic 的 `im-notify` CLI，v1 走 feishu webhook）。另新增 references：`visual-media-inspection.md`、`web-visual-system/references/chosen-references.md`，并恢复收录 `enhancement-service-liveness.md`（2026-08-18 scope 收窄时移除过；增强服务静默失效的清单与两步匹配）
+- 新增：`claude/CLAUDE.md` 两节 BINDING —— 「自己看图 / 看视频判断"那件事发生了没有"」（结论依赖画面里有什么时先读 `visual-media-inspection.md`；无论是否路由都保留反问「那件事真的发生了、这套方法会给出不同读数吗」——缩略、采样窗口与局部变化检测的失败形态都与真实的「没发生」同形）与「本轮取得的认识不得静默消失」（「取证的充分性」管别说没测过的事，这节管它的镜像"测到了却不说"：委派者接下来合理会做的动作够不着的认识必须说出；宣告完成前把他这一轮的全部原话拆成可判条款逐条给读数，原始目标逐件重述并写归属）
+- 变更：tt-web —— 账号身份与账号记忆、quota plan 快照一致性（新增 `parsers/accounts.py`，`server.py` / `exporter.py` / codex parser 扩展；见 ADR-024 / 026 / 027 / `20260822-586a`）、sessions 页加载态（ADR-025）等；新增 `test_account_identity.py` / `test_account_memory.py`，多份既有测试扩充
+- 新增：`docs/adr/` 九条 —— 编号式 023（execute-plan ledger 与 stop-gate 在飞条款）→ 028（visual-budget outlier-only），及 `20260822-586a`（tt-web quota plan 快照一致性）、`20260823-7c14`（review-session-progress 交付物验证）、`20260823-dddf`（peer session inbox best-effort）三条日期式。新 BINDING 节引用的上游台账读数已随引用一并可在 `docs/issues/harness-issues.md` 溯源
+
 ## 2026-08-18（scope 收窄）
 
 - 变更：**本仓 scope 明确为两类读者**，判据与清单落 [docs/scope-policy.md](docs/scope-policy.md)——工作对象是**你在开发的产品**的内容跟进上游最新；工作对象是**harness 自身**的（审查 / 改进 / 评测 / 复盘 harness 的命令与其 meta-原则、判官闸调优场景集、harness 开发过程记录）只留冻结的框架样本。`/routine:sync-from-upstream` 加了一道 scope gate 执行它

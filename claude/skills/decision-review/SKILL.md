@@ -1,6 +1,6 @@
 ---
 name: decision-review
-description: Use when 手上有一个可陈述成"在 A 与 B 之间选了 A"的决策、而尚未按它采取任何行动（写文件、起长跑、改远端状态、对外发话都算）——想没想清楚不是判据，行动线才是。此时走决策评审 gate。**它有两条路**——平凡的走免审、非平凡的起外部评审，但两条都要在动手之前走完；判据与免审该怎么声明都在正文，要走免审就得打开本文件。也用于用户显式点名要审某个决策时（如"这个选型审一下"）。会不会产出 artifact 都触发。两类根本不触发：陈述不出备选的动作（读文件顺序、措辞——但**给对外符号改名不算**，那是决策），以及纯执行一个已过**本 gate**的决策。与 review-gate 是两道分开的门，别互相顶替。
+description: Use when 手上有一个可陈述成"在 A 与 B 之间选了 A"的决策、而尚未按它采取任何行动（写文件、起长跑、改远端状态、对外发话都算）——想没想清楚不是判据，行动线才是。此时走决策评审 gate。**它有两条路**——平凡的走免审、非平凡的起外部评审，但两条都要在动手之前走完；判据与免审该怎么声明都在正文，要走免审就得打开本文件。也用于用户显式点名要审某个决策时（如"这个选型审一下"）。会不会产出 artifact 都触发。两类根本不触发：陈述不出备选的动作（读文件顺序、措辞——但**给对外符号改名不算**，那是决策；**把决策写成技术必要性也不算**——判据是你否决掉过一个具体候选、且那条否决理由没验过），以及纯执行一个已过**本 gate**的决策。与 review-gate 是两道分开的门，别互相顶替。
 origin: 2026-08-08（源：video-eval-arena 一轮内五条决策层失误 ISS-013/017/019/020/022，无一是代码缺陷、全都能通过代码评审）
 ---
 
@@ -22,7 +22,9 @@ origin: 2026-08-08（源：video-eval-arena 一轮内五条决策层失误 ISS-0
 
 **决策的单位是一个可陈述的选型或取舍**——能写成"在 A 与 B 之间选了 A"的那种。措辞、先读哪个文件这类拿不出可陈述备选的动作不构成决策，不触发本 gate。**别拿"命名"当例子**：给一个对外符号改名，备选恰恰陈述得出来（旧名 / 新名 / 第三个名），它落在下面的平凡判据里而不是这里。缺了这条下界，"非平凡"会退化成"一切"：任何动作都能被说成有替代方案，于是读者只能自设一条下界，而那条下界正是本 gate 要挡的东西。
 
-**纯执行一个已过本 gate 的决策不触发**——它不是新决策，不需要任何声明。这与上面那条下界是同一类：两者都是"根本没到 gate 门口"，不是"到了门口被放行"。
+**也别让"技术必要性"把决策伪装成非决策**：`要做 Y 就必须先自建 X` 读起来像被环境逼出来的动作。**判据不是那句"必须"的措辞**——写不写它由你决定，真觉得被逼的人根本不会写下来再检查——而是**你有没有否决掉一个具体候选，以及那条否决理由你验过没有**。有，它就是决策，落到下面的平凡判据里去判。（实测：`必须把能力包成 HTTP` 从未进过本 gate，被跳过的否决理由是"直接跑它得开 GUI"——而它一条命令就能无头启动，那条理由是错的。）
+
+**纯执行一个已过本 gate 的决策不触发**——它不是新决策，不需要任何声明。这与「陈述不出备选」那条下界是同一类：两者都是"根本没到 gate 门口"，不是"到了门口被放行"。
 
 到了门口之后，举证责任在"声明平凡"那一侧，不在"声明重要"那一侧。**下面两条须同时成立**才算平凡、可免审：
 
@@ -73,7 +75,7 @@ origin: 2026-08-08（源：video-eval-arena 一轮内五条决策层失误 ISS-0
 
 | 项 | 取值 |
 |---|---|
-| transport | Claude Code：`CODEX_SANDBOX=read-only codeagent-wrapper --backend codex - <workdir> <<'EOF'`（prompt 从 stdin 读，形态与理由见 `~/.claude/references/delegation-policy.md`「prompt 传入形态」——**别改成命令行参数**）；Codex：内置 collaboration agent，按 `$subagent-spawning` |
+| transport | Claude Code：`CODEX_SANDBOX=read-only codeagent-wrapper --progress --backend codex - <workdir> <<'EOF'`（prompt 从 stdin 读，形态与理由见 `~/.claude/references/delegation-policy.md`「prompt 传入形态」——**别改成命令行参数**。**`--progress` 不可省**：只读 reviewer 落不了进度文件也 commit 不了，只剩它把里程碑打进 `.output`；不加则下面「等待」行要求的主动轮询盯着一个只有 wrapper banner 的恒静文件，见 `~/.claude/references/background-agent-monitoring.md`「派发前自限」第 3 条）；Codex：内置 collaboration agent，按 `$subagent-spawning` |
 | 档位 | `read-only`。语义与实测边界见 `~/.claude/references/delegation-policy.md`「Codex transport」的沙箱档位节，本节不复述。**prompt 里必须告诉评审者它自己禁网**——否则它会把随之而来的失败当成环境故障去排查，而不是当成"证据没喂齐"报回来；那个失败长什么样见上述档位节 |
 | 等待 | 同步。gate 阻塞后续动作。**一律后台派发 + 主动轮询**，等价保持同步语义；形态与两条约束见 `~/.claude/references/background-agent-monitoring.md`「前台上限与等价同步等待」，本节不复述。被杀后的处置见下方处置表「评审调用失败 / 超时」那一行 |
 | framing | 对抗式：要求评审者优先证伪，而非确认 |
@@ -98,7 +100,7 @@ origin: 2026-08-08（源：video-eval-arena 一轮内五条决策层失误 ISS-0
 
 **多行同时命中时按最重的出口走**：交用户 > 复核 > 放行。标着「不阻塞」的行从不单独决定终态。**「无法判断」未消解前不得放行**——它不计入通过，而"补喂后复审"不是终态出口、不参与上面这个排序，所以必须单说一句，否则它会被漏成放行。消解只有表里那一行给的两条（补喂后复审通过 / 用户裁决接受），处置也在那一行，本句不另立。
 
-**复核轮怎么回传**：Claude Code 侧 `CODEX_SANDBOX=read-only codeagent-wrapper --backend codex resume <session_id> - <workdir> <<'EOF'`（复核任务同样从 stdin 读，形态同上），`<session_id>` 取首轮 wrapper 打印的 `SESSION_ID`、`<workdir>` 与首轮同值；Codex 侧按 `$subagent-spawning` 续用原 agent。**handle 取不到就不是复核**——按上表「评审调用失败 / 超时 / 结果无法解析」那一行处置，另起一个评审者并把首轮 finding 与修正一并喂进去，不得把新起的一轮当成续审报成"复核通过"。
+**复核轮怎么回传**：Claude Code 侧 `CODEX_SANDBOX=read-only codeagent-wrapper --progress --backend codex resume <session_id> - <workdir> <<'EOF'`（复核任务同样从 stdin 读，形态同上——`--progress` 在续审轮同样不可省），`<session_id>` 取首轮 wrapper 打印的 `SESSION_ID`、`<workdir>` 与首轮同值；Codex 侧按 `$subagent-spawning` 续用原 agent。**handle 取不到就不是复核**——按上表「评审调用失败 / 超时 / 结果无法解析」那一行处置，另起一个评审者并把首轮 finding 与修正一并喂进去，不得把新起的一轮当成续审报成"复核通过"。
 
 ## 输出
 

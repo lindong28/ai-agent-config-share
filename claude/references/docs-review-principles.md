@@ -6,7 +6,7 @@ Behavioral guidelines for reviewing project documentation (docs/ directory) — 
 
 **Tradeoff**: These guidelines bias toward structural correctness (right content in right place) over content completeness. Content gaps are flagged only when verifiable against the codebase.
 
-**These guidelines are working if**: each document serves its stated consumer without requiring them to look elsewhere for misplaced content; all cross-references resolve; content reflects current codebase state; indexes match actual files.
+**These guidelines are working if**: each document serves its stated consumer without requiring them to look elsewhere for misplaced content; every cross-reference lands the reader on material that says what cites it; content reflects current codebase state; indexes match actual files.
 
 **Loop**: Check all docs/ files + root README.md / CHANGELOG.md against all principles. Loop until no principle is violated.
 
@@ -48,13 +48,15 @@ Ask yourself: "Would the stated consumer of this document need to read this cont
 
 ## 2. Cross-reference Integrity
 
-**Every cross-reference must resolve to an existing target. Broken references silently misdirect readers and erode trust in documentation.**
+**Every cross-reference must put this document's reader in front of material that says what the citing text claims — and where the citation can never be corrected, it must go on doing so after the target moves on. Broken references silently misdirect readers and erode trust in documentation.**
 
 When reviewing:
-- Flag links or references to files that don't exist (deleted, moved, or renamed).
-- Flag references to sections or anchors that no longer exist in the target file.
+- Flag any identifier that no longer resolves where the reader stands — a path to a file that was deleted or renamed, a URL that 404s, an anchor whose heading is gone, a symbol or command that no longer exists.
+- **When the check you would run gives the same reading whether the reference is right or wrong, it is not a check — read the target's content.** A drifted `file.py:123` still resolves, landing on a syntactically valid but unrelated line; a section whose heading survived a rewrite still resolves, now pointing at different material. Where the target is genuinely out of your reach, say the reference is unverified rather than passing it on an existence check.
+- **Where a citation can never be corrected — the text is frozen the moment it lands — the identifier has to hold up on its own.** That is true of ADRs and archived plans, and equally of anything already sent, published, or written into history. Ask what happens to this reference when the target is next edited: if it would keep resolving and quietly point elsewhere, it is worth flagging while it is still accurate, because nobody will be able to fix it afterwards. Such a citation is a snapshot of its writing day, so the gap closes as soon as the reader is told that much and where the material lives now — however that reaches them. What you flag is a drift they would walk into unwarned.
+- Ask whether this document's reader can actually reach the target. Gitignored paths, untracked artifacts, user-scope `~/...` paths and out-of-repo symlink targets all pass an existence check on the machine that wrote them, and whether they resolve for anyone else turns on what the document has established its reader already has — a path it declares as a prerequisite is reachable; one that merely looks conventional to its author is not, and a home directory holding files that ship with nothing is the common case of the latter. **Only what the reader must read in order to follow the document counts here** — a config location they will create, a log the tool will write, a path on the machine they are operating are objects of the described work, not references. The escape is reachability, not disclosure: saying "this is on my machine" names the problem without solving it.
 
-Ask yourself: "If I follow every link and reference in this document, does each one land on a real, current target?" If not, flag as broken.
+Ask yourself, of every reference you let through: "Did I judge it from where the reader stands, with a check that would have read differently had the reference been wrong?" Clearing it on your own machine, with a check that could not have failed, is how misdirection survives review.
 
 ---
 
@@ -76,7 +78,7 @@ Ask yourself: "If a new agent reads this document and acts on it, will they get 
 
 **Index files must exactly match the actual files on disk. Index drift makes documentation undiscoverable or misleading.**
 
-Cross-reference integrity (P2) covers whether links resolve. This principle covers **coverage**: every file must appear in its parent index, and every index entry must map to a real file.
+Where P2 judges the references a document makes, this principle covers **coverage**: every file must appear in its parent index, and every index entry must map to a real file.
 
 Index points defined by the protocol:
 - `docs/CLAUDE.md` — master index of all docs/ content

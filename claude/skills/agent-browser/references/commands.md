@@ -139,11 +139,35 @@ agent-browser set viewport 1920 1080 2        # 2x retina (same CSS size, higher
 agent-browser set device "iPhone 14"          # Emulate device
 agent-browser set geo 37.7749 -122.4194       # Set geolocation (alias: geolocation)
 agent-browser set offline on                  # Toggle offline mode
-agent-browser set headers '{"X-Key":"v"}'     # Extra HTTP headers
+agent-browser set headers '{"X-Key":"v"}'     # Extra request headers — NOT User-Agent (see below)
 agent-browser set credentials user pass       # HTTP basic auth (alias: auth)
 agent-browser set media dark                  # Emulate color scheme
 agent-browser set media light reduced-motion  # Light mode + reduced motion
 ```
+
+**User-Agent is not a request header here.** It is fixed when the browser context is created,
+so `set headers` cannot change it — the browser keeps sending its own and the only symptom is
+that the site still treats you as automation. Pass it at launch instead:
+
+```bash
+agent-browser --user-agent "<ua>" open <url>   # or AGENT_BROWSER_USER_AGENT=<ua>
+```
+
+Worth knowing because a site that blocks automation often keys on the `HeadlessChrome` token
+in that string alone: on one measured site, swapping only the UA moved the response between
+`{"error":"blocked","code":567}` and `200` with every other header identical.
+
+**It only takes effect on the command that starts the daemon** — same rule as
+`--download-path` (SKILL.md, Downloads). Adding it to the *next* call after you saw the block
+changes nothing: the daemon is already up and its browser context already carries the old UA,
+with no error to tell you so. Simplest fix is a fresh `--session` name — a new session gets a
+new daemon and the flag applies. Reusing the old name means closing it first, and `close`
+alone does not stop the daemon (SKILL.md, Troubleshooting: Stale Daemon); killing it needs the
+identity check in that section, since `doctor` has been measured reporting `pass` for a pid
+whose process was already gone.
+
+Being an env var, `AGENT_BROWSER_USER_AGENT` also has to be set inside **each** Bash call —
+the harness starts a new shell every time, so an `export` from a previous call is already gone.
 
 ## Cookies and Storage
 

@@ -40,7 +40,7 @@
 | `claude/references/skill-review-principles.md` | 审 skill 的原则集——本仓收 7 条，上游更多 |
 | `claude/references/judge-gate-authoring.md` | 判官闸的 rubric 怎么写 |
 
-`docs/adr/` 单列，因为它的收录判据是**逐条**的：只收决策所涉组件在本仓实际存在的那些（当前 10 条，见 [adr/README.md](adr/README.md)）。已收录条目不因上游修订而更新；上游新写的 ADR 按下面「同步时怎么用本文件」的新增分支处理。
+`docs/adr/` 单列，因为它的收录判据是**逐条**的：只收决策所涉组件在本仓实际存在的那些（当前 19 条，见 [adr/README.md](adr/README.md)）。已收录条目不因上游修订而更新；上游新写的 ADR 按下面「同步时怎么用本文件」的新增分支处理。
 
 ## 明确不收的
 

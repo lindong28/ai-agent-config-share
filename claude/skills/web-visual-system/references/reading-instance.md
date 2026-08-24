@@ -57,6 +57,14 @@ Weights: **400** body · **500** UI label · **600** heading.
 
 **Measure**: prose and lists cap at **74ch**. Tables, cards and code blocks take the full column — the cap governs *text line length*, not container width. Getting this backwards produces a 1100px page with empty gutters on a wide screen.
 
+**The sneakiest way to get it backwards is a two-column grid**, because the cap *is* on text — it is just on two runs of text at once. Measured: `.kv{display:grid;grid-template-columns:auto 1fr;max-width:74ch}`, a label/value list. The `auto` label column took **350px of the 710px**, leaving the value column at **35.8ch** — under half its intended measure — so the block rendered as a tall narrow ribbon with a void beside it, on the first screen. The cap looked right in the stylesheet and was wrong on the page.
+
+Re-derive it rather than taking the numbers on trust — the readings belong to a page, not to this file. Against `video-eval-arena` `arena/static/rt-delivery-report.html` at the commit **before** `889c870`, at 1920×1080: `getComputedStyle($('.kv')).gridTemplateColumns` returns the two column widths, and the `ch` value is that width divided by the width of one `0` in the element's own computed font.
+
+Put the cap on each text column, not on their container: `grid-template-columns: minmax(0, 20ch) minmax(0, 74ch)`, no `max-width` on the grid. Use `minmax(0, …)` rather than `auto` / `1fr` on both — their automatic minimum is `min-content`, so one unbreakable token (a URL, an identifier) pushes the column past the viewport, and that only surfaces at narrow widths.
+
+**The general form**: a measure applies to *one run of text*. Whenever N runs share one cap, each gets less than the measure and none of them is the number you wrote down. Read the computed column widths, not the declaration.
+
 **Faces**: a text face with tabular figures, plus a companion mono for identifiers and code. When the document must be a single offline file, a webfont cannot be embedded cheaply — use a curated system stack rather than a bare `sans-serif`, and include CJK faces explicitly if the document has CJK text.
 
 ## 4. Motion

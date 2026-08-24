@@ -7,7 +7,6 @@ project_doc_fallback_filenames = ["CLAUDE.md"]
 show_raw_agent_reasoning = true
 web_search = "cached"                # "cached" for speed, "live" for freshness
 suppress_unstable_features_warning = true
-steer_enabled = true
 
 persistent_instructions = "Follow project AGENTS.md guidelines. Use available MCP servers when they can help."
 
@@ -100,6 +99,12 @@ startup_timeout_sec = 30
 [mcp_servers.github.env]
 GITHUB_PERSONAL_ACCESS_TOKEN = "${GITHUB_PERSONAL_ACCESS_TOKEN}"
 
+[mcp_servers.github.tools.search_repositories]
+approval_mode = "approve"
+
+[mcp_servers.github.tools.search_code]
+approval_mode = "approve"
+
 # Claude-compatible AskUserQuestion via MCP elicitation (see ask-user-mcp/README.md).
 # install.sh symlinks the repo's ask-user-mcp into ~/.codex/ask-user-mcp so this
 # path resolves on any machine regardless of where the repo is cloned.
@@ -112,18 +117,6 @@ startup_timeout_sec = 20
 [mcp_servers.ask-user.tools.AskUserQuestion]
 approval_mode = "approve"
 
-# ── Profiles (switch with: codex --profile <name>) ──
-
-[profiles.strict]
-approval_policy = "on-request"
-sandbox_mode = "read-only"
-web_search = "cached"
-
-[profiles.yolo]
-approval_policy = "never"
-sandbox_mode = "workspace-write"
-web_search = "live"
-
 # ── Plugins ──
 
 [plugins."browser@openai-bundled"]
@@ -131,6 +124,12 @@ enabled = true
 
 [plugins."chrome@openai-bundled"]
 enabled = true
+
+[plugins."sites@openai-bundled"]
+enabled = false
+
+[plugins."visualize@openai-bundled"]
+enabled = false
 
 [plugins."documents@openai-primary-runtime"]
 enabled = true
@@ -140,3 +139,9 @@ enabled = true
 
 [plugins."presentations@openai-primary-runtime"]
 enabled = true
+
+[plugins."pdf@openai-primary-runtime"]
+enabled = false
+
+[plugins."template-creator@openai-primary-runtime"]
+enabled = false

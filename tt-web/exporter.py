@@ -12,7 +12,7 @@ from pathlib import Path
 
 import generation
 import rollup
-from parsers import claude_status, codex
+from parsers import accounts, claude_status, codex
 
 
 ROOT = Path(__file__).resolve().parent
@@ -250,13 +250,70 @@ def _cleanup_export_staging(output_path):
 
 def _rate_limits():
     return {
-        "claude": _rate_limit_block(claude_status.load_rate_limits()),
-        "codex": _rate_limit_block(codex.load_rate_limits()),
+        "claude": _rate_limit_block(
+            claude_status.load_rate_limits(), accounts.claude_account()
+        ),
+        "codex": _rate_limit_block(codex.load_rate_limits(), accounts.codex_account()),
     }
 
 
-def _rate_limit_block(value):
-    return dataclasses.asdict(value) if value is not None else None
+def _rate_limit_block(value, account=None):
+    """A quota reading, stamped with the account this machine is signed in as.
+
+    The stamp is what lets the dashboard group readings by account instead of
+    picking whichever machine reported last. It is an assumption, not a proof —
+    see ADR-024 for the window it is wrong in and why that was accepted.
+
+    Two plans travel here, and they are two different facts, not one fact
+    twice: `reading_plan` is the plan the quota reading itself reported, and
+    `credential_plan` is what this machine's credential file says right now.
+    They disagree whenever the two clocks have drifted — a plan upgrade the
+    credential file has not refreshed through, or a reading left behind by a
+    previous sign-in — and the page says so rather than picking one and calling
+    it the account's plan. Which of the two is the stale one is not knowable
+    from the pair, so nothing here claims it. See ADR 20260822-586a.
+
+    Both are published raw, and separately, because the derived value alone
+    cannot be undone: a machine whose reading carries no plan falls back to the
+    credential one, and the result is then byte-identical to a machine where
+    two independent sources happen to agree. Those are not the same state —
+    one has a second source and the other has none — and a consumer that
+    receives only the derived value has no way back to the difference.
+
+    `account_plan` is the derived display value, co-published for one reason
+    only: a server older than these fields reads it and has nothing else to
+    show. It is not the authority — this is one writer among several, since
+    every machine runs its own exporter at its own version and nothing between
+    them checks that a published `account_plan` agrees with the pair beside it.
+    The server therefore re-derives it on the way in and falls back to this
+    value only when the pair is absent; see `_account_entry`. Once no exporter
+    predates the pair, this field has no remaining reason to exist.
+    """
+    if value is None:
+        return None
+    block = dataclasses.asdict(value)
+    # Parser-side carrier, not a wire field: it exists to reach the lines below
+    # under the name the wire uses.
+    reading_plan = _text(block.pop("plan", None))
+    credential_plan = _text(account.plan) if account else None
+    block["account_id"] = account.account_id if account else None
+    block["account_label"] = account.label if account else None
+    block["account_plan"] = reading_plan or credential_plan
+    block["reading_plan"] = reading_plan
+    block["credential_plan"] = credential_plan
+    return block
+
+
+def _text(value):
+    """A usable string, or None. The last guard before a value reaches the wire.
+
+    Both plan sources already narrow to this, each in its own parser. Repeating
+    it at the one place that writes the contract means a future parser cannot
+    quietly widen it: a truthy non-string would survive `or`, be published, and
+    end up both in a rendered label and in the equality that decides whether the
+    two sources disagree.
+    """
+    return value if isinstance(value, str) and value else None
 
 
 def _timestamp():

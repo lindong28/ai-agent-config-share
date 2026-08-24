@@ -100,6 +100,35 @@ function isInComment(segment, idx) {
 const COMMAND_PREFIXES = new Set(['sudo', 'env', 'nohup', 'exec', 'command', 'builtin', 'time', 'doas']);
 
 /**
+ * Shell keywords that introduce a command without being one.
+ *
+ * `if pkill -f foo; then …` kills exactly as hard as a bare `pkill -f foo`,
+ * but segment splitting leaves `if` in command position, so the killer was
+ * read as an argument and allowed (measured 2026-08-19: `if pkill -f foo;
+ * then echo killed; fi` and the `while` / `until !` forms all returned 0).
+ * These are skipped rather than added to COMMAND_PREFIXES because they are not
+ * wrappers — nothing runs them, they only precede.
+ */
+const SHELL_KEYWORDS = new Set(['if', 'elif', 'then', 'else', 'while', 'until', 'do', '!', '{', '(']);
+
+/**
+ * Two container forms this still misses, both measured 2026-08-19 as allowed:
+ *
+ *   result=$(pkill -f foo)      # the assignment rule eats `result=$(pkill`
+ *   case "$m" in stop) pkill -f foo ;; esac
+ *                               # the arm label `stop)` lands in command position
+ *
+ * They are left open deliberately. Closing them means teaching this function
+ * command substitution and case-arm syntax, and the sibling hook
+ * liveness-predicate-gate.js was rewritten from a blocking gate down to a lint
+ * precisely because that kind of growth never converges — an adversarial review
+ * returned six HIGH findings, every one a place where its shell parser diverged
+ * from the shell. Adding `{` and `(` is different in kind: a token in command
+ * position that is literally `{` or `(` is never a killer, so the skip cannot
+ * mis-fire. Anything beyond that needs a real parser, which is its own job.
+ */
+
+/**
  * The command word of an already-blanked segment, or '' if there isn't one.
  *
  * Existence of the token is not the question — position is. `which pkill`,
@@ -113,6 +142,7 @@ function commandWordOf(segment) {
   for (const raw of tokens) {
     if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(raw)) continue;   // FOO=bar prefix assignment
     if (raw.startsWith('-')) return raw;                  // an option: not a command word
+    if (SHELL_KEYWORDS.has(raw)) continue;                // `if`/`while`/`!` precede, never run
     const bare = raw.replace(/^.*\//, '');                // /usr/bin/pkill -> pkill
     if (COMMAND_PREFIXES.has(bare)) continue;
     return bare;

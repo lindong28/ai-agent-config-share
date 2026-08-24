@@ -46,7 +46,7 @@ cd ai-agent-config-share
 
 3. 接线 hooks 到 settings.json——share 不整体安装 settings.json，hook 脚本已由 install.sh symlink 到 ~/.claude/hooks/，但还需把接线并入我的 ~/.claude/settings.json：
    - 以仓库 claude/settings.json 的 `hooks` 段为参考并入 ~/.claude/settings.json（缺 `hooks` 或其下对应事件的数组则创建，事件集以仓库 settings.json 现有的为准）。幂等键是 (event, matcher, id, command) 四项一起、不是只看 `id`：已有同 id 且四项都对就跳过；四项有任何不一致的（挂错 event / matcher，或 handler 命令有出入），先给我看 diff 再改对，别当作已存在而跳过——这两种状态 verify.sh 会分档报出，档位见下方验证 prompt。
-   - **哪些默认接、哪些先问我，以 verify.sh 的 `HOOK_WIRING` 表为权威**（第 5 栏 `required` = 默认接；`optional` = LLM judge gate，**别替我决定**——把这些条目连同 settings.json 里各自的 `description` 和代价一起列给我，我选哪些就接哪些，没接的 verify.sh 不会报警）。每条干什么、matcher 是什么，读仓库 settings.json 同条的 `description`，别要我在这里复述。几个照抄时容易踩的点：`pre:edit:writer-registry-gate` 这一条 stanza 下挂两个 handler（writer-registry-gate 与 memory-carrier-gate），要整条照抄；`session-start:post-compact-restore` 的脚本在 `~/.claude/scripts/hooks/` 下、不在 `~/.claude/hooks/`；`pre:ask-user-question:recommend-gate` 是 required 里唯一调判官的（只在真的发起 AskUserQuestion 时付一次，无判官后端或超时则放行）；`optional` 档的 stop-gate 要接两处（Stop 与 SubagentStop 两条接线、同一个脚本），且这些 Stop 判官每回合到达 Stop 各发一次判官调用、`subagent-stop:stop-gate` 每个子代理结束各一次——这是"先问我"的原因。
+   - **哪些默认接、哪些先问我，以 verify.sh 的 `HOOK_WIRING` 表为权威**（第 5 栏 `required` = 默认接；`optional` = LLM judge gate，**别替我决定**——把这些条目连同 settings.json 里各自的 `description` 和代价一起列给我，我选哪些就接哪些，没接的 verify.sh 不会报警）。每条干什么、matcher 是什么，读仓库 settings.json 同条的 `description`，别要我在这里复述。几个照抄时容易踩的点：`pre:edit:writer-registry-gate` 与 `pre:edit:memory-carrier-gate` 是**两条独立 stanza**（旧版曾是一条 stanza 挂两个 handler，已拆开）——writer-registry 那条的 matcher 是 `Edit|Write|MultiEdit|NotebookEdit|Bash`（含 `|Bash`：经 Bash 做的 commit / 写文件也要进登记表），memory-carrier-gate 单独一条、matcher 不含 Bash；两条的 matcher 都要整串照抄，别按「edit 闸只配 edit 工具」的直觉裁剪；`session-start:post-compact-restore` 的脚本在 `~/.claude/scripts/hooks/` 下、不在 `~/.claude/hooks/`；`pre:ask-user-question:recommend-gate` 是 required 里唯一调判官的（只在真的发起 AskUserQuestion 时付一次，无判官后端或超时则放行）；`optional` 档的 stop-gate 要接两处（Stop 与 SubagentStop 两条接线、同一个脚本），且这些 Stop 判官每回合到达 Stop 各发一次判官调用、`subagent-stop:stop-gate` 每个子代理结束各一次——这是"先问我"的原因。
    - 接线形态**逐条照抄仓库 settings.json 的 `command` 字段，不要自己改写**。哪条经 `run-with-flags.js` 分发、哪条直接 `node` 调，以 settings.json 为准、别按脚本长相自己推：分发器负责按 profile 开关决定该 hook 这次要不要跑，而走分发的脚本里有几个是纯模块、没有 main guard——直接 `node` 调会 exit 0 什么都不做，一道永不开火的闸，输出上与"开火了但放行"完全一样。
    - 把 env 里 `ECC_DISABLED_HOOKS` 设为 `stop:desktop-notify`（让本地 desktop-notify 取代 ECC 插件那个）。
    - 顺便检查我的 `HOOK_PROFILE` / `ECC_HOOK_PROFILE`：**如果它是 `minimal`，全部走分发器的闸会静默失效**——接线在、脚本在，但分发器在 `minimal` 下直接 exit 0 不调 hook（`verify.sh` 会把这个状态判成 FAIL）。没设过就是默认的 `standard`，不用动；已经是 `minimal` 的告诉我，由我决定是改成 `standard` 还是干脆不接那些闸。
@@ -66,8 +66,8 @@ cd ai-agent-config-share
 
 2. 解读输出：
    - [PASS] 不用处理。注意其中一类 PASS 值得看清楚：opt-in 的 LLM judge gate（verify.sh HOOK_WIRING 表里标 `optional` 的那些）如果我当初没选择接线，会记成 PASS 并注明是 opt-in——那是我自己的选择，不是漏装。
-   - [FAIL]（symlink 缺失 / 该位置是普通文件且内容与 repo 不一致 / npm 包未装 / python3 不在 PATH / tt-web 没装成 / settings.json 或 statusLine.command 缺失 / 某个 hook 接进 settings.json 了但挂错了 event 或 matcher——那种接了也永不触发（handler 命令有出入但位置对的判 WARN，不在这档）/ effective hook profile 是 `minimal`、`DISABLED_HOOKS` 关掉了 required gate、或 `lsof` 缺失——这三类是环境状态问题，**重跑 install.sh 修不了**，要改 env 或装 lsof；内容与 repo 一致的普通副本算 PASS，不算遮挡）：每条说清原因，除环境状态那三类外问我要不要 ./install.sh 重跑。两点别照字面报：**npm 包那三项查的是 npm 全局树**，我用 pnpm / bun 装过的话会 FAIL 却照样能用。三项里只有 `agent-browser` 另有一条 `agent-browser-cli` 的能力检查可作旁证，另两个是 MCP server、没有对应的探测行，所以那两条 FAIL 只能靠我自己确认装没装；而 `~/.claude/CLAUDE.md`、`~/.codex/AGENTS.md`、`~/.codex/config.toml` **整份缺失**也判 FAIL，那三份是手动 merge 的、重跑 installer 不会创建它们——刚装完还没 merge 时必然是这个状态，去做第 2 步的 merge，不要拿它当装坏了。
-   - [WARN]（statusLine 指向别处、CLAUDE.md / AGENTS.md / config.toml **已存在但缺锚点**、jq 未装、本机没有对应平台的 codeagent-wrapper 构建、`~/.local/bin` 或 codex / agent-browser / tt-web 不在 PATH、`GITHUB_PERSONAL_ACCESS_TOKEN` 未设、`ECC_DISABLED_HOOKS` 没设成 `stop:desktop-notify`（会重复弹通知）、~/.codex/config.toml 缺某个 MCP server 条目，以及**该接的 hook 已 link 但没接进 settings.json**——那种 hook 脚本在位却永不触发。jq 影响 installer 能否自动写 statusLine、以及 verify.sh 自己那些 settings.json / hook 接线检查能否做，statusline 运行本身不需要它）：先 diff repo 版与我本地版，再问我哪些要补。
+   - [FAIL]（symlink 缺失 / 该位置是普通文件且内容与 repo 不一致 / npm 包未装 / python3 不在 PATH / tt-web 没装成 / settings.json 或 statusLine.command 缺失 / 某个 hook 接进 settings.json 了但挂错了 event 或 matcher——那种接了也永不触发（handler 命令有出入但位置对的判 WARN，不在这档）、**部分 required hook 已接线而某个缺接**（settings merge 做过但掉了一条——verify 报 "NOT wired, while N other required hook(s) are"；注意与下一档的区分：一个 required 都没接是 merge 还没做的预期态、判 WARN，接了一部分缺一才判这档）/ effective hook profile 是 `minimal`、`DISABLED_HOOKS` 关掉了 required gate、或 `lsof` 缺失——这三类是环境状态问题，**重跑 install.sh 修不了**，要改 env 或装 lsof；内容与 repo 一致的普通副本算 PASS，不算遮挡）：每条说清原因，除环境状态那三类外问我要不要 ./install.sh 重跑。两点别照字面报：**npm 包那三项查的是 npm 全局树**，我用 pnpm / bun 装过的话会 FAIL 却照样能用。三项里只有 `agent-browser` 另有一条 `agent-browser-cli` 的能力检查可作旁证，另两个是 MCP server、没有对应的探测行，所以那两条 FAIL 只能靠我自己确认装没装；而 `~/.claude/CLAUDE.md`、`~/.codex/AGENTS.md`、`~/.codex/config.toml` **整份缺失**也判 FAIL，那三份是手动 merge 的、重跑 installer 不会创建它们——刚装完还没 merge 时必然是这个状态，去做第 2 步的 merge，不要拿它当装坏了。
+   - [WARN]（statusLine 指向别处、CLAUDE.md / AGENTS.md / config.toml **已存在但缺锚点**、jq 未装、本机没有对应平台的 codeagent-wrapper 构建、`~/.local/bin` 或 codex / agent-browser / tt-web 不在 PATH、`GITHUB_PERSONAL_ACCESS_TOKEN` 未设、`ECC_DISABLED_HOOKS` 没设成 `stop:desktop-notify`（会重复弹通知）、~/.codex/config.toml 缺某个 MCP server 条目，以及**一个 required hook 都还没接进 settings.json**（刚装完、merge 步骤还没做时的预期态——全部 required 都未接才落这档；接了一部分缺一属上面的 FAIL 档）。jq 影响 installer 能否自动写 statusLine、以及 verify.sh 自己那些 settings.json / hook 接线检查能否做，statusline 运行本身不需要它）：先 diff repo 版与我本地版，再问我哪些要补。
    - [INFO]：仅信息，看完即可。
 
 3. 脚本只能 grep 锚点 section 名，看不出语义漂移。请额外做一次 section / key 级 diff：
@@ -76,7 +76,7 @@ cd ai-agent-config-share
    - codex/config.toml vs ~/.codex/config.toml
    仓库有、本地没有的 section / key 列出来给我决定要不要补；同名但内容不同的先给我看 diff，不要自动动。前两项在仓库侧是同一份文件（codex/AGENTS.md 是 claude/CLAUDE.md 的 symlink），所以我本地两份如果内容不同，那是本地漂移，一并指出来。
 
-4. `~/.codex/hooks.json` 与 `~/.codex/bin/codex-hook-dispatch.js` 两条 symlink 由 verify.sh 检查；`~/.agents/skills/` 的 command wrapper farm **不在其检查范围内**，手动确认它并报给我：下面有没有 `custom-*` wrapper（没有就重跑 `python3 codex/bin/gen-agents-skills.py`）。它缺失时 Codex 侧是静默降级：`$custom-<x>` 提示不存在，Claude 侧一切照常，所以只看 verify.sh 是看不出来的。
+4. `~/.codex/hooks.json` 与 `~/.codex/bin/codex-hook-dispatch.js` 两条 symlink 由 verify.sh 检查；`~/.agents/skills/` 的 command wrapper farm 也在其检查范围内（`agents-skills-farm` 一档：期望集全量比对 + 逐 wrapper 的 generator marker，缺失或 marker 不符会 FAIL 并给出重跑命令）。它过期时 Codex 侧是静默降级：`$custom-<x>` 提示不存在，Claude 侧一切照常——verify.sh 报出后再重跑 `python3 codex/bin/gen-agents-skills.py`。
 
 不要自动改任何文件，所有改动前都要先和我确认。
 ```
@@ -109,4 +109,4 @@ Dashboard 上 "Claude 5h / 7d quota" 两张卡片的数据来自 `~/.claude/tt-s
 
 ---
 
-*Last synced from upstream: 2026-08-18 09:56 GMT+8*
+*Last synced from upstream: 2026-08-24 20:18 GMT+8*

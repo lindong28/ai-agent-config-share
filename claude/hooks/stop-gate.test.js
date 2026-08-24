@@ -120,6 +120,115 @@ assert.ok(
   '原 carve-out 必须已从 mergePendingClause 移走，否则交集消息会被强调两次豁免'
 );
 
+// —— delegatedInFlightClause 的**注入条件**（同上：判官裁决归 eval，注入条件是纯函数）————
+// 触发键 = bg-shell 协议形 ack 位于尾部 token run 内，**且至少一个 ack id 有运行态对应物**
+// （PATTERN-EXCEPTION 与读数见 stop-gate.js 匹配器旁注释）。
+// 用例按 held-out 语料的类别钉：真 ack / 叠 token / 已回收去向（注入照发——去向裁量归 clause 文本与判官）/
+// 撤回散文断 run / 引用与表格行 / 裸 token 无去向 / 伪造 id 无任务产物。
+// 任务产物 fixture：运行态对应物是两个合取——产物在场 + **活写入者**（lsof 有持有者）。
+// 本测试进程自己持有 fd 来扮演活写入者；释放 fd 即模拟 active→completed（下方翻转对照）。
+const taskRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'sg-taskroot-'));
+const tasksDir = path.join(taskRoot, 'claude-eval', '-x-proj', 'sess', 'tasks');
+fs.mkdirSync(tasksDir, { recursive: true });
+const heldFds = {};
+for (const id of ['taskA', 'taskB', 'taskC']) {
+  const fp = path.join(tasksDir, `${id}.output`);
+  fs.writeFileSync(fp, '');
+  heldFds[id] = fs.openSync(fp, 'a');
+}
+process.env.STOP_GATE_TASK_ROOT = taskRoot;
+for (const [text, expected, why] of [
+  ['交付正文……\nBG-SHELL-OK: taskA — 仍需要:等完成回调。', true, '末行真 ack'],
+  ['正文……\nBG-SHELL-OK: taskB — 仍需要:等回调。\nSTOP-GATE-OK: 已复检。', true, '叠 token(多闸拦截后叠放,6/68 实测形态)'],
+  ['正文……\nBG-SHELL-OK: taskA taskB — 两任务均在跑,已建巡检。', true, '单行多 id(owning parser 同形)'],
+  ['正文……\nBG-SHELL-OK: taskC — 已回收:结果已从别处取得。', true, '已回收去向仍注入——不豁免由 clause 边界条款与判官判'],
+  ['BG-SHELL-OK: taskA — 已回收。\n更正:该任务尚未处理,先别当它已回收。', false, '撤回散文断开 token run'],
+  ['讨论:`BG-SHELL-OK: taskA — 仍在跑` 是协议样例。\n以上是分析结论。', false, '行中引用,散文收尾'],
+  ['| `BG-SHELL-OK: taskA — 仍在跑` | acked |', false, '表格行不是协议行'],
+  ['正文……\nBG-SHELL-OK: taskA', false, '裸 token 无分隔符与去向,owning spec 不认'],
+  // —— review 反例(2026-08-18 高档评审 F1/F3)——
+  ['BG-SHELL-OK: taskA — 仍需要:等回调。\nTODO-OK: 更正,taskA 已回收。', false, '任意 *-OK 伪装 token 行保 run——成员是枚举闭集,TODO-OK 断开 run'],
+  ['正文……\nBG-SHELL-OK:  — 仍需要:等回调。', false, '空 id:owning parser 一个 pending id 也 ack 不掉'],
+  ['正文……\nBG-SHELL-OK: ,，、 — 仍需要:等回调。', false, '纯分隔符 id 同上'],
+  ['正文……\nIN-FLIGHT: taskA — 等完成回调\nBG-SHELL-OK: taskA — 仍需要:等回调。', true, '规定顺序:IN-FLIGHT 在前、BG ack 收尾'],
+  ['正文……\nBG-SHELL-OK: taskA — 仍需要:等回调。\nIN-FLIGHT: taskA — 等完成回调', true, '反序防御:IN-FLIGHT 在闭集内,clause 仍注入(owning parser 会拒 ack,命令侧已规定正序)'],
+  // —— closure 反例(2026-08-18 复核):格式合法但 id 无运行态对应物 → 不注入
+  ['正文……\nBG-SHELL-OK: stale-or-madeup — 仍需要:等回调。', false, '伪造/过期 id 找不到任务产物,豁免不注入'],
+  ['正文……\nBG-SHELL-OK: stale-one taskA — 仍需要:等回调。', true, '多 id 里任一有产物即注入(owning parser 同为交集语义)'],
+]) {
+  assert.strictEqual(gate.hasTrailingBgAck(text, 'sess'), expected, `注入条件(${why}):${text.slice(0, 40)}`);
+  assert.strictEqual(gate.delegatedInFlightClause(text, 'sess') !== '', expected, `clause 注入与匹配器一致(${why})`);
+}
+// execute-plan 的独立 IN-FLIGHT mandate：同样要求协议形态 + 活运行态对应物。
+for (const [text, expected, why] of [
+  ['正文……\nIN-FLIGHT: taskA — 等三项修复的完成回调', true, '真实 task + 完整去向'],
+  ['正文……\nIN-FLIGHT: stale-or-madeup — 等完成回调', false, '伪造/过期 id'],
+  ['正文……\nIN-FLIGHT: taskA', false, '裸 token 无分隔符与去向'],
+]) {
+  assert.strictEqual(gate.hasTrailingInFlight(text, 'sess'), expected, `IN-FLIGHT 注入条件(${why})`);
+  assert.strictEqual(gate.delegatedInFlightClause(text, 'sess') !== '', expected, `IN-FLIGHT clause(${why})`);
+}
+// 运行态合取的阴性对照:产物根指向空目录时,先前为 true 的同一输入必须翻 false——
+// 否则"文件存在判定"在从不检查文件时读数相同。
+{
+  const emptyRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'sg-emptyroot-'));
+  const prev = process.env.STOP_GATE_TASK_ROOT;
+  process.env.STOP_GATE_TASK_ROOT = emptyRoot;
+  assert.strictEqual(gate.hasTrailingBgAck('正文……\nBG-SHELL-OK: taskA — 仍需要:等回调。', 'sess'), false,
+    '空产物根下真 ack 也不注入——证明存在性检查真的在读文件系统');
+  process.env.STOP_GATE_TASK_ROOT = prev;
+}
+// session/项目绑定的阴性对照:同一产物(fd 仍被持有)、别的 session id 且无同项目 cwd → 不注入——
+// 历史陈尸 `.output` 属别的 session 目录与别的项目 slug,到不了搜索面。
+assert.strictEqual(
+  gate.hasTrailingBgAck('正文……\nBG-SHELL-OK: taskA — 仍需要:等回调。', 'another-session'),
+  false,
+  '产物在 sess 目录下,以 another-session(无 cwd)查询必须不注入'
+);
+assert.strictEqual(
+  gate.hasTrailingBgAck('正文……\nBG-SHELL-OK: taskA — 仍需要:等回调。', undefined),
+  false,
+  '无 session id 且无 cwd 时不注入(fail-safe 向不注入)'
+);
+// 只读 holder 负对照:同一产物仅被**只读** fd 持有(tail -f / 查看器形态)必须不注入——
+// `lsof -t` 分不开读写,复核实测已完成任务被只读持有时误判在飞;access 模式须含 w/u。
+{
+  const roFile = path.join(tasksDir, 'taskRO.output');
+  fs.writeFileSync(roFile, 'done');
+  const roFd = fs.openSync(roFile, 'r');
+  assert.strictEqual(
+    gate.hasTrailingBgAck('正文……\nBG-SHELL-OK: taskRO — 仍需要:等回调。', 'sess'),
+    false,
+    '只读 holder 不算活写入者——已完成任务被 tail -f 类持有不得冒充在飞'
+  );
+  fs.closeSync(roFd);
+}
+// fork 场景阳性:payload session 与任务目录不一致(实测 fork 即如此),但 cwd 的项目 slug 命中
+// 且 fd 被活进程持有 → 注入。
+assert.strictEqual(
+  gate.hasTrailingBgAck('正文……\nBG-SHELL-OK: taskA — 仍需要:等回调。', 'parent-session-id', '/x/proj'),
+  true,
+  'fork 场景:session miss 但同项目 + 活写入者 → 注入'
+);
+// **翻转对照(active→completed)**:释放 fd 后,同一输入必须由 true 翻 false——
+// 这是"对应物观测的是仍在飞,不是曾 spawn 过"的判别性证明。
+for (const id of Object.keys(heldFds)) fs.closeSync(heldFds[id]);
+assert.strictEqual(
+  gate.hasTrailingBgAck('交付正文……\nBG-SHELL-OK: taskA — 仍需要:等完成回调。', 'sess'),
+  false,
+  'fd 释放(任务完成)后同一输入必须翻 false——产物仍在盘上,但活写入者没了'
+);
+assert.strictEqual(
+  gate.hasTrailingInFlight('交付正文……\nIN-FLIGHT: taskA — 等完成回调', 'sess'),
+  false,
+  'fd 释放后 IN-FLIGHT 同样翻 false——不能靠陈尸产物获豁免'
+);
+assert.strictEqual(
+  gate.hasTrailingBgAck('正文……\nBG-SHELL-OK: taskA — 仍需要:等回调。', 'parent-session-id', '/x/proj'),
+  false,
+  '同项目 fallback 同样受活写入者约束,fd 释放后翻 false'
+);
+
 
 // —— 来源优先级：payload 存在时必须压过 transcript ————————————————————
 // 两个方向都断言，单向断言会被"总是读 transcript"或"总是读 payload"其中之一蒙混。

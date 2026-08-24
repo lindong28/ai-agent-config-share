@@ -79,7 +79,7 @@ User 是获取项目交付物、按其形态使用它、但不读内部实现的
         └── <name>.md                      # services.md / monitoring.md / incidents.md 等
 ```
 
-动态文件名说明：`NNN-<slug>.md` 编号递增 + kebab-case 标题；`<topic>.md` 按项目实际 topic 命名（如 `deployment.md`、`api-integrations.md`）；`<YYYYMMDD>-<short-name>` 日期前缀 + kebab-case 标题。
+动态文件名说明：`<YYYYMMDD>-<4 位随机后缀>-<slug>.md` + kebab-case 标题（**新条目用这个**；存量的 `NNN-<slug>.md` 递增号是历史形态，不重编也不再沿用，理由见 §4.4 的「编号」段）；`<topic>.md` 按项目实际 topic 命名（如 `deployment.md`、`api-integrations.md`）；`<YYYYMMDD>-<short-name>` 日期前缀 + kebab-case 标题。
 
 ### 文档类型概览
 
@@ -208,7 +208,13 @@ Lens：当你的变更让"系统怎么组织的"这个答案变了时——新�
 
 **What**：项目中的非平凡设计决策——取舍、理由、被否的方案。每条决策独立成文件，包含完整的 context 和 options 分析。让后续 agent 理解"为什么是这样"而不需要重新推理，避免前后矛盾。
 
-**Format**：目录结构，每条决策一个文件，编号递增。**Supersession 模型**：决策可以被后续新 ADR 推翻，但原文件不删不改——新 ADR 中标注 supersedes 并说明原因。删除原文件会让"为什么这次和上次不一样"这个信息永久丢失。
+**Format**：目录结构，每条决策一个文件。**Supersession 模型**：决策可以被后续新 ADR 推翻，但原文件不删不改——新 ADR 中标注 supersedes 并说明原因。删除原文件会让"为什么这次和上次不一样"这个信息永久丢失。
+
+**编号：新条目一律 `<YYYYMMDD>-<4 位随机后缀>-<slug>`，不再用递增序号。** 已有的 `NNN-` 条目不重编，新旧共存；`NNN` 只是历史形态，不是可继续沿用的规则。
+
+递增序号在**并发写入者**下是坏的，而且坏得没有信号：分配它要先知道"当前最大号"，而并发 session 手里**尚未提交**的号在任何一次扫描里都不存在——于是两边各自扫到同一个最大值、各自 +1、各自认为自己拿的是唯一号。实测一天之内：`docs/issues.md` 撞号三次（三次分别改了 grep 的标题层级、改了扫描口径、改了让号方，三次都没拦住，因为三次修的都不是那个致命前提）；同日 `docs/adr/` 出现 `026` 与 `027` 两对重号，**至今无人发现**——而该目录的 README 首段明写「决策不删、编号不复用」。日期加随机后缀不需要任何协调即唯一，代价只是号不再自然排序。
+
+**这一条同样适用于 §4.8 的 issue 编号**：那里的 `ISSUE-<DOMAIN>-NNN` 形态有完全相同的失效模式，新条目用 `ISSUE-<DOMAIN>-<YYYYMMDD>-<4 位随机后缀>`。
 
 ```
 docs/adr/

@@ -244,6 +244,29 @@ function envDeclaredPerCommit(command, name) {
   return out;
 }
 
+/**
+ * 声明对**这条命令**是否生效——不要求段内是提交。
+ *
+ * `envDeclared` 判的是"每次提交都带了声明"，段内没有提交时它恒为 false。而 `git add -A`
+ * 这类闸拦的命令根本不含 commit 段，于是命令行前缀形态 `NAME=1 git add -A` 在那里等于
+ * 没写——而 block 文案教的正是这种写法。两种形态都要认，否则逃生口只是看起来存在。
+ */
+function envDeclaredHere(command, name) {
+  let sticky = false;
+  for (const { toks } of segmentsOf(stripNonCommandText(command))) {
+    if (!toks.length) continue;
+    if (toks[0] === 'unset' && toks.includes(name)) { sticky = false; continue; }
+    const decl = toks[0] === 'export' ? toks.slice(1) : (toks.length === 1 ? toks : null);
+    if (decl) {
+      const v = prefixAssignment(decl, name);
+      if (v !== undefined) { sticky = v === '1'; continue; }
+    }
+    const v = prefixAssignment(toks, name);
+    if (v !== undefined ? v === '1' : sticky) return true;
+  }
+  return false;
+}
+
 /** 整条命令的每次提交都带了声明吗（无提交则 false）。 */
 function envDeclared(command, name) {
   const per = envDeclaredPerCommit(command, name);
@@ -372,5 +395,5 @@ function commitCwds(command, cwd) {
 
 module.exports = {
   extractMessages, isCommitCommand, stripNonCommandText, stripWithQuoted, dequote,
-  envDeclared, envDeclaredPerCommit, commitCwds, GLOBAL_OPTS_WITH_VALUE,
+  segmentsOf, envDeclared, envDeclaredPerCommit, envDeclaredHere, commitCwds, GLOBAL_OPTS_WITH_VALUE,
 };

@@ -13,8 +13,9 @@ cd "$(dirname "${BASH_SOURCE[0]}")"
 pass=0; fail=0; skip=0; failed=(); skipped=()
 # 递归枚举，而不是单层 `*.test.js`：子目录里的测试曾因 runner 只看当前目录而完全漏跑。
 # 单层 glob 的失败形态是**静默**：新建一个子目录就少一片覆盖，输出里什么都不会说。
-# 枚举 hooks/ 与 bin/ 两棵树。`claude/bin/autopilot.test.js` 落在 hooks/ 之外，
-# 于是它写好、能跑、却从不被套件执行——与本文件上次修的漏覆盖同类，只是漏的是同级目录。
+# 枚举 hooks/ 与 bin/ 两棵树。上游曾因只看 hooks/ 漏掉 `claude/bin/autopilot.test.js`
+# （落在外、写好、能跑、却从不被套件执行——本仓未收录该文件，教训同样适用：
+# bin/ 下的 .test.js 也在枚举面内）。
 #
 # 为什么不干脆把根提到 `claude/`：那样会吞进 `plugins/marketplaces/` 下的第三方插件
 # （实测一次 226 份 / 33 失败），它们不是本仓维护的代码，红了也不该由这里的读数承担——
@@ -22,7 +23,10 @@ pass=0; fail=0; skip=0; failed=(); skipped=()
 tests=()
 while IFS= read -r test_file; do
   tests+=("$test_file")
-done < <(find . ../bin -name '*.test.js' -not -path '*/node_modules/*' 2>/dev/null | sort)
+# `.test.mjs` 也要收：判定仪器需要 import 生产解析器时只能是 ESM，而本仓 package.json
+# 没有 "type": "module"，`.js` 会被当 CJS。漏掉这个后缀的代价实测过——一道新写的闸
+# 因此从不执行，而"没跑"与"跑了且全绿"在这里的计数上完全同形。
+done < <(find . ../bin \( -name '*.test.js' -o -name '*.test.mjs' \) -not -path '*/node_modules/*' 2>/dev/null | sort)
 if [ "${#tests[@]}" -eq 0 ]; then
   # 空集合与"全部通过"在下面的计数里同形，必须在这里就分开。
   printf 'no test files found under %s — runner is broken, not green\n' "$PWD" >&2

@@ -231,4 +231,17 @@ Tag each individual issue found during scoring with a priority level:
 | **P2** | Minor | Annoyance, but workaround exists | Fix in next pass |
 | **P3** | Polish | Nice-to-fix, no real user impact | Fix if time permits |
 
-**Tip**: If you're unsure between two levels, ask: "Would a user contact support about this?" If yes, it's at least P1.
+**Two axes, not one.** The table above is the first axis. Score every issue on the second axis as well, and rank it at the more severe of the two levels (P0 is the most severe).
+
+The second axis asks what **this issue** costs the reader on every visit. A page condition this issue does not cause counts toward some other issue's level, not toward its own.
+
+| Priority | Second axis — what this issue costs the reader |
+|----------|-------------------------------------------------|
+| **P0** | Because of it, the reader cannot reach the answer from this screen at all |
+| **P1** | It pushes the answer off the first screen, or it leaves over half of a region carrying no content and the design does not document that sparseness as deliberate |
+| **P2** | The answer stays reachable, but it costs the reader an extra scan, scroll, or arithmetic step every visit |
+| **P3** | None of the above |
+
+"The answer" is what the reader came to this screen for (Phase 1 dimension 2 names it). For the P1 whitespace band take the **height** ratio from `~/.claude/references/web-ui-observation.md`「测量技术」, at the width the reader actually uses — the width ratio answers a different question and does not feed this band.
+
+**Tip**: If you're unsure between two levels on the first axis, ask: "Would a user contact support about this?" If yes, it's at least P1. That question tests the first axis only.

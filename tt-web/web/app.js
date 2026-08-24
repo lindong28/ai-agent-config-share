@@ -320,8 +320,12 @@
     } else {
       qs("#week-tokens").textContent = integer(data.week.tokens) + " tokens";
     }
-    renderProviderQuota("claude", data.rate_limits.claude);
-    renderProviderQuota("codex", data.rate_limits.codex);
+    renderQuotaAccounts(data.rate_limits);
+    // After the quota table, and guarded: a cached copy of the older HTML has no
+    // #range-label, and an unguarded write here would throw before the table,
+    // charts and sync panel rendered — turning "one card is missing" into a
+    // blank page, which is exactly the skew initOverview already handles.
+    renderRangeCost(data.range, selectedRange || getRange(), data.rollup_coverage);
 
     const costHistory = data.cost_over_time || legacyCostHistory(data.daily_cost_30d || []);
     const costGranularity = data.cost_over_time_granularity || "day";
@@ -453,35 +457,732 @@
     return labels[value] || value || "30d";
   }
 
-  function resetText(epoch) {
+  // The card's own label carries the window, so the figure stays readable
+  // without glancing back at the toolbar to see which range is selected.
+  // A payload without `range` predates this field; the card then says so rather
+  // than showing a stale or zeroed figure under a live-looking heading.
+  function renderRangeCost(range, selectedRange, coverage) {
+    const labelEl = qs("#range-label");
+    const costEl = qs("#range-cost");
+    const tokensEl = qs("#range-tokens");
+    if (!labelEl || !costEl || !tokensEl) {
+      return;
+    }
+    const label = rangeLabel(selectedRange);
+    labelEl.textContent =
+      selectedRange === "all" ? "All-history cost" : `Last ${label} cost`;
+    if (!range) {
+      costEl.textContent = "—";
+      tokensEl.textContent = "not reported by this server";
+      return;
+    }
+    costEl.textContent = money(range.cost_usd);
+    // The heading names a window the data may not actually span: this host's
+    // rollup starts at a collection date, so "All-history cost" over four months
+    // of history is a bigger claim than the number supports. The Cost-over-time
+    // panel already discloses the same fact, but it sits a screen below the
+    // card — the qualifier has to travel with the figure that makes the claim.
+    //
+    // Three outcomes, and the test is what coverage actually *told* us, not
+    // whether the object arrived. `_rollup_coverage` returns a full dict even
+    // when it knows nothing: with an empty rollup DB `earliest_rollup_date()`
+    // is null, so it reports `partial_before_range: false, earliest_date: null`
+    // — indistinguishable, to a truthy check on the object, from a positive
+    // "this window is covered". Keying on the object would then print
+    // "All-history cost $0.00 / 0 tokens" unqualified on a host that has simply
+    // never rolled up, while B4's panel note stays hidden for the same reason.
+    // "We have no data" and "you spent nothing" are the two readings that must
+    // never share a rendering.
+    const tokens = integer(range.tokens);
+    const known =
+      coverage && typeof coverage.partial_before_range === "boolean" && coverage.earliest_date;
+    if (!known) {
+      tokensEl.textContent = `${tokens} tokens · 覆盖范围未知`;
+    } else if (coverage.partial_before_range) {
+      tokensEl.textContent = `${tokens} tokens · 自 ${coverage.earliest_date} 起累积`;
+    } else {
+      tokensEl.textContent = `${tokens} tokens`;
+    }
+  }
+
+  function resetText(epoch, nowMs = Date.now()) {
     if (!epoch) {
       return "—";
     }
     const resetAt = new Date(epoch * 1000);
-    if (resetAt.getTime() < Date.now()) {
+    if (resetAt.getTime() <= nowMs) {
       return "reset passed " + fmtAbs(resetAt);
     }
     return "resets " + fmtAbs(resetAt);
   }
 
-  function renderProviderQuota(provider, block) {
-    const fiveHour = qs(`#${provider}-five-hour`);
-    if (fiveHour) {
-      fiveHour.textContent = pct(block?.five_hour_pct);
-      qs(`#${provider}-five-reset`).textContent = resetText(block?.five_hour_resets_at);
-      qs(`#${provider}-five-updated`).textContent = quotaSourceText(block);
-    }
-    qs(`#${provider}-seven-day`).textContent = pct(block?.seven_day_pct);
-    qs(`#${provider}-seven-reset`).textContent = resetText(block?.seven_day_resets_at);
-    qs(`#${provider}-seven-updated`).textContent = quotaSourceText(block);
+  // An agent keeps one colour everywhere, so these reuse the .pill classes the
+  // charts and tables already use rather than introducing a second scheme.
+  // Each window owns a fixed column for every row, regardless of which windows a
+  // provider reports. Codex has no 5h, so its 5h cell says "n/a" (see
+  // quotaWindowCell — an em dash there would mean something else) rather than
+  // sliding its 7d leftward: a flowed layout did that, putting Codex's 7d and
+  // Claude's 5h in one column and moving the two 7d figures apart, which are the
+  // ones that need comparing.
+  const QUOTA_WINDOW_7D = { key: "7d", used: "seven_day_used_pct", reset: "seven_day_resets_at" };
+  const QUOTA_WINDOW_5H = { key: "5h", used: "five_hour_used_pct", reset: "five_hour_resets_at" };
+  // Order here IS the column order on the page and must match the header row in
+  // index.html. The shorter window comes first: the 5h figure is the one that
+  // decides whether work can continue in the next few minutes, so it is read
+  // first and belongs closest to the account it belongs to.
+  const QUOTA_COLUMNS = [QUOTA_WINDOW_5H, QUOTA_WINDOW_7D];
+  const QUOTA_PRESENCES = ["in_use", "remembered"];
+  const QUOTA_PROVIDERS = [
+    {
+      key: "claude",
+      label: "Claude",
+      pill: "agent-claude-code",
+      // Same order as QUOTA_COLUMNS. Placement does not read this list — the
+      // column a value lands in comes from its own spec — but the collapsed
+      // group's "worst usage" pill breaks an exact tie by taking the first
+      // window here, and that tie should break the way the columns read.
+      windows: [QUOTA_WINDOW_5H, QUOTA_WINDOW_7D],
+    },
+    // Codex reports no 5h window in current sessions, so its 5h cell says so
+    // rather than carrying a value.
+    { key: "codex", label: "Codex", pill: "agent-codex", windows: [QUOTA_WINDOW_7D] },
+  ];
+
+  function quotaPresence(account) {
+    // Older API payloads have no presence field and contain only live data, so
+    // retain the prior rendering instead of matching nothing and emptying the
+    // table.
+    return account.presence === undefined ? "in_use" : account.presence;
   }
 
-  function quotaSourceText(block) {
-    if (!block || !block.updated_at) {
-      return `unavailable · ${block?.unavailable_reason || "no admitted source"}`;
+  function renderQuotaAccounts(rateLimits) {
+    const table = qs("#quota-accounts");
+    if (!table) {
+      return;
     }
-    const source = block.source_machine ? ` · from ${block.source_machine}` : "";
-    return updatedText(block.updated_at) + source;
+    // Only the bodies are ours; the header row is in the markup.
+    Array.from(table.tBodies).forEach((body) => body.remove());
+
+    // Presence is the outer loop: provider-first rendering would put a
+    // remembered Claude account above an in-use Codex account. Unattributed
+    // rows are current admission data too: singles render with their provider,
+    // while collapsed groups sit at the end of this live pass.
+    QUOTA_PRESENCES.forEach((presence) => {
+      QUOTA_PROVIDERS.forEach((provider) => {
+        const block = rateLimits?.[provider.key];
+        const accounts = block?.accounts || [];
+        if (!accounts.length) {
+          if (presence === "in_use") {
+            table.appendChild(quotaUnavailableBody(provider, block?.unavailable_reason));
+          }
+          return;
+        }
+        const matching = accounts.filter((a) => quotaPresence(a) === presence);
+        const named = matching.filter((a) => a.account_state === "known");
+        const unknown = matching.filter((a) => a.account_state !== "known");
+        if (named.length) {
+          table.appendChild(quotaBody(provider, named));
+        }
+        if (presence === "in_use" && unknown.length === 1) {
+          table.appendChild(quotaBody(provider, unknown));
+        }
+      });
+
+      // Rows without an account are one per machine, not one per account. Keep
+      // larger groups collapsed, but still inside the live section so no
+      // current machine can fall below a remembered account.
+      if (presence === "in_use") {
+        QUOTA_PROVIDERS.forEach((provider) => {
+          const accounts = rateLimits?.[provider.key]?.accounts || [];
+          const unknown = accounts.filter(
+            (a) => quotaPresence(a) === "in_use" && a.account_state !== "known",
+          );
+          if (unknown.length > 1) {
+            table.appendChild(quotaUnknownBody(provider, unknown));
+          }
+        });
+      }
+    });
+  }
+
+  function quotaBody(provider, accounts) {
+    const body = document.createElement("tbody");
+    accounts.forEach((account) => body.appendChild(quotaAccountRow(provider, account)));
+    return body;
+  }
+
+  function quotaAccountRow(provider, account) {
+    const row = document.createElement("tr");
+    row.className = "quota-row";
+    row.dataset.presence = quotaPresence(account);
+    if (quotaPresence(account) === "remembered") {
+      row.classList.add("remembered");
+    }
+    if (account.account_state === "known" && typeof account.account_id === "string" && account.account_id) {
+      row.dataset.provider = provider.key;
+      row.dataset.accountId = account.account_id;
+      if (typeof account.updated_at === "string" && account.updated_at) {
+        row.dataset.observedAt = account.updated_at;
+      }
+    }
+    if (account.account_state !== "known") {
+      row.classList.add("unattributed");
+    }
+    const stale = quotaIsStale(account.updated_at);
+    if (stale) {
+      // Deliberately carries no styling — the pill in the Updated cell marks
+      // staleness where it applies. This is the machine-readable half, which
+      // the pill's wording is not: keep it even though no CSS rule selects it.
+      row.classList.add("stale");
+    }
+
+    row.appendChild(quotaProviderCell(provider, account));
+    row.appendChild(quotaPlanCell(account));
+    row.appendChild(quotaAccountCell(provider, account));
+    QUOTA_COLUMNS.forEach((spec) => row.appendChild(quotaWindowCell(provider, spec, account)));
+    row.appendChild(quotaMachinesCell(account));
+    row.appendChild(quotaUpdatedCell(account, stale));
+    return row;
+  }
+
+  function quotaProviderCell(provider, account) {
+    const cell = document.createElement("td");
+    const wrap = document.createElement("div");
+    wrap.className = "quota-provider-cell";
+    wrap.appendChild(quotaProviderPill(provider));
+    if (quotaPresence(account) === "remembered") {
+      const marker = document.createElement("span");
+      marker.className = "status-pill quota-history-marker";
+      marker.textContent = "已登出";
+      wrap.appendChild(marker);
+    }
+    cell.appendChild(wrap);
+    return cell;
+  }
+
+  function quotaPlanCell(account) {
+    const cell = document.createElement("td");
+    if (!account.account_plan) {
+      cell.textContent = "—";
+      return cell;
+    }
+    const plan = document.createElement("span");
+    plan.className = "status-pill info";
+    plan.textContent = quotaPlanLabel(account.account_plan);
+    cell.appendChild(plan);
+    if (quotaPlanSourcesDisagree(account)) {
+      // The whole claim in visible text, not in a title. A hover is not a
+      // channel on touch or from the keyboard, and the reader who needs this
+      // is precisely the one who would otherwise read the row as a single
+      // observation — so the words "不一致" and both sources are in the cell.
+      const mismatch = document.createElement("span");
+      mismatch.className = "quota-plan-mismatch";
+      mismatch.textContent =
+        `plan 不一致 · 配额读数 ${quotaPlanLabel(account.reading_plan)}` +
+        ` / 机器凭据 ${quotaPlanLabel(account.credential_plan)}`;
+      mismatch.title = "两者取自不同来源，无法判断哪一个更旧。";
+      cell.appendChild(mismatch);
+    }
+    return cell;
+  }
+
+  // Whether the row's two plan facts are both present and disagree.
+  //
+  // Three states, not two, and the third one is why this reads the two raw
+  // fields rather than comparing `account_plan` against the credential: a
+  // reading that carries no plan falls back to the credential one, which would
+  // make a lone source compare equal to itself and be indistinguishable from
+  // two sources that agree. Signed out, an unreadable credential file and an
+  // API-key machine leave one source; a remembered row and an exporter older
+  // than this field leave none. Fewer than two either way, so nothing is
+  // compared.
+  //
+  // The page stays silent for it, as it does for agreement — but silence here
+  // is the absence of a claim, not a claim of agreement, and the two states
+  // remain distinguishable in the payload for anyone who needs them apart.
+  // See ADR 20260822-586a.
+  function quotaPlanSourcesDisagree(account) {
+    if (account.account_state !== "known") {
+      return false;
+    }
+    const reading = account.reading_plan;
+    const credential = account.credential_plan;
+    if (typeof reading !== "string" || !reading) {
+      return false;
+    }
+    if (typeof credential !== "string" || !credential) {
+      return false;
+    }
+    return reading !== credential;
+  }
+
+  function quotaAccountCell(provider, account) {
+    const cell = document.createElement("td");
+    const wrap = document.createElement("div");
+    wrap.className = "quota-account-cell";
+
+    const name = document.createElement("span");
+    name.className = "quota-account-label";
+    name.textContent = quotaAccountName(account);
+    wrap.appendChild(name);
+
+    if (quotaPresence(account) === "remembered") {
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.className = "quota-account-remove";
+      remove.textContent = "移除";
+      remove.setAttribute("aria-label", `移除 ${quotaAccountName(account)} 的记录`);
+      remove.addEventListener("click", () => removeRememberedAccount(remove, provider, account));
+      wrap.appendChild(remove);
+    }
+    cell.appendChild(wrap);
+    return cell;
+  }
+
+  function quotaRemovalReading(account) {
+    const sevenDay = quotaUsage(account.seven_day_used_pct);
+    if (sevenDay.known) {
+      return `7d 已用 ${sevenDay.used}%`;
+    }
+    const fiveHour = quotaUsage(account.five_hour_used_pct);
+    if (fiveHour.known) {
+      return `5h 已用 ${fiveHour.used}%`;
+    }
+    return "最后读数不可用";
+  }
+
+  function removeRenderedAccount(providerKey, accountId, observedAt) {
+    const table = qs("#quota-accounts");
+    if (!table) {
+      return;
+    }
+    Array.from(table.children).forEach((section) => {
+      Array.from(section.children).forEach((row) => {
+        if (
+          row.dataset.provider === providerKey &&
+          row.dataset.accountId === accountId &&
+          row.dataset.presence === "remembered" &&
+          row.dataset.observedAt === observedAt
+        ) {
+          row.remove();
+        }
+      });
+    });
+  }
+
+  async function removeRememberedAccount(button, provider, account) {
+    const accountName = quotaAccountName(account);
+    const observedAt = formatDate(account.updated_at);
+    const confirmed = window.confirm(
+      `移除 ${accountName} 的记录？\n` +
+        `最后观测 ${observedAt}，${quotaRemovalReading(account)}。\n` +
+        "此操作不可恢复。"
+    );
+    if (!confirmed) {
+      return;
+    }
+    button.disabled = true;
+    try {
+      const response = await fetch(new URL("/api/account-memory/remove", window.location.origin), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          provider: provider.key,
+          account_id: account.account_id,
+          observed_at: account.updated_at,
+        }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        window.alert(payload.error || `移除失败（HTTP ${response.status}）`);
+        button.disabled = false;
+        return;
+      }
+      removeRenderedAccount(provider.key, account.account_id, account.updated_at);
+    } catch (error) {
+      window.alert(`移除失败：${error && error.message ? error.message : error}`);
+      button.disabled = false;
+    }
+  }
+
+  // Usage bands. High usage means little headroom, so these decide when the page
+  // stops being neutral about the number under it. Colour never carries this
+  // alone — a low-quota row also says so in words, for readers who cannot see
+  // the difference.
+  const QUOTA_BAND_LOW = 25;
+  const QUOTA_BAND_CRITICAL = 10;
+
+  // One definition, used by the row and by the collapsed group's summary. Two
+  // copies would let a machine be styled critical in one place and unflagged in
+  // the other, which is exactly the case the collapse creates.
+  function quotaUsage(usedPct) {
+    // Out of range is unknown, not clamped. These come from another machine's
+    // block, which the schema only checks is an object — clamping 105 would
+    // render "0%" under an "almost out" pill and raise an alarm out of a bad
+    // value.
+    const known =
+      typeof usedPct === "number" && Number.isFinite(usedPct) && usedPct >= 0 && usedPct <= 100;
+    if (!known) {
+      return { known: false, used: null, band: "" };
+    }
+    // Banded on the number the reader sees, not the one behind it: values that
+    // both print "90%" must not carry different words.
+    const used = Math.round(usedPct);
+    const band = used > 100 - QUOTA_BAND_CRITICAL ? "critical" : used > 100 - QUOTA_BAND_LOW ? "low" : "";
+    return { known: true, used, band };
+  }
+
+  function quotaBandPill(band, text) {
+    const pill = document.createElement("span");
+    pill.className = `status-pill ${band === "critical" ? "bad" : "warn"}`;
+    pill.textContent = text;
+    return pill;
+  }
+
+  function quotaWindowCell(provider, spec, account) {
+    const cell = document.createElement("td");
+    cell.className = "numeric quota-window-cell";
+
+    // Matched by key, not object identity: identity holds only while every
+    // provider's `windows` points at these same literals, and the day one is
+    // built from copies this branch would stamp "reports no 5h window" over a
+    // perfectly good reading — it fails toward a confident false statement.
+    if (!provider.windows.some((window) => window.key === spec.key)) {
+      // "n/a", not the em dash used for a missing reading. This provider has no
+      // such window at all, which is a different fact from "we have no number",
+      // and one glyph in two weights does not carry that difference — not for a
+      // screen reader, and not for anyone who cannot hover a tooltip.
+      cell.classList.add("not-applicable");
+      cell.textContent = "n/a";
+      cell.title = `${provider.label} reports no ${spec.key} window`;
+      return cell;
+    }
+
+    const { known, used, band } = quotaUsage(account[spec.used]);
+    const renderedAtMs = Date.now();
+    const resetEpoch = account[spec.reset];
+    const resetState = quotaResetState(resetEpoch, renderedAtMs);
+    const rememberedHistoricalWindow =
+      quotaPresence(account) === "remembered" && resetState !== "future";
+    if (band) {
+      cell.classList.add(band);
+    }
+
+    const line = document.createElement("div");
+    line.className = "quota-window-line";
+
+    const amount = document.createElement("span");
+    amount.className = "quota-window-value";
+    amount.textContent = known ? `${used}%` : "—";
+    if (known) {
+      amount.title = `${used}% of this window used`;
+    }
+    line.appendChild(amount);
+
+    if (known) {
+      line.appendChild(quotaMeter(used));
+    }
+    // The frozen usage value and meter remain facts after their own window has
+    // reset, or when its reset is unknown; withdrawing the pill does not infer
+    // that current usage is zero.
+    // The pill is a present-tense warning, and D4 explicitly narrows contract
+    // G4b for this historical case rather than accidentally omitting an alert.
+    // A missing reset is not evidence that the old window is still running.
+    if (band && !rememberedHistoricalWindow) {
+      line.appendChild(quotaBandPill(band, band === "critical" ? "almost out" : "running low"));
+    }
+    cell.appendChild(line);
+
+    const reset = document.createElement("div");
+    reset.className = "quota-window-reset";
+    reset.textContent = quotaPresence(account) === "remembered" && resetState === "unknown"
+      ? "reset unknown"
+      : quotaResetText(resetEpoch, resetState, renderedAtMs);
+    if (resetState !== "unknown") {
+      reset.title = resetText(resetEpoch, renderedAtMs);
+    }
+    cell.appendChild(reset);
+    if (rememberedHistoricalWindow) {
+      const observed = document.createElement("div");
+      observed.className = "quota-window-observed";
+      observed.textContent = `观测于 ${formatDate(account.updated_at)}`;
+      cell.appendChild(observed);
+    }
+    return cell;
+  }
+
+  // Fills with what is used — the column reads "7d used", and a bar running the
+  // other way would pair a long bar with a small number. Both encode usage, so
+  // a nearly full bar means little quota remains.
+  function quotaMeter(usedPct) {
+    const track = document.createElement("span");
+    track.className = "quota-meter";
+    // Presentational: the adjacent text already states the value, and a second
+    // announcement of the same number is noise on a screen reader.
+    track.setAttribute("aria-hidden", "true");
+    const fill = document.createElement("span");
+    fill.className = "quota-meter-fill";
+    fill.style.setProperty("--quota-fill", String(usedPct / 100));
+    track.appendChild(fill);
+    return track;
+  }
+
+  // A reset time is read to answer "how long must I wait", so it says exactly
+  // that — a duration, at every scale. A clock time would need the reader to
+  // subtract, and is ambiguous the moment the reset is not today: "resets 11:32"
+  // on one that is 18 hours out reads as this morning, already past. The full
+  // timestamp stays on the title attribute for anyone who wants the wall clock.
+  function quotaResetText(epoch, resetState, nowMs) {
+    if (resetState === "unknown") {
+      return "—";
+    }
+    if (resetState === "passed") {
+      return "window reset";
+    }
+    const deltaMs = epoch * 1000 - nowMs;
+    // Each unit is chosen from the value it will actually print, so rounding
+    // cannot carry a figure past its own unit — 59.6 minutes says "1h", not
+    // "60m". Never "in 0m": the state closest to relief must not read empty.
+    const minutes = Math.max(1, Math.round(deltaMs / 60000));
+    if (minutes < 60) {
+      return `resets in ${minutes}m`;
+    }
+    const hours = Math.round(minutes / 60);
+    if (hours < 48) {
+      return `resets in ${hours}h`;
+    }
+    return `resets in ${Math.round(hours / 24)}d`;
+  }
+
+  function quotaResetState(epoch, nowMs) {
+    if (typeof epoch !== "number" || !Number.isFinite(epoch)) {
+      return "unknown";
+    }
+    return epoch * 1000 <= nowMs ? "passed" : "future";
+  }
+
+  function quotaMachinesCell(account) {
+    const cell = document.createElement("td");
+    const names = account.machines || [];
+    if (!names.length) {
+      cell.textContent = "—";
+      return cell;
+    }
+    names.forEach((name, index) => {
+      if (index) {
+        cell.appendChild(document.createTextNode(" · "));
+      }
+      const node = document.createElement("span");
+      node.textContent = name;
+      // Which of these is the machine in front of the reader. Without it, three
+      // rows of e-mail addresses do not say which account this session spends.
+      if (name === account.this_machine) {
+        node.className = "quota-machine-self";
+        node.appendChild(document.createTextNode(" (this machine)"));
+      }
+      cell.appendChild(node);
+    });
+    return cell;
+  }
+
+  function quotaUpdatedCell(account, stale) {
+    const cell = document.createElement("td");
+    cell.className = "quota-updated-cell";
+    if (quotaPresence(account) === "remembered") {
+      cell.appendChild(document.createTextNode(`最后观测 ${formatDate(account.updated_at)}`));
+      const note = document.createElement("span");
+      note.className = "quota-history-note";
+      note.textContent = "最后观测值，不代表当前状态";
+      cell.appendChild(note);
+      return cell;
+    }
+    cell.appendChild(document.createTextNode(updatedText(account.updated_at)));
+    if (stale) {
+      const warn = document.createElement("span");
+      warn.className = "status-pill warn";
+      warn.textContent = "may predate a sign-in change";
+      cell.appendChild(document.createTextNode(" "));
+      cell.appendChild(warn);
+    }
+    return cell;
+  }
+
+  // Plan tiers arrive as the provider's own identifiers. Known ones get the name
+  // the provider bills them under; anything unrecognised is shown as it came,
+  // because inventing a label for a tier we do not know is worse than a raw one.
+  const QUOTA_PLAN_LABELS = {
+    default_claude_max_20x: "Max 20×",
+    default_claude_max_5x: "Max 5×",
+    default_claude_pro: "Pro",
+    prolite: "Pro Lite",
+    pro: "Pro",
+    plus: "Plus",
+    team: "Team",
+    enterprise: "Enterprise",
+  };
+
+  function quotaPlanLabel(plan) {
+    return QUOTA_PLAN_LABELS[plan] || plan;
+  }
+
+  function quotaAccountName(account) {
+    if (typeof account.account_label === "string" && account.account_label) {
+      return account.account_label;
+    }
+    if (typeof account.account_id === "string" && account.account_id) {
+      return `account ${account.account_id.slice(0, 8)}`;
+    }
+    const machines = (account.machines || []).join(" · ");
+    // Two ways to have no account, with different remedies. Telling someone to
+    // update a machine that is already current sends them after the wrong thing.
+    if (account.account_state === "signed_out") {
+      return machines ? `not signed in on ${machines}` : "not signed in";
+    }
+    return machines ? `account unknown — update tt-web on ${machines}` : "account unknown";
+  }
+
+  // Old enough that the reading may predate whatever the machine is signed into
+  // now. Attribution assumes the latest reading belongs to the current account,
+  // so age is the reader's only cue that the assumption is stretched.
+  const QUOTA_STALE_MS = 6 * 60 * 60 * 1000;
+
+  function quotaIsStale(updatedAt) {
+    const observed = Date.parse(updatedAt);
+    return Number.isFinite(observed) && Date.now() - observed > QUOTA_STALE_MS;
+  }
+
+  function quotaProviderPill(provider) {
+    const pill = document.createElement("span");
+    pill.className = `pill ${provider.pill}`;
+    pill.textContent = provider.label;
+    return pill;
+  }
+
+  function quotaUnknownBody(provider, accounts) {
+    const body = document.createElement("tbody");
+    body.className = "quota-unknown";
+
+    const summary = document.createElement("tr");
+    summary.className = "quota-row unattributed quota-summary";
+
+    const head = document.createElement("td");
+    head.colSpan = 3;
+    const toggle = document.createElement("button");
+    toggle.type = "button";
+    toggle.className = "quota-toggle";
+    toggle.setAttribute("aria-expanded", "false");
+    toggle.appendChild(quotaProviderPill(provider));
+    const label = document.createElement("span");
+    label.className = "quota-account-label";
+    label.textContent = quotaUnknownSummaryText(accounts);
+    toggle.appendChild(label);
+    // Collapsed rows are hidden in CSS, which puts them out of reach of the
+    // browser's find-in-page. `hidden="until-found"` is the platform answer to
+    // exactly that and was tried here: it computes `content-visibility: hidden`
+    // on the rows, and they stay fully laid out at 81px each — that property has
+    // no effect on `display: table-row`, which establishes no independent
+    // formatting context. Leaving it in would have made the collapse a no-op.
+    // What is left is the summary row naming every machine in the group, so the
+    // names stay findable even though the figures beside them do not.
+    toggle.addEventListener("click", () => {
+      const open = body.classList.toggle("open");
+      toggle.setAttribute("aria-expanded", String(open));
+    });
+    head.appendChild(toggle);
+    summary.appendChild(head);
+
+    // Collapsing must not swallow the one thing the reader has to act on. A
+    // machine at 96% used is still at 96% used when it has no account stamp, and
+    // "the fleet is behind on updates" is exactly when that happens.
+    //
+    // The pill goes in the column of the window it came from. In a table the
+    // column IS the claim: a 5h figure parked under "7d used" is read as a 7d
+    // figure, which is the misalignment this whole change exists to remove.
+    const worst = quotaWorstUsage(provider, accounts);
+    QUOTA_COLUMNS.forEach((spec) => {
+      const cell = document.createElement("td");
+      cell.className = "numeric";
+      if (worst && worst.spec === spec) {
+        cell.appendChild(quotaBandPill(worst.band, `${worst.used}% used on ${worst.machine}`));
+      }
+      summary.appendChild(cell);
+    });
+
+    const machines = document.createElement("td");
+    machines.textContent = accounts.flatMap((a) => a.machines || []).join(" · ");
+    summary.appendChild(machines);
+    summary.appendChild(document.createElement("td"));
+
+    body.appendChild(summary);
+    accounts.forEach((account) => body.appendChild(quotaAccountRow(provider, account)));
+    return body;
+  }
+
+  // Each state names the machines it applies to, because the remedies differ:
+  // one needs tt-web updated, the other needs someone to sign in. A summary that
+  // says only "N machines report no account" sends the reader to neither.
+  function quotaUnknownSummaryText(accounts) {
+    const byState = (state) =>
+      accounts.filter((a) => a.account_state === state).flatMap((a) => a.machines || []);
+    const clauses = [];
+    const unstamped = byState("unstamped");
+    const signedOut = byState("signed_out");
+    if (unstamped.length) {
+      clauses.push(`update tt-web on ${unstamped.join(", ")}`);
+    }
+    if (signedOut.length) {
+      clauses.push(`not signed in on ${signedOut.join(", ")}`);
+    }
+    const total = accounts.flatMap((a) => a.machines || []).length;
+    return clauses.length
+      ? `${total} machines without an account — ${clauses.join("; ")}`
+      : `${total} machines without an account`;
+  }
+
+  function quotaWorstUsage(provider, accounts) {
+    let worst = null;
+    accounts.forEach((account) => {
+      provider.windows.forEach((spec) => {
+        const { known, used, band } = quotaUsage(account[spec.used]);
+        if (!known || !band) {
+          return;
+        }
+        if (!worst || used > worst.used) {
+          // `spec` travels with the value: the caller places the pill in that
+          // window's own column, and a figure under the wrong header is a
+          // wrong figure.
+          worst = { spec, used, band, machine: (account.machines || []).join(", ") || "unknown" };
+        }
+      });
+    });
+    return worst;
+  }
+
+  function quotaUnavailableBody(provider, reason) {
+    const body = document.createElement("tbody");
+    const row = document.createElement("tr");
+    row.className = "quota-row unattributed";
+
+    const head = document.createElement("td");
+    head.colSpan = 3;
+    const wrap = document.createElement("div");
+    wrap.className = "quota-account-cell";
+    wrap.appendChild(quotaProviderPill(provider));
+    const label = document.createElement("span");
+    label.className = "quota-account-label";
+    label.textContent = "unavailable";
+    wrap.appendChild(label);
+    head.appendChild(wrap);
+    row.appendChild(head);
+
+    const detail = document.createElement("td");
+    detail.colSpan = 4;
+    detail.className = "quota-updated-cell";
+    detail.textContent = reason || "no admitted source";
+    row.appendChild(detail);
+
+    body.appendChild(row);
+    return body;
   }
 
   function renderSyncStatus(status) {
@@ -931,6 +1632,20 @@
     if (legacyCard || compatibilityNodes) {
       (legacyCard || compatibilityNodes).remove();
     }
+    // Same cache-skew guard, one generation on: a cached copy of the old page
+    // has the per-provider quota cards but no #quota-accounts to render into,
+    // which would leave those cards frozen at their placeholder forever.
+    if (!qs("#quota-accounts")) {
+      const legacyGrid = qs(".kpi-grid.quota");
+      if (legacyGrid) {
+        // Say why the section is empty. Removing the cards without a word leaves
+        // a titled hole, which reads as "no quota" rather than "reload me".
+        const note = document.createElement("p");
+        note.className = "quota-scope";
+        note.textContent = "Quota needs a reload of this page (cached older version).";
+        legacyGrid.replaceWith(note);
+      }
+    }
     let overviewGeneration = 0;
     let renderedOverviewGeneration = 0;
     async function load(force) {
@@ -995,7 +1710,13 @@
   // scrolled out of sight within a screen. Narrowing comes first because the
   // question is almost always "which session was that", not "show me all".
   const SESSIONS_PAGE_SIZE = 100;
-  const sessionsView = { rows: [], page: 0, filters: { agent: "", project: "", model: "" } };
+  const sessionsView = {
+    rows: [],
+    page: 0,
+    status: "loading",
+    filters: { agent: "", project: "", model: "" },
+  };
+  let sessionsGeneration = 0;
   const SESSION_FILTERS = [
     { key: "agent", select: "#filter-agent", field: "agent_id" },
     { key: "project", select: "#filter-project", field: "project" },
@@ -1004,15 +1725,34 @@
 
   async function initSessions() {
     async function load() {
-      const data = await api("/api/sessions", {
-        range: getRange(),
-        sort: qs("#sort") ? qs("#sort").value : "time",
-        order: "desc",
-      });
-      sessionsView.rows = data;
-      sessionsView.page = 0;
-      populateSessionFilters(data);
-      renderSessions();
+      const generation = ++sessionsGeneration;
+      sessionsView.status = "loading";
+      renderSessionState("loading");
+      try {
+        const data = await api("/api/sessions", {
+          range: getRange(),
+          sort: qs("#sort") ? qs("#sort").value : "time",
+          order: "desc",
+        });
+        if (!isValidSessionsPayload(data)) {
+          throw new Error("Sessions response contained invalid rows.");
+        }
+        if (generation !== sessionsGeneration) {
+          return;
+        }
+        sessionsView.rows = data;
+        sessionsView.page = 0;
+        populateSessionFilters(data);
+        sessionsView.status = "ready";
+        setSessionFiltersDisabled(false);
+        renderSessions();
+      } catch (error) {
+        if (generation !== sessionsGeneration) {
+          return;
+        }
+        sessionsView.status = "error";
+        renderSessionState("error", `Failed to load sessions: ${error.message || error}`, load);
+      }
     }
     bindShell(load);
     const sort = qs("#sort");
@@ -1023,6 +1763,9 @@
       const select = qs(filter.select);
       if (select) {
         select.addEventListener("change", () => {
+          if (sessionsView.status !== "ready") {
+            return;
+          }
           sessionsView.filters[filter.key] = select.value;
           sessionsView.page = 0;
           renderSessions();
@@ -1041,6 +1784,9 @@
   }
 
   function turnSessionPage(step) {
+    if (sessionsView.status !== "ready") {
+      return;
+    }
     const total = filteredSessions().length;
     const lastPage = Math.max(0, Math.ceil(total / SESSIONS_PAGE_SIZE) - 1);
     sessionsView.page = Math.min(lastPage, Math.max(0, sessionsView.page + step));
@@ -1075,6 +1821,33 @@
     });
   }
 
+  function setSessionFiltersDisabled(disabled) {
+    SESSION_FILTERS.forEach((filter) => {
+      const select = qs(filter.select);
+      if (select) {
+        select.disabled = disabled;
+      }
+    });
+  }
+
+  function isValidSessionsPayload(data) {
+    const textFields = ["session_id", "agent_id", "project", "model", "started_at"];
+    const numberFields = ["tokens", "messages"];
+    return (
+      Array.isArray(data) &&
+      data.every(
+        (row) =>
+          row &&
+          typeof row === "object" &&
+          !Array.isArray(row) &&
+          textFields.every((field) => typeof row[field] === "string" && row[field]) &&
+          numberFields.every((field) => Number.isFinite(row[field])) &&
+          (row.cost_usd === null || Number.isFinite(row.cost_usd)) &&
+          typeof row.estimated === "boolean"
+      )
+    );
+  }
+
   // Shortening a project to its trailing segments can map two different paths
   // onto one label, and an <option> has nowhere to put the full value — the
   // reader would face two identical entries with no way to choose. Where that
@@ -1105,6 +1878,14 @@
     const matched = filteredSessions();
     const start = sessionsView.page * SESSIONS_PAGE_SIZE;
     const pageRows = matched.slice(start, start + SESSIONS_PAGE_SIZE);
+    const filtering = matched.length !== sessionsView.rows.length;
+    if (!pageRows.length) {
+      renderSessionState("empty", filtering ? "No sessions match these filters." : "No sessions in this range.");
+      qs("#session-count").textContent = filtering
+        ? `0 of ${integer(sessionsView.rows.length)} sessions`
+        : "0 sessions";
+      return;
+    }
     // Dates only group meaningfully while the list is in time order; sorted by
     // cost or tokens the days interleave and a heading would assert an order
     // the table does not have.
@@ -1112,6 +1893,7 @@
     let lastDay = null;
 
     tbody.innerHTML = "";
+    tbody.setAttribute("aria-busy", "false");
     pageRows.forEach((row) => {
       const day = dayKey(row.started_at);
       if (grouped && day && day !== lastDay) {
@@ -1138,11 +1920,57 @@
     });
 
     syncStickyHeaderOffset();
-    const filtering = matched.length !== sessionsView.rows.length;
     qs("#session-count").textContent = filtering
       ? `${integer(matched.length)} of ${integer(sessionsView.rows.length)} sessions`
       : `${integer(sessionsView.rows.length)} sessions`;
     renderSessionPager(matched.length, start, pageRows.length);
+  }
+
+  function renderSessionState(state, message, load) {
+    const tbody = qs("#sessions-body");
+    if (!tbody) {
+      return;
+    }
+    tbody.innerHTML = "";
+    tbody.setAttribute("aria-busy", state === "loading" ? "true" : "false");
+    if (state === "loading" || state === "error") {
+      setSessionFiltersDisabled(true);
+    }
+    const row = document.createElement("tr");
+    row.dataset.sessionState = state;
+    const cell = document.createElement("td");
+    cell.colSpan = 7;
+    cell.className = state === "error" ? "error" : "empty-state";
+    const text = message || "Loading sessions…";
+    cell.appendChild(document.createTextNode(text));
+    if (state === "error" && load) {
+      const retry = document.createElement("button");
+      retry.type = "button";
+      retry.textContent = "Retry";
+      retry.addEventListener("click", load);
+      cell.appendChild(document.createTextNode(" "));
+      cell.appendChild(retry);
+    }
+    row.appendChild(cell);
+    tbody.appendChild(row);
+
+    const count = qs("#session-count");
+    if (count) {
+      count.textContent = state === "loading" ? "Loading…" : state === "error" ? "Sessions unavailable" : "0 sessions";
+    }
+    const status = qs("#page-status");
+    if (status) {
+      status.textContent = text;
+    }
+    const prev = qs("#page-prev");
+    const next = qs("#page-next");
+    if (prev) {
+      prev.disabled = true;
+    }
+    if (next) {
+      next.disabled = true;
+    }
+    syncStickyHeaderOffset();
   }
 
   // The date headings stick directly beneath the column header, so they need

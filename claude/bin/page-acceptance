@@ -87,10 +87,13 @@ EXPECT_RE = re.compile(r"^(?P<sel>.+?)=(?P<count>\d+)(?:@ready>=(?P<ready>\d))?$
 NOT_COVERED = (
     "遮挡", "透明度", "visibility", "可读性", "可操作性",
     "感知质量（口型/声音/美感）", "关系层对齐", "多状态真实使用", "内容对读者有没有用",
+    "响应（点下去到画面更新等了多久）",
 )
 NOT_COVERED_OWNERS = {
     "关系层对齐与内容": "web-ui-observation.md",
+    "响应（点下去到画面更新等了多久）": "web-ui-observation.md",
     "多状态真实使用": "test-ux",
+    "可操作性": "test-ux",
 }
 
 # 每次 eval 都必须短：一次长 eval（内部滚动 + sleep）会 wedge agent-browser 的 daemon

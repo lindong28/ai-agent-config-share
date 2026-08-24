@@ -44,8 +44,55 @@ function repo(name, { withChangelog }) {
   return root;
 }
 
+/**
+ * 索引**为空**、但文件都已 tracked 且工作树有改动的 guarded 仓——这才是本闸真实面对的
+ * 状态：它是 PreToolUse，而 `git add` 与 `git commit` 写在同一条命令里时，索引尚未被写。
+ * 上面 `repo()` 预先 stage 了 `src.js`，那正是这条判据此前恒不被触及的原因。
+ *
+ * 基线 commit 不是摆设：没有它，`--only docs/a.md` 在真 git 里报
+ * `did not match any file(s) known to git`，用例描述的是一个不存在的状态。而 hook 只解析
+ * 命令字符串、从不跑 git，**所以它照样绿**——夹具坏掉与判据正确在读数上同形。
+ */
+function repoTrackedUnstaged(name) {
+  const root = path.join(tmp, name);
+  fs.mkdirSync(path.join(root, 'docs'), { recursive: true });
+  fs.mkdirSync(path.join(root, 'notes'), { recursive: true });
+  execFileSync('git', ['init', '-q'], { cwd: root });
+  fs.writeFileSync(path.join(root, 'CHANGELOG.md'), '# Changelog\n\nuser-visible changes only.\n');
+  fs.writeFileSync(path.join(root, 'src.js'), '// x\n');
+  fs.writeFileSync(path.join(root, 'docs', 'a.md'), 'a\n');
+  fs.writeFileSync(path.join(root, 'notes', 'b.txt'), 'b\n');
+  fs.writeFileSync(path.join(root, 'NOTES.MD'), 'n\n');      // 扩展名大写的文档
+  fs.symlinkSync('docs', path.join(root, 'link'));           // 指向目录的 tracked symlink
+  execFileSync('git', ['add', '-A'], { cwd: root });
+  execFileSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-qm', 'baseline'], { cwd: root });
+  // 只改工作树，不碰索引 → 索引与 HEAD 一致，`git diff --cached` 为空。
+  fs.appendFileSync(path.join(root, 'src.js'), '// y\n');
+  fs.appendFileSync(path.join(root, 'docs', 'a.md'), 'b\n');
+  fs.appendFileSync(path.join(root, 'notes', 'b.txt'), 'c\n');
+  fs.appendFileSync(path.join(root, 'NOTES.MD'), 'm\n');
+  fs.unlinkSync(path.join(root, 'link'));
+  fs.symlinkSync('notes', path.join(root, 'link'));          // 改指向 = symlink 条目本身有改动
+  fs.appendFileSync(path.join(root, 'CHANGELOG.md'), '- change\n');
+  return root;
+}
+
 const guarded = repo('guarded', { withChangelog: true });   // 会开火的仓
 const plain = repo('plain', { withChangelog: false });      // 不会开火的仓
+const guardedEmpty = repoTrackedUnstaged('guarded-empty');
+
+// 夹具自检：这三条一旦不成立，下面整组用例测的就不是它们声称的那个状态，而且会静默地绿。
+// 第三条（工作树确有改动）不是多余的——少了它，把 `appendFileSync` 那几行删掉之后索引
+// 仍为空、路径仍 tracked，前两条照样通过，而夹具描述的已经是另一个状态了。
+{
+  const g = (args) => execFileSync('git', args, { cwd: guardedEmpty, encoding: 'utf8' });
+  const set = (s) => new Set(s.split('\n').filter(Boolean));
+  assert.strictEqual(g(['diff', '--cached', '--name-only']).trim(), '', '夹具应索引为空');
+  assert.deepStrictEqual(set(g(['ls-files'])), new Set(['CHANGELOG.md', 'NOTES.MD', 'docs/a.md', 'link', 'notes/b.txt', 'src.js']),
+    '夹具应恰好 tracked 这六个路径');
+  assert.deepStrictEqual(set(g(['diff', '--name-only'])), new Set(['CHANGELOG.md', 'NOTES.MD', 'docs/a.md', 'link', 'notes/b.txt', 'src.js']),
+    '夹具应六个路径都有未 staged 的工作树改动');
+}
 
 /** 返回 hook 是否拦下。transcript_path 缺席 → §2 不参与，本文件只测 §4。 */
 function blocks(command, cwd) {
@@ -63,6 +110,28 @@ test('基线：在有 user-visible CHANGELOG 的仓里提交非文档改动 → 
 
 test('基线反向：没有那种 CHANGELOG 的仓 → 放行', () => {
   assert.strictEqual(blocks(COMMIT, plain), false);
+});
+
+test('索引为空时按命令点名的路径判——skill 规定的动作形态正是这一种', () => {
+  // `create-commit` 第 5 步：「`git add <specific files>` 加 `git commit --only <同一组路径>`」。
+  // 两句写在同一条 Bash 命令里时，PreToolUse 读到的索引是空的。只看索引 → 静默放行，
+  // 而失守形态是"什么都没发生"：commit 成功、无输出、下游全绿。实测代价见 HARNESS 账本。
+  assert.strictEqual(blocks(`git add src.js && git commit --only src.js -m x`, guardedEmpty), true);
+  // `--only` 提交的是工作树内容，已跟踪文件根本不需要先 add——索引恒空的第二条路径。
+  assert.strictEqual(blocks(`git commit --only src.js -m x`, guardedEmpty), true);
+  // 反向三条：点名了 CHANGELOG、纯文档、以及压根没点名路径，都不该拦。
+  assert.strictEqual(blocks(`git add CHANGELOG.md src.js && git commit --only CHANGELOG.md src.js -m x`, guardedEmpty), false);
+  assert.strictEqual(blocks(`git commit --only docs/a.md -m x`, guardedEmpty), false);
+  assert.strictEqual(blocks(`git commit -m x`, guardedEmpty), false);
+});
+
+test('命令里的参数值不得被当成路径', () => {
+  // `-m` 的值、以及**成簇短参**里的 `-sm wip`：把 `wip` 当路径就会误拦。后者被既有
+  // broad 套件的阴性语料抓到过一次（那条用的是 `-am`），写在这里免得下次重犯。
+  // 这里刻意用 `-sm` 而不是 `-am`：`-a` 会被同一 hook 的 broad 检查独立拦下，
+  // 于是 `-am` 那条用例在本判据坏掉时**照样是 exit 2**，对它零区分力。
+  assert.strictEqual(blocks(`git commit --only docs/a.md -m src.js`, guardedEmpty), false);
+  assert.strictEqual(blocks(`git commit --only docs/a.md -sm wip`, guardedEmpty), false);
 });
 
 test('逃生口：命令行前缀形态（提示里教的那种）必须生效', () => {
@@ -182,4 +251,62 @@ test('不判：目录解析不确定（变量 / 子 shell / ||）', () => {
   assert.strictEqual(blocks(`(cd ${guarded} && git status); ${COMMIT}`, plain), false);
   // `||`：cd 成功则 commit 根本不执行。把 cd 的目标当成提交仓同样是凭空误拦。
   assert.strictEqual(blocks(`cd ${guarded} || ${COMMIT}`, plain), false);
+});
+
+// ── 白名单形状的边界 ───────────────────────────────────────────────────────
+// `commitScope` 只认 `[git add <paths> &&] git commit … --only <同一组> …` 这一种形状。
+// 下面每一条都落在形状之外 → `{known:false}` → 退回按索引判；索引为空 → 不判 → 放行。
+// 它们全部来自对"尽量解析"版的两轮对抗评审：每一条在那一版里都是一次**误拦或漏放**，
+// 而误拦比漏放更坏——它会训练出绕过行为，等于废掉整道闸。
+test('形状之外一律不判：这些都不得因为解析猜错而误拦', () => {
+  const outside = {
+    '--pathspec-from-file 被通用 --k=v 分支吞掉': 'git commit --pathspec-from-file=paths.txt -m x',
+    '目录 pathspec 会递归展开，展开结果静态看不见': 'git commit --only notes -m x',
+    '段间 cd 改变路径解析基准': 'git add src.js && cd docs && git commit --only src.js -m x',
+    '|| 让前一段可能根本不执行': 'true || git add src.js; git commit --only src.js -m x',
+    'git 不在命令位，这只是 echo': 'echo /usr/bin/git commit --only src.js',
+    '反斜杠转义分词不支持': 'git commit --only docs/a\\ b.txt -m x',
+    '--amend 不按 pathspec 提交索引': 'git add src.js && git commit --amend --only --no-edit',
+    '--dry-run 根本不产生 commit': 'git add src.js && git commit --dry-run --only src.js -m x',
+    '取值型 flag 的值缺失': 'git commit --only src.js -m',
+    'add 与 --only 点名的不是同一组': 'git add src.js && git commit --only docs/a.md -m x',
+    '裸 pathspec 不在白名单形状里': 'git commit src.js -m x',
+  };
+  for (const [why, cmd] of Object.entries(outside)) {
+    assert.strictEqual(blocks(cmd, guardedEmpty), false, `不该拦（${why}）：${cmd}`);
+  }
+});
+
+test('形状之内仍照拦：白名单收窄不得把要防的那一种也放掉', () => {
+  assert.strictEqual(blocks('git add src.js && git commit --only src.js -m x', guardedEmpty), true);
+  assert.strictEqual(blocks('git commit --only src.js -m x', guardedEmpty), true);
+  assert.strictEqual(blocks('git commit -q --only src.js --signoff -m x', guardedEmpty), true);
+});
+
+// 第三轮对抗评审的四条：每一条在修之前都有一个具体的漏放或误拦，且**都由本轮白名单新引入**
+// ——白名单之前这些命令都落在"索引为空就不判"里，读数一律是放行。
+test('集合相等要按集合判，不按长度判', () => {
+  // 长度这个读数在两组真相等与真不等时都可能取同一个值，于是两个方向各错一次。
+  // 漏放：两边语义都是 {src.js}，长度却是 2 vs 1。
+  assert.strictEqual(blocks('git add src.js src.js && git commit --only src.js src.js -m x', guardedEmpty), true);
+  // 误拦：长度都是 2，且 add 的每个元素都在 want 里，但两组并不相同。
+  assert.strictEqual(blocks('git add src.js src.js && git commit --only src.js docs/a.md -m x', guardedEmpty), false);
+});
+
+test('只认裸 git：带路径的可执行文件可能是改写参数的包装器', () => {
+  // `/tmp/fake/git` 同样以 `/git` 结尾。它是不是真 git、`--only` 在它那里是不是同一个
+  // 语义，静态判不了；猜错的后果是 known 的范围与实际提交的完全不同。
+  assert.strictEqual(blocks('/usr/bin/git commit --only src.js -m x', guardedEmpty), false);
+});
+
+test('文档判据不得大小写敏感', () => {
+  // `NOTES.MD` 是文档。扩展名的大小写不由任何规范约束——`endsWith('.md')` 会把它判成
+  // 代码而误拦，而白名单之前这条命令走的是"索引为空"分支，根本不会拦。
+  assert.strictEqual(blocks('git add NOTES.MD && git commit --only NOTES.MD -m x', guardedEmpty), false);
+});
+
+test('symlink 是一个条目，不是它指向的东西', () => {
+  // `link` 指向目录。`statSync` 会跟随它、判成目录 → bail → 漏放；git 眼里它就是一个
+  // 非文档条目，该拦。
+  assert.strictEqual(blocks('git add link && git commit --only link -m x', guardedEmpty), true);
 });

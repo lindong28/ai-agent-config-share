@@ -55,7 +55,7 @@
       "id": "writer-registry",
       "source": {
         "event": "PreToolUse",
-        "matcher": "Edit|Write|MultiEdit|NotebookEdit",
+        "matcher": "Edit|Write|MultiEdit|NotebookEdit|Bash",
         "type": "command",
         "command": "node \"$HOME/.claude/hooks/run-with-flags.js\" writer-registry-gate writer-registry-gate.js"
       },
@@ -141,6 +141,38 @@
         "mode": "bash"
       },
       "reason": "The shared gate now recognizes the Codex transcript call that reads create-commit/SKILL.md."
+    },
+    {
+      "id": "bash-guard-mutation-lint",
+      "source": {
+        "event": "PreToolUse",
+        "matcher": "Bash",
+        "type": "command",
+        "command": "node \"$HOME/.claude/hooks/run-with-flags.js\" guard-mutation-lint guard-mutation-lint.js"
+      },
+      "status": "fixture-verified",
+      "codex": {
+        "event": "PreToolUse",
+        "matcher": "Bash",
+        "mode": "bash"
+      },
+      "reason": "Reads tool_input.command plus input.cwd to diff against HEAD; both are present in the Codex Bash payload and neither is Claude-specific."
+    },
+    {
+      "id": "bash-liveness-predicate",
+      "source": {
+        "event": "PreToolUse",
+        "matcher": "Bash",
+        "type": "command",
+        "command": "node \"$HOME/.claude/hooks/run-with-flags.js\" liveness-predicate-gate liveness-predicate-gate.js"
+      },
+      "status": "fixture-verified",
+      "codex": {
+        "event": "PreToolUse",
+        "matcher": "Bash",
+        "mode": "bash"
+      },
+      "reason": "Reads only tool_input.command; Codex canonical Bash payload uses the same contract."
     },
     {
       "id": "stop-desktop-notify",
@@ -298,6 +330,34 @@
         "mode": "subagent-stop"
       },
       "reason": "Codex exposes SubagentStop; the dispatcher removes lifecycle state only after the shared gate allows the stop."
+    },
+    {
+      "id": "pretool-in-turn-cadence-advisor",
+      "source": {
+        "event": "PreToolUse",
+        "matcher": "Bash",
+        "type": "command",
+        "command": "node \"$HOME/.claude/hooks/run-with-flags.js\" in-turn-cadence-advisor in-turn-cadence-advisor.js"
+      },
+      "status": "fixture-verified",
+      "codex": {
+        "event": "PreToolUse",
+        "matcher": "Bash",
+        "mode": "bash"
+      },
+      "reason": "Reads only tool_input.command shape (executable + long-option set); Codex canonical Bash payload uses the same contract."
+    },
+    {
+      "id": "monitor-liveness-predicate",
+      "source": {
+        "event": "PreToolUse",
+        "matcher": "Monitor",
+        "type": "command",
+        "command": "node \"$HOME/.claude/hooks/run-with-flags.js\" liveness-predicate-gate liveness-predicate-gate.js"
+      },
+      "status": "harness-specific-excluded",
+      "codex": null,
+      "reason": "Monitor tool events are Claude Code-specific; Codex has no Monitor event to map."
     }
   ]
 }

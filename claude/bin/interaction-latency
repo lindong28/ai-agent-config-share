@@ -1,0 +1,449 @@
+#!/usr/bin/env python3
+"""量一次**操作**让用户等了多久：从他动手那一刻，到他要的那个东西**看得见地**出现在屏幕上。
+
+## 它防的是哪一次失守
+
+一轮"把我方与参照站的页面延迟做全面对比"的任务里，`agent-browser` 用了 1036 次、
+`playwright` 837 次——浏览器全程在用，切过 tab、看过筛选后的布局。产出的验收契约是
+"真实冷连接下**首屏**等待不得显著慢于参照"。三周后用户报告：交替点击侧栏两个视图
+"有明显延迟感"。复盘那次 session 全文（locator 见 `web-ui-observation.md` 同名小节）：
+`time_total` 53 次、`LCP` 16 次、`FCP` 15 次，而 `performance.now` **0** 次、
+`INP`（词边界）**0** 次。**观察面整个绑在"打开一个 URL"上，而用户抱怨的动作是
+"在站内从 A 切到 B"**——后者从来不在被观察的动作集合里。
+
+## 为什么必须是程序（以及本工具自己已经踩过的坑）
+
+这段量法以散文形态被独立 review 推翻过三次；本工具的**第一版**又被推翻八次。全部
+固化在同目录 `.test.py` 里。最值得记的四条，它们的共同形态是**给出一个看起来完全
+合理的毫秒数，而调用者无从察觉它是错的**：
+
+1. **路径先变、内容后到。** 第一版把 `location.pathname` 拼进签名，于是点击后立刻
+   `history.pushState()`、内容 800 ms 后才更新的页面，探针约两帧后就收工。现在
+   **路径只是诊断字段，不参与终点判定**。
+2. **中间态被当成最终态。** 目标先显示 `Loading…` 再显示结果时，"内容变了"在
+   `Loading…` 那一刻就成立。"稳定两帧"救不了它——loading 态可以稳定很久。所以
+   **`--until-text` 默认必填**：调用者说出"看到什么才算到"。确实只想量"任何变化"
+   的，显式写 `--any-change`，它会在报告里留痕。
+3. **`innerText` 变了不等于用户看见了。** 目标在视口外、被 `opacity:0`、或
+   `display:none` 时文本照样能变；更反直觉的是**目标自身未渲染时 `innerText` 按
+   HTML 规范回退为全部后代文本**。所以收工前**还要确认目标已渲染、非退化、且与视口
+   有非空交集**。
+4. **点击可能根本没落在那个控件上。** 坐标点击会落到 sticky header、overlay 或空处，
+   而 document 上的监听器照样记下这次 pointerdown。现在**校验
+   `event.composedPath()` 是否包含预期节点**，不包含即 exit 2。
+   实测补充：本机 agent-browser 0.27.0 遇到全屏 overlay 时**自己就拒绝了点击**
+   （`click '#go' 失败`），所以这条守卫在这一版上是第二道防线。**正因如此它必须有
+   自己的用例**——夹具矩阵里那条 overlay 用例根本走不到它，去掉这条守卫它照样绿；
+   真正测它的是 `.test.py` 的 ⑧b（JS 侧记得对不对）与 ⑧c（Python 侧消费得对不对），
+   两半各一条。
+
+## 时间戳为什么全在页面内取
+
+`agent-browser` 的每条子命令是一次独立进程调用，跨调用计时会把几十到几百毫秒的 CLI
+开销算进读数——那比要测的量还大。所以：**短 eval 装仪器 → 真实点击 → 短 eval 读回**，
+`t0` 与 `t1` 都由页面内的 `performance.now()` 产生。eval 必须短：一次长 eval
+（内部等待 / 滚动）会 wedge agent-browser 的 daemon（同族 `page-acceptance` 实测）。
+
+## 读数的确切含义（字段名即测法）
+
+- `t0`：`pointerdown` 派发那一刻。**不是 `click`**——两者之间隔着一次抬手。
+- `changed_at`：目标节点**满足全部收工条件**那一刻——内容与点击前不同、
+  （给了 `--until-text` 时）包含那段文字、且目标已渲染并与视口有非空交集。
+- `painted_at`：`changed_at` 之后连过两帧的时刻。报出的 `ms` = `painted_at - t0`。
+- `negative_control`：对一个**不该改变任何东西**的操作跑同一套判据，必须报
+  `no_change`。**它是必需的**：不给 `--noop-click` 就得显式 `--no-negative-control`，
+  而那会让退出码固定为 3（未核实），不会伪装成 0。
+- 冷/热：**cold 先测**，在阴性对照与 hot 之前——阴性对照自己会 `open` 一次同一 URL，
+  填充 HTTP 缓存与连接池，放在前面就把 cold 预热掉了。
+
+**阴性对照不证明仪器量得准**，只证明它分得清"变了"与"没变"。要证明量得准需要阳性
+注入：本工具**不提供**，用外部手段（DevTools 的 CPU / 网络 throttle，或临时挡住首屏
+必需资源）后重量一次，读数须显著变大。
+
+## 四类已知会给出错读数的情形（外部评审报出、尚未闭合，用它之前先读这四条）
+
+这四条**不是"覆盖不到"，是"会给出一个看着合理的数"**——这是本工具最危险的失败面，
+所以放在最前面。逐条的完整场景见 `docs/issues/harness-issues.md` 的 HARNESS-429。
+
+1. **`onScreen()` 判的是 `--target` 那个容器，不是 `--until-text` 实际所在的位置。**
+   容器进了视口而那段文字还在折叠线以下时，它会判"到了"。
+2. **`--until-text` 是子串匹配，存在提前收工构造**：判据在点击前就已存在于目标里，
+   或中间态（loading 文案、上一页残留）偶然包含它。
+3. **阴性对照遇上整页导航时，非 `--json` 模式会抛 `KeyError`** → Python 默认退出码
+   1 → 在契约里那是"超过 `--max-ms`"，即**仪器故障冒充"页面慢"**。用 `--json` 可避开。
+4. **viewport 读回失败、两组互斥参数、CLI 传入非有限数**这三条路径**零夹具覆盖**——
+   它们的守卫写了，但没有任何用例证明守卫真的会开火。
+
+## 已知不覆盖的边界
+
+- **整页导航**：目标是真导航时，装在旧 document 上的仪器随之销毁。工具靠 document
+  token 立即识别并报 `unsupported_full_navigation`（exit 3），不会空等到超时、也不会
+  伪装成"这一页很慢"。**它面向的是同一个 document 内的客户端切换。**
+- 遮挡命中测试：只判"已渲染且与视口相交"，不做 `elementFromPoint` 命中测试。
+- 这个数**准不准**（见上：需要阳性注入）。
+- **首次进入**的等待：那是一次导航，归 LCP，不归本工具。
+
+## 退出码
+
+  0  读数取到、阴性对照通过、且（给了 `--max-ms` 时）冷热两次都未超阈值
+  1  cold 或 hot 任一超过 `--max-ms`（报告写明是哪一次）
+  2  仪器故障：agent-browser 缺失 / 打开失败 / eval 失败 / 读数形状不对 /
+     选择器不匹配 / 点击没落在预期控件上 / viewport 没设成功
+  3  unresolved：阴性对照自己报出了变化、没跑阴性对照、等到超时目标仍未满足条件、
+     或目标是整页导航
+
+把 1 和 3 混成一个码，"这一页慢"与"我没量准"就同形了——本工具存在的理由正是不让
+两种结局同形。所以任何数据形状异常都落 2，绝不让 Python 的默认退出码 1 冒充"慢"。
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import shutil
+import subprocess
+import sys
+import uuid
+
+EXIT_OK, EXIT_SLOW, EXIT_INSTRUMENT, EXIT_UNRESOLVED = 0, 1, 2, 3
+
+
+class InstrumentError(RuntimeError):
+    """一切"这次没量成"。绝不能与 EXIT_SLOW 混。"""
+
+
+class Unresolved(RuntimeError):
+    """读数不可信，但不是仪器坏了。"""
+
+
+# 装仪器。必须短：只注册监听器并立刻返回，不在 eval 里等待任何东西。
+INSTALL = r"""
+((key, targetSel, clickSel, untilText, anyChange, token) => {
+  const target = () => document.querySelector(targetSel);
+  // 内容签名**不含路径**：点击后立刻 pushState 而内容 800 ms 后才到的页面，
+  // 把路径拼进签名会让终点在两帧后就成立。路径只作诊断字段。
+  const textOf = () => { const t = target(); return t === null ? null : (t.innerText || ''); };
+  // 已渲染、非退化、且与视口有非空交集。innerText 在目标自身未渲染时按规范回退为
+  // 全部后代文本，所以"文本变了"必须叠上这一层才等于"用户看见了"。
+  const onScreen = () => {
+    const t = target();
+    if (t === null) return false;
+    const r = t.getBoundingClientRect();
+    if (!(r.width > 0 && r.height > 0)) return false;
+    if (typeof t.checkVisibility === 'function' && !t.checkVisibility(
+          {checkOpacity: true, checkVisibilityCSS: true})) return false;
+    const vw = document.documentElement.clientWidth, vh = document.documentElement.clientHeight;
+    return r.right > 0 && r.bottom > 0 && r.left < vw && r.top < vh;
+  };
+  const before = textOf();
+  if (before === null) return JSON.stringify({error: 'target-missing'});
+
+  const s = {token: token, t0: null, changed_at: null, painted_at: null,
+             before_len: before.length, path_before: location.pathname + location.search,
+             path_at_finish: null, hit: null, done: false, gave_up: false};
+  window[key] = s;
+
+  const satisfied = () => {
+    const now = textOf();
+    if (now === null || now === before) return false;
+    if (!anyChange && untilText && now.indexOf(untilText) === -1) return false;
+    return onScreen();
+  };
+  const onDown = (ev) => {
+    // 点击可能落在 sticky header / overlay / 空处，而 document 上的监听器照样记下它。
+    const path = typeof ev.composedPath === 'function' ? ev.composedPath() : [];
+    const want = document.querySelector(clickSel);
+    s.hit = (want !== null && path.indexOf(want) !== -1);
+    s.t0 = performance.now();
+    const finish = () => {
+      s.changed_at = performance.now();
+      s.path_at_finish = location.pathname + location.search;
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        s.painted_at = performance.now();
+        s.done = true;
+      }));
+    };
+    const poll = () => {
+      if (s.changed_at !== null) return;
+      if (satisfied()) { finish(); return; }
+      requestAnimationFrame(poll);
+    };
+    requestAnimationFrame(poll);
+  };
+  document.addEventListener('pointerdown', onDown, {capture: true, once: true});
+  return JSON.stringify({installed: true, token: token});
+})(KEY, TARGET_SEL, CLICK_SEL, UNTIL_TEXT, ANY_CHANGE, TOKEN)
+"""
+
+
+def run(cmd: list[str], timeout: int = 120) -> subprocess.CompletedProcess:
+    return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+
+
+def unquote_eval(raw: str) -> object:
+    """agent-browser 把 eval 结果作为带引号的 JSON 字符串回显。"""
+    text = raw.strip().splitlines()[-1].strip() if raw.strip() else ""
+    if not text:
+        raise InstrumentError("eval 无输出")
+    try:
+        once = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise InstrumentError(f"eval 输出不可解析: {text[:200]}") from exc
+    return json.loads(once) if isinstance(once, str) else once
+
+
+def as_dict(value: object, what: str) -> dict:
+    """`null` / 布尔 / 数组都能无错通过 json.loads，必须显式拒绝。"""
+    if not isinstance(value, dict):
+        raise InstrumentError(f"{what} 读数形状不对（拿到 {type(value).__name__}）")
+    return value
+
+
+def finite(value: object, what: str) -> float:
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        raise InstrumentError(f"{what} 不是数（拿到 {value!r}）")
+    number = float(value)
+    if number != number or number in (float("inf"), float("-inf")):
+        raise InstrumentError(f"{what} 不是有限数（{value!r}）")
+    return number
+
+
+class Probe:
+    def __init__(self, session: str, url: str, args: argparse.Namespace) -> None:
+        self.session = session
+        self.url = url
+        self.args = args
+        # 页面代码可能恰好用了 `window.__il`；随机私钥让碰撞不再可能。
+        self.key = "__il_" + uuid.uuid4().hex[:12]
+
+    def ab(self, *argv: str, timeout: int = 120) -> subprocess.CompletedProcess:
+        return run(["agent-browser", "--session", self.session, *argv], timeout=timeout)
+
+    def evaluate(self, script: str) -> object:
+        proc = self.ab("eval", script)
+        if proc.returncode != 0:
+            raise InstrumentError(f"eval 失败: {proc.stderr.strip()[:200]}")
+        return unquote_eval(proc.stdout)
+
+    def open_url(self) -> None:
+        if self.ab("open", self.url).returncode != 0:
+            raise InstrumentError(f"打不开 {self.url}")
+
+    def set_viewport(self, w: int, h: int) -> None:
+        if self.ab("set", "viewport", str(w), str(h)).returncode != 0:
+            raise InstrumentError(f"set viewport {w}x{h} 失败")
+
+    def confirm_viewport(self, w: int, h: int) -> None:
+        """读回实测值。设失败时它会静默沿用默认 viewport，而报告照写请求值。"""
+        got = as_dict(
+            self.evaluate(
+                "JSON.stringify({w: document.documentElement.clientWidth,"
+                " h: document.documentElement.clientHeight})"
+            ),
+            "viewport",
+        )
+        # 滚动条会吃掉几像素，给一点余量；数量级不对才是"没设上"。
+        if abs(finite(got.get("w"), "viewport.w") - w) > 40:
+            raise InstrumentError(
+                f"viewport 没设成功：请求 {w}x{h}，实测 {got.get('w')}x{got.get('h')}"
+            )
+
+    def measure(self, click_sel: str) -> dict:
+        args = self.args
+        token = uuid.uuid4().hex[:12]
+        script = (
+            INSTALL.replace("KEY", json.dumps(self.key))
+            .replace("TARGET_SEL", json.dumps(args.target))
+            .replace("CLICK_SEL", json.dumps(click_sel))
+            .replace("UNTIL_TEXT", json.dumps(args.until_text or ""))
+            .replace("ANY_CHANGE", "true" if args.any_change else "false")
+            .replace("TOKEN", json.dumps(token))
+        )
+        installed = as_dict(self.evaluate(script), "install")
+        if installed.get("error") == "target-missing":
+            raise InstrumentError(f"--target '{args.target}' 在页面上不存在")
+
+        rect = as_dict(
+            self.evaluate(
+                "(() => { const e = document.querySelector(%s);"
+                " if (!e) return JSON.stringify({missing: true});"
+                " const r = e.getBoundingClientRect();"
+                " return JSON.stringify({w: r.width, h: r.height}); })()" % json.dumps(click_sel)
+            ),
+            "click-target",
+        )
+        if rect.get("missing"):
+            raise InstrumentError(f"点击目标 '{click_sel}' 不存在")
+        if not (finite(rect.get("w"), "click.w") > 0 and finite(rect.get("h"), "click.h") > 0):
+            raise InstrumentError(f"点击目标 '{click_sel}' 尺寸为 0，点它等于点空处")
+
+        if self.ab("scrollintoview", click_sel).returncode != 0:
+            raise InstrumentError(f"scrollintoview '{click_sel}' 失败")
+        if self.ab("click", click_sel).returncode != 0:
+            raise InstrumentError(f"click '{click_sel}' 失败")
+
+        for _ in range(max(1, int(args.timeout / 0.25))):
+            raw = self.evaluate(
+                "JSON.stringify(window[%s] === undefined ? {absent: true} : window[%s])"
+                % (json.dumps(self.key), json.dumps(self.key))
+            )
+            state = as_dict(raw, "state")
+            if state.get("absent"):
+                # 仪器连同旧 document 一起没了 —— 这是整页导航，不是"这一页很慢"。
+                raise Unresolved("unsupported_full_navigation")
+            if state.get("token") != token:
+                raise InstrumentError("读到的仪器状态不是本次装的（token 不符）")
+            if state.get("hit") is False:
+                raise InstrumentError(
+                    f"点击没有落在 '{click_sel}' 上（composedPath 里没有它）——"
+                    "本机 agent-browser 的坐标点击可能被 sticky header / overlay 截走"
+                )
+            if state.get("done") is True:
+                t0 = finite(state.get("t0"), "t0")
+                return {
+                    "ms": round(finite(state.get("painted_at"), "painted_at") - t0, 1),
+                    "to_change_ms": round(finite(state.get("changed_at"), "changed_at") - t0, 1),
+                    "changed": True,
+                    "path_before": state.get("path_before"),
+                    "path_at_finish": state.get("path_at_finish"),
+                }
+            self.ab("wait", "250")
+        return {"ms": None, "changed": False, "waited_s": args.timeout}
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(
+        prog="interaction-latency",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=__doc__,
+    )
+    ap.add_argument("url")
+    ap.add_argument("--click", required=True, help="要点的那个控件的 CSS 选择器")
+    ap.add_argument("--target", default="main", help="他要的那个东西所在的节点，默认 main")
+    ap.add_argument(
+        "--until-text",
+        help="看到这段文字才算到。不给就必须给 --any-change——因为 loading 占位符"
+        "本身就是一次'内容变了'，且能稳定很久",
+    )
+    ap.add_argument(
+        "--any-change",
+        action="store_true",
+        help="任何内容变化都算到（会在报告里留痕：中间态可能被计入）",
+    )
+    ap.add_argument("--noop-click", help="阴性对照要点的控件：一个不该改变任何东西的操作")
+    ap.add_argument(
+        "--no-negative-control",
+        action="store_true",
+        help="显式声明不跑阴性对照。退出码固定为 3（未核实），不会伪装成 0",
+    )
+    ap.add_argument("--viewport", default="1440x900")
+    ap.add_argument("--timeout", type=float, default=8.0, help="等待上限（秒），默认 8")
+    ap.add_argument("--max-ms", type=float, help="cold 或 hot 任一超过它即退出 1")
+    ap.add_argument("--json", action="store_true")
+    args = ap.parse_args()
+
+    if not args.until_text and not args.any_change:
+        ap.error("要么给 --until-text，要么显式 --any-change（理由见 --help 尾部第 2 条）")
+    if not args.noop_click and not args.no_negative_control:
+        ap.error("要么给 --noop-click，要么显式 --no-negative-control（后者固定退出 3）")
+
+    if shutil.which("agent-browser") is None:
+        print("interaction-latency: 需要 agent-browser，未找到", file=sys.stderr)
+        return EXIT_INSTRUMENT
+    try:
+        w, h = (int(x) for x in args.viewport.lower().split("x"))
+        if w <= 0 or h <= 0:
+            raise ValueError
+    except ValueError:
+        print(f"interaction-latency: --viewport 形态错: {args.viewport}", file=sys.stderr)
+        return EXIT_INSTRUMENT
+
+    session = f"il-{uuid.uuid4().hex[:8]}"
+    probe = Probe(session, args.url, args)
+    report: dict = {
+        "url": args.url, "click": args.click, "target": args.target,
+        "viewport": args.viewport,
+        "until": args.until_text if args.until_text else "(--any-change：中间态可能被计入)",
+    }
+    unresolved_reason: str | None = None
+
+    try:
+        probe.set_viewport(w, h)
+        # cold 必须先测：阴性对照自己会 open 一次同一 URL，放它前面等于把 cold 预热掉。
+        for label in ("cold", "negative", "hot"):
+            if label == "negative" and args.no_negative_control:
+                report["negative_control"] = "未跑（--no-negative-control）"
+                continue
+            probe.open_url()
+            if label == "cold":
+                probe.confirm_viewport(w, h)
+            try:
+                if label == "negative":
+                    neg = probe.measure(args.noop_click)
+                    report["negative_control"] = "no_change" if not neg["changed"] else "CHANGED"
+                    if neg["changed"]:
+                        report["negative_control_ms"] = neg["ms"]
+                else:
+                    report[label] = probe.measure(args.click)
+            except Unresolved as exc:
+                unresolved_reason = str(exc)
+                report[label] = {"changed": False, "reason": str(exc)}
+    except InstrumentError as exc:
+        print(f"interaction-latency: {exc}", file=sys.stderr)
+        probe.ab("close")
+        return EXIT_INSTRUMENT
+    except subprocess.TimeoutExpired:
+        print("interaction-latency: agent-browser 超时", file=sys.stderr)
+        probe.ab("close")
+        return EXIT_INSTRUMENT
+    finally:
+        probe.ab("close")
+
+    over = [k for k in ("cold", "hot")
+            if args.max_ms is not None and report.get(k, {}).get("ms") is not None
+            and report[k]["ms"] > args.max_ms]
+    if args.no_negative_control:
+        code = EXIT_UNRESOLVED
+    elif report.get("negative_control") == "CHANGED" or unresolved_reason:
+        code = EXIT_UNRESOLVED
+    elif not report.get("cold", {}).get("changed") or not report.get("hot", {}).get("changed"):
+        code = EXIT_UNRESOLVED
+    elif over:
+        code = EXIT_SLOW
+    else:
+        code = EXIT_OK
+    report["over_max_ms"] = over
+
+    if args.json:
+        report["exit"] = code
+        print(json.dumps(report, ensure_ascii=False, indent=2))
+        return code
+
+    print(f"interaction-latency {args.url}")
+    print(f"  点击 {args.click} → 目标 {args.target}    视口 {args.viewport}（已读回核实）")
+    print(f"  到达判据：{report['until']}")
+    for label, zh in (("cold", "冷"), ("hot", "热")):
+        r = report.get(label, {})
+        if r.get("changed"):
+            note = ""
+            if r.get("path_before") != r.get("path_at_finish"):
+                note = f"（路径 {r['path_before']} → {r['path_at_finish']}，仅诊断）"
+            print(f"  {zh}：{r['ms']:.1f} ms（到内容满足条件 {r['to_change_ms']:.1f} ms）{note}")
+        elif r.get("reason") == "unsupported_full_navigation":
+            print(f"  {zh}：**这是一次整页导航** —— 仪器随旧 document 销毁，本工具不覆盖它")
+        else:
+            print(f"  {zh}：**{r.get('waited_s')} 秒内目标未满足到达判据** —— 不是 0，是没测到")
+    print(f"  阴性对照：{report['negative_control']}")
+    if report["negative_control"] == "CHANGED":
+        print("    ↑ 一个不该改变任何东西的操作被判成了'到了'——判据太松，本次读数作废")
+    elif str(report["negative_control"]).startswith("未跑"):
+        print("    ↑ 没跑阴性对照，退出码固定为 3（未核实），不要读成通过")
+    if over:
+        print(f"  超过 --max-ms={args.max_ms}：{', '.join(over)}")
+    print("  不覆盖：这个数准不准（要外部阳性注入：加已知延时后重量，看它是否跟着动）· "
+          "遮挡命中测试 · 整页导航 · 首次进入的等待（那是一次导航，归 LCP）")
+    return code
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -21,11 +21,11 @@ state, logs, and generated SQLite files stay inside `tt-web/` unless noted.
 | Stop | `./tt-web/stop.sh` or `tt-web stop` | `./tt-web/uninstall.sh rollup-daemon` |
 | Uninstall | `./tt-web/uninstall.sh web` | `./tt-web/uninstall.sh rollup-daemon` |
 
-No-argument `./tt-web/install.sh` installs the web CLI, vendored Chart.js, and
-`ip-check` symlinks only. It deliberately does not install `com.ttweb.rollup`.
-
 Note that `start.sh` and `stop.sh` always act on the web server and ignore any
 service-name argument; only `status.sh` and `uninstall.sh` take `[web|rollup-daemon]`.
+
+No-argument `./tt-web/install.sh` installs the web CLI, vendored Chart.js, and
+`ip-check` symlinks only. It deliberately does not install `com.ttweb.rollup`.
 
 No-argument `./tt-web/status.sh` is read-only and prints both web and rollup
 daemon status. No-argument `./tt-web/uninstall.sh` removes both service layers
@@ -60,6 +60,10 @@ from totals but still counts in the coverage denominator, so the page shows
 Remote calls are non-interactive (`ssh -o BatchMode=yes -o ConnectTimeout=10`)
 with a hard timeout on the whole export, so an unreachable host cannot hang the
 page. Temporary export directories on the remote are reaped by the next sync.
+
+## Account Memory
+
+`state/account_memory.json` stores the last admitted observation of each account that tt-web has seen while signed in. The web server manages this file; it persists across server restarts and the uninstall paths above, which intentionally keep `state/`. It is durable source state, not a regenerable cache: manually deleting it permanently loses remembered accounts that are no longer signed in on any machine, because no current snapshot can reproduce those observations.
 
 ## Rollup Details
 

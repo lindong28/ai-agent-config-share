@@ -54,6 +54,18 @@ const cases = [
   // Still blocked: the killer really is the command word, however it is reached.
   ['sudo pkill -f foo', 2, 'behind sudo'],
   ['command pkill -f foo', 2, 'behind the command builtin (no -v)'],
+  // Shell keywords sit in command position after segment splitting, so these
+  // read as `if`/`while`/`until` invocations and were allowed until 2026-08-19.
+  // They kill exactly as hard as the bare form.
+  ['if pkill -f foo; then echo killed; fi', 2, 'inside an if condition'],
+  ['while pkill -f foo; do sleep 1; done', 2, 'inside a while condition'],
+  ['until ! pkill -f foo; do sleep 1; done', 2, 'behind until and a negation'],
+  ['if sudo pkill -f foo; then echo x; fi', 2, 'keyword plus wrapper'],
+  ['{ pkill -f foo; }', 2, 'brace group'],
+  ['( pkill -f foo )', 2, 'subshell'],
+  // The keyword skip must not turn arguments into command words.
+  ['echo if pkill', 0, 'keyword as an argument to echo names no victim'],
+  ['grep -r if ./src', 0, 'keyword as a search term'],
   ['FOO=1 pkill -f foo', 2, 'behind an env assignment'],
   ['/usr/bin/pkill -f foo', 2, 'by absolute path'],
 ];

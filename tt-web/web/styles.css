@@ -96,7 +96,11 @@
   --accent: #0b66c3;
   --accent-ink: #0a559f;
   --accent-bg: #dcecfb;
-  --ok: #1a7f4b;
+  /* Darkened from #1a7f4b, which rendered 4.33:1 on the .ok pill's own tint —
+     below AA at the 11px this system sets pills in, where the large-text 3:1
+     allowance does not apply. Its two uses are both on that tint or on white,
+     so the whole role moves rather than one of them drifting off. */
+  --ok: #177038;
   --warn: #8a6300;
   --danger: #c0362c;
 }
@@ -297,9 +301,11 @@ button:disabled {
    in the fourth column, and "spend so far" and "quota left" are read for
    different reasons. Widths stay even because each group gets track count to
    match its card count. */
+/* Stacked, not two columns. The quota list is a table now and needs the page
+   width; pairing it with two small cost cards left the cost column 68% empty
+   for the height of the list, and squeezed the table into 730px. */
 .kpi-sections {
   display: grid;
-  grid-template-columns: 2fr 3fr;
   gap: var(--sp-6);
   margin-bottom: var(--sp-6);
 }
@@ -316,14 +322,254 @@ button:disabled {
   text-transform: uppercase;
 }
 
+/* Three figures share the row evenly. Two bounded cards left ~60% of a
+   page-wide row empty, which read as a layout fault rather than as restraint;
+   two stretched cards moved that emptiness inside the cards. A third figure —
+   the range the toolbar already controls — fills the row with a fact instead.
+   At the resulting card width the week card's window text wraps to two lines. */
 .kpi-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: var(--sp-5);
 }
 
-.kpi-grid.quota {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+/* Quota is one row per account, not a fixed set of cards: how many accounts
+   are in play is a fact about the fleet, not something the layout can assume. */
+.quota-scope {
+  margin: 0 0 var(--sp-4);
+  color: var(--ink-muted);
+  font: 400 12px/16px var(--font-sans);
+}
+
+/* The quota list is tabular data: one account per row, one window per column.
+   A card per account left 65% of each card empty at page width, and made
+   cross-row alignment something CSS had to simulate with fixed slots — in a
+   table it is the definition of a column. */
+.quota-table {
+  width: 100%;
+  border-collapse: collapse;
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  background: var(--surface);
+  box-shadow: var(--e-raised);
+  overflow: hidden;
+}
+
+.quota-table th {
+  padding: var(--pad-cell);
+  border-bottom: 1px solid var(--line);
+  background: var(--surface-sunken);
+  color: var(--ink-muted);
+  font: 600 11px/16px var(--font-sans);
+  letter-spacing: 0.04em;
+  text-align: left;
+  text-transform: uppercase;
+}
+
+.quota-table td {
+  padding: var(--pad-cell);
+  border-top: 1px solid var(--line-soft);
+  font: 400 13px/18px var(--font-sans);
+  vertical-align: top;
+}
+
+.quota-table tbody:first-of-type tr:first-child td {
+  border-top: 0;
+}
+
+.quota-table th.numeric,
+.quota-table td.numeric {
+  text-align: left;
+  font-variant-numeric: tabular-nums;
+}
+
+
+
+.quota-provider-cell,
+.quota-account-cell {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-3);
+}
+
+.quota-account-label {
+  min-width: 0;
+  font: 500 13px/18px var(--font-sans);
+  overflow-wrap: anywhere;
+}
+
+/* A row with no account behind it reads as set aside: tinted, with its figures
+   muted. Staleness deliberately does NOT get this treatment — it qualifies when
+   the reading was taken, not how much quota is gone, and the pill in the Updated
+   cell already says so with the right scope. Sharing one cue between the two
+   made it ambiguous: you knew something was off, not which. */
+.quota-row.unattributed td {
+  background: var(--surface-sunken);
+}
+
+.quota-row.unattributed .quota-window-value,
+.quota-row.unattributed .quota-account-label {
+  color: var(--ink-muted);
+}
+
+/* Remembered rows are valid historical references, not current unattributed
+   machines. Their independent selector keeps those two remedies distinct even
+   though both are visually quieter than live account rows. */
+.quota-row.remembered td {
+  background: var(--surface-sunken);
+}
+
+.quota-row.remembered .quota-account-label,
+.quota-row.remembered .quota-window-value {
+  color: var(--ink-muted);
+}
+
+.quota-history-marker {
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--ink-muted);
+}
+
+/* The credential-side plan, shown only when it contradicts the one above it.
+   Muted and secondary: it is context for the plan, not a second plan. */
+.quota-plan-mismatch {
+  display: block;
+  margin-top: var(--sp-2);
+  color: var(--ink-muted);
+  font: 400 12px/16px var(--font-sans);
+  border-bottom: 1px dashed var(--line-soft);
+}
+
+.quota-history-note,
+.quota-window-observed {
+  display: block;
+  margin-top: var(--sp-2);
+  color: var(--ink-muted);
+  font: 400 12px/16px var(--font-sans);
+}
+
+/* After .unattributed, not before: the two had equal specificity, so the tint
+   won and the one interactive row in the table — the collapse toggle — was the
+   one row with no hover feedback. */
+.quota-table tbody tr.quota-row:hover td {
+  background: var(--bg-hover);
+}
+
+.quota-window-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-3);
+}
+
+.quota-window-value {
+  font: 600 16px/22px var(--font-sans);
+  letter-spacing: -0.01em;
+  font-variant-numeric: tabular-nums;
+}
+
+/* --ink-muted, not --ink-subtle: this cell's entire meaning is two characters,
+   and subtle measured 3.61:1 on the row — under AA for 13px text. */
+.quota-window-cell.not-applicable {
+  color: var(--ink-muted);
+}
+
+/* Usage, drawn. Two numbers are only comparable after reading both; two bars
+   are comparable at a glance, which is the whole reason the reader is here. */
+.quota-meter {
+  flex: 0 0 auto;
+  overflow: hidden;
+  width: 48px;
+  height: 4px;
+  border-radius: var(--r-pill);
+  background: var(--line);
+}
+
+/* Scaled, not width-animated: width is a layout property, so transitioning it
+   makes the browser re-lay-out every frame. `transform` composites instead.
+   --ink-muted, not --ink-subtle: this is a 4px graphic object carrying a
+   comparison, and subtle-on-line measured 2.56:1, under the 3:1 that graphics
+   need. This role measures 4.47:1 on the same track. */
+.quota-meter-fill {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--ink-muted);
+  transform: scaleX(var(--quota-fill, 0));
+  transform-origin: left center;
+  transition: transform var(--dur) var(--ease);
+}
+
+/* High usage is the one thing on this page that should interrupt a scan. The
+   colour is never alone: the cell also carries a "running low" / "almost out"
+   pill, so the state survives for a reader who cannot see the difference. */
+.quota-window-cell.low .quota-window-value {
+  color: var(--warn);
+}
+
+.quota-window-cell.low .quota-meter-fill {
+  background: var(--warn);
+}
+
+.quota-window-cell.critical .quota-window-value {
+  color: var(--danger);
+}
+
+.quota-window-cell.critical .quota-meter-fill {
+  background: var(--danger);
+}
+
+.quota-window-reset,
+.quota-updated-cell {
+  color: var(--ink-muted);
+  font: 400 12px/16px var(--font-sans);
+  overflow-wrap: anywhere;
+}
+
+.quota-window-reset {
+  margin-top: var(--sp-2);
+}
+
+.quota-machine-self {
+  color: var(--ink);
+  font-weight: 500;
+}
+
+/* Machines behind on tt-web collapse into one row: their count tracks the fleet,
+   not the account list, and every one of them carries the same instruction. */
+.quota-toggle {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.quota-toggle::before {
+  color: var(--ink-subtle);
+  content: "\25B8";
+  font-size: 11px;
+  transition: transform var(--dur) var(--ease);
+}
+
+.quota-unknown.open .quota-toggle::before {
+  transform: rotate(90deg);
+}
+
+.quota-unknown .quota-row:not(.quota-summary) {
+  display: none;
+}
+
+.quota-unknown.open .quota-row:not(.quota-summary) {
+  display: table-row;
 }
 
 .sync-panel {
@@ -1065,6 +1311,19 @@ td.numeric {
   }
 }
 
+/* Seven columns exceed the ACCOUNT panel before the rest of the page needs its
+   single-column layout. Contain that width here so the document never scrolls
+   sideways, while the named/focusable table region remains keyboard reachable. */
+@media (max-width: 1100px) {
+  .quota-table-wrap {
+    overflow-x: auto;
+  }
+
+  .quota-table {
+    min-width: 1040px;
+  }
+}
+
 @media (max-width: 900px) {
   .topbar {
     grid-template-columns: 1fr;
@@ -1077,7 +1336,6 @@ td.numeric {
   }
 
   .kpi-grid,
-  .kpi-grid.quota,
   .panel-grid,
   .controls,
   .sync-machines {

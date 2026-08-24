@@ -173,7 +173,10 @@ check_symlink      "codex-hook-dispatch"  "$SCRIPT_DIR/codex/bin/codex-hook-disp
 farm_missing=0; farm_unmarked=0; farm_expected=0
 while IFS= read -r -d '' cmd_src; do
     cmd_rel="${cmd_src#"$SRC_ROOT"/commands/}"
-    case "$cmd_rel" in routine/allow.md|tdd.md) continue ;; esac
+    # Keep in sync with COMMAND_DENYLIST in codex/bin/gen-agents-skills.py:
+    # anything the generator refuses to wrap must not be expected here either,
+    # or a correctly generated farm reads as permanently missing entries.
+    case "$cmd_rel" in routine/allow.md|tdd.md|custom/supervise-session.md) continue ;; esac
     wrapper="$HOME/.agents/skills/$(printf '%s' "${cmd_rel%.md}" | tr '/' '-')/SKILL.md"
     farm_expected=$((farm_expected+1))
     if [ ! -f "$wrapper" ]; then
@@ -238,14 +241,19 @@ done < <(find "$SRC_ROOT/hooks/lib" -maxdepth 1 -type f \( -name '*.js' -o -name
 check_symlink      "poll-progress.sh"     "$SRC_ROOT/bin/poll-progress.sh"  "$HOME/.claude/bin/poll-progress.sh"
 check_symlink      "active-plan"          "$SRC_ROOT/bin/active-plan"       "$HOME/.claude/bin/active-plan"
 # Probe CLIs installed by install.sh.
-for probe in page-acceptance page-repetition first-screen-density; do
+for probe in page-acceptance page-repetition first-screen-density visual-budget interaction-latency; do
     check_symlink  "bin/$probe"  "$SRC_ROOT/bin/$probe"  "$HOME/.claude/bin/$probe"
 done
+# Test fixtures ship with the degradation test; a missing fixture makes that
+# test fail post-install for a reason verify.sh would otherwise never surface.
+check_symlink "bg-shell-reclaim-check.fixtures/preload.js" \
+    "$SRC_ROOT/hooks/bg-shell-reclaim-check.fixtures/preload.js" \
+    "$HOME/.claude/hooks/bg-shell-reclaim-check.fixtures/preload.js"
 
 # Hook scripts living under ~/.claude/scripts/hooks (wired in settings.json but
 # outside the hooks/ symlink loop above — without these two lines a wired hook
 # whose script was never linked would pass silently).
-for script_rel in hooks/pre-compact.js hooks/post-compact-restore.js find-claude-session.sh mcp-dedup.py; do
+for script_rel in hooks/pre-compact.js hooks/post-compact-restore.js find-claude-session.sh mcp-dedup.py peer-session-watch.js; do
     check_symlink  "scripts/$script_rel"  "$SRC_ROOT/scripts/$script_rel"  "$HOME/.claude/scripts/$script_rel"
 done
 
@@ -372,6 +380,14 @@ else
     # The authority for whether a hook runs is lib/hook-flags.js plus the harness,
     # not this script. So: mismatch is reported as drift, both strings printed,
     # and the reader decides.
+    # Required rows that are wired nowhere are held back rather than reported inline:
+    # the same fact means two different things. Zero of them wired = the settings.json
+    # merge step simply has not been done yet (the expected state right after
+    # install.sh, and the reason this was a blanket WARN). Some wired and one missing
+    # = the merge happened and a required gate fell out of it — that is drift, it is
+    # silent everywhere else, and exit code 0 would hide it. Tier is decided after
+    # the loop, when both counts are known.
+    missing_required=""; wired_required=0
     while IFS='^' read -r hook_event hook_matcher hook_id hook_script hook_required; do
         [ -n "$hook_event" ] || continue
         actual_cmd="$(jq -r --arg ev "$hook_event" --arg m "$hook_matcher" --arg id "$hook_id" \
@@ -391,18 +407,30 @@ else
         elif [ "$hook_required" = "optional" ]; then
             emit PASS "settings.json/hook" "$hook_id not wired (opt-in LLM judge gate — expected unless you chose it)"
         else
-            emit WARN "settings.json/hook" "$hook_id NOT wired — its script is linked but nothing references it (see README 安装 prompt step 3)"
+            missing_required="$missing_required $hook_id"
+        fi
+        # A required row counts as "wired" whether or not its command matches: what
+        # this counter distinguishes is "merge step not done yet" from "merge step
+        # done and one row drifted out", and a mismatching command proves the merge
+        # step happened.
+        if [ "$hook_required" != "optional" ] && [ -n "$actual_cmd" ]; then
+            wired_required=$((wired_required+1))
         fi
     done <<'HOOK_WIRING'
 PreToolUse^AskUserQuestion^pre:ask-user-question:recommend-gate^node "$HOME/.claude/hooks/ask-recommend-gate.js"^required
 PreToolUse^Bash^pre:bash:block-no-verify^node "$HOME/.claude/hooks/run-with-flags.js" block-no-verify block-no-verify.js^required
 PreToolUse^Bash^pre:bash:codeagent-stdin-guard^node "$HOME/.claude/hooks/run-with-flags.js" codeagent-stdin-guard codeagent-stdin-guard.js^required
 Stop^*^stop:desktop-notify-local^node "$HOME/.claude/hooks/desktop-notify.js"^required
-PreToolUse^Edit|Write|MultiEdit|NotebookEdit^pre:edit:writer-registry-gate^node "$HOME/.claude/hooks/run-with-flags.js" writer-registry-gate writer-registry-gate.js ;; node "$HOME/.claude/hooks/run-with-flags.js" memory-carrier-gate memory-carrier-gate.js^required
+PreToolUse^Edit|Write|MultiEdit|NotebookEdit|Bash^pre:edit:writer-registry-gate^node "$HOME/.claude/hooks/run-with-flags.js" writer-registry-gate writer-registry-gate.js^required
+PreToolUse^Edit|Write|MultiEdit|NotebookEdit^pre:edit:memory-carrier-gate^node "$HOME/.claude/hooks/run-with-flags.js" memory-carrier-gate memory-carrier-gate.js^required
 PreToolUse^Bash^pre:bash:block-broad-kill^node "$HOME/.claude/hooks/run-with-flags.js" block-broad-kill block-broad-kill.js^required
 PreToolUse^Bash^pre:bash:push-approval-gate^node "$HOME/.claude/hooks/run-with-flags.js" push-approval-gate push-approval-gate.js^required
 PreToolUse^Bash^pre:bash:commit-message-language^node "$HOME/.claude/hooks/run-with-flags.js" commit-message-language commit-message-language.js^required
 PreToolUse^Bash^pre:bash:commit-discipline-gate^node "$HOME/.claude/hooks/run-with-flags.js" commit-discipline-gate commit-discipline-gate.js^required
+PreToolUse^Bash^pre:bash:liveness-predicate-gate^node "$HOME/.claude/hooks/run-with-flags.js" liveness-predicate-gate liveness-predicate-gate.js^required
+PreToolUse^Monitor^pre:monitor:liveness-predicate-gate^node "$HOME/.claude/hooks/run-with-flags.js" liveness-predicate-gate liveness-predicate-gate.js^required
+PreToolUse^Bash^pre:bash:guard-mutation-lint^node "$HOME/.claude/hooks/run-with-flags.js" guard-mutation-lint guard-mutation-lint.js^required
+PreToolUse^Bash^pre:bash:in-turn-cadence-advisor^node "$HOME/.claude/hooks/run-with-flags.js" in-turn-cadence-advisor in-turn-cadence-advisor.js^required
 UserPromptSubmit^*^prompt:teammate-reclaim-check^node "$HOME/.claude/hooks/teammate-reclaim-check.js"^required
 SessionStart^startup|resume^session-start:teammate-reclaim-check^node "$HOME/.claude/hooks/teammate-reclaim-check.js"^required
 SessionStart^compact^session-start:post-compact-restore^node "$HOME/.claude/scripts/hooks/post-compact-restore.js"^required
@@ -414,6 +442,16 @@ Stop^*^stop:prose-choice-gate^node "$HOME/.claude/hooks/prose-choice-gate.js"^op
 Stop^*^stop:capability-claim-gate^node "$HOME/.claude/hooks/capability-claim-gate.js"^optional
 Stop^*^stop:reverse-assertion-gate^node "$HOME/.claude/hooks/reverse-assertion-gate.js"^optional
 HOOK_WIRING
+
+    if [ -n "$missing_required" ]; then
+        if [ "$wired_required" -eq 0 ]; then
+            emit WARN "settings.json/hook" "no required hook is wired yet —$missing_required. That is the expected state right after ./install.sh: the hooks段 of claude/settings.json is a manual merge (see README 安装 prompt step 3). Nothing fires until you do it"
+        else
+            for miss in $missing_required; do
+                emit FAIL "settings.json/hook" "$miss NOT wired, while $wired_required other required hook(s) are — the merge step ran and this one fell out of it. Its script is linked, so nothing else in this repo can notice: copy its stanza from claude/settings.json verbatim"
+            done
+        fi
+    fi
 
     # desktop-notify-local only takes over if the ECC plugin's own stop hook is off;
     # otherwise both fire and the user gets duplicate notifications.
@@ -432,9 +470,10 @@ HOOK_WIRING
     fi
 fi
 
-# Hook profile. Three of the required hooks (writer-registry-gate, block-broad-kill,
-# commit-message-language) run through run-with-flags.js, which consults
-# HOOK_PROFILE / ECC_HOOK_PROFILE and only runs the hook under the `standard` or
+# Hook profile. The required hooks wired through run-with-flags.js (writer-registry-gate,
+# block-broad-kill, commit-message-language, liveness-predicate-gate, guard-mutation-lint,
+# in-turn-cadence-advisor, …) consult
+# HOOK_PROFILE / ECC_HOOK_PROFILE and only run the hook under the `standard` or
 # `strict` profile. Under `minimal` the dispatcher exits 0 without calling the hook
 # at all — the wiring is present and correct, the script is linked, and the gate
 # still never fires. Every check above passes in that state, which is precisely the
@@ -491,7 +530,8 @@ disabled_ids="$(read_env_var DISABLED_HOOKS)"
 # was listed until 2026-08-18) produces a deterministic false FAIL.
 for req in writer-registry-gate memory-carrier-gate block-broad-kill block-no-verify \
            push-approval-gate commit-message-language commit-discipline-gate \
-           codeagent-stdin-guard; do
+           codeagent-stdin-guard liveness-predicate-gate guard-mutation-lint \
+           in-turn-cadence-advisor; do
     if printf '%s' "$disabled_ids" | tr ',' '\n' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' \
         | grep -qxF "$req"; then
         emit FAIL "hook profile" "the effective DISABLED_HOOKS lists '$req' — that required gate is wired but hook-flags.js will not run it"

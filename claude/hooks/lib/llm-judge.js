@@ -213,12 +213,24 @@ function resolveClaudeBin() {
   return "claude";
 }
 
+/**
+ * tier-3 实际使用的模型。默认 `CLI_MODEL`（haiku，最便宜层）；`JUDGE_CLI_MODEL` 可覆盖。
+ *
+ * 覆盖位存在的理由是**校准实验**，不是给生产用的调节钮：判据按 GLM-4.6 标定，换模型即换一套校准，
+ * 所以生产路径必须停在默认值上，否则 eval 的通过率与线上行为对不上（这正是 `route` 要记进裁决日志
+ * 的同一个理由）。它与 `JUDGE_FORCE_BACKEND` 同类、同用途——先有一个已复现的误报，再拿它做对照，
+ * 看换更强的模型能不能修掉；实验读数落 harness 账本，不改默认值。
+ */
+function cliModel() {
+  return process.env.JUDGE_CLI_MODEL || CLI_MODEL;
+}
+
 // tier 3：订阅 CLI 判官，防递归。返回文本或 null。
 function claudeCli(prompt) {
   if (process.env[NEST_GUARD]) return null; // 已在嵌套判官内——绝不再 spawn
   const r = spawnSync(
     resolveClaudeBin(),
-    ["-p", prompt, "--model", CLI_MODEL, "--output-format", "text", "--strict-mcp-config"],
+    ["-p", prompt, "--model", cliModel(), "--output-format", "text", "--strict-mcp-config"],
     {
       encoding: "utf8",
       timeout: CLI_TIMEOUT_MS,
@@ -311,6 +323,14 @@ function judgeWithRoute(prompt, temperature, opts) {
   // callsites 测试挡不住它——那道防线本身完好，洞在它旁边。
   // 加这个约束不损失任何校准能力：被校准的六道闸本就都传 fallback。
   if (wantFallback && process.env.JUDGE_FORCE_BACKEND === "ark") return toArk(null);
+
+  // 同一条校准旁路的第二个取值：`cli` 直接钉到 tier-3，用来拿"换个更强的模型能不能修掉这条误报"
+  // 的对照读数（配合 `JUDGE_CLI_MODEL` 选具体模型）。受同一个 `wantFallback` 约束，理由与上一段
+  // 逐字相同——permission-gate 不传 fallback，故它的判官不会被这个环境变量换掉。
+  if (wantFallback && process.env.JUDGE_FORCE_BACKEND === "cli") {
+    const text = claudeCli(prompt);
+    return { text, route: { backend: "cli", model: cliModel() } };
+  }
 
   const gk = glmKey();
   if (gk) {

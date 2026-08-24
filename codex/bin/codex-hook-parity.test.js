@@ -46,7 +46,7 @@ const settings = JSON.parse(fs.readFileSync(SETTINGS, "utf8"));
 assert.equal(fs.existsSync(MANIFEST), true, "Codex hook parity manifest must exist");
 const manifest = JSON.parse(fs.readFileSync(MANIFEST, "utf8"));
 const expected = sourceHandlers(settings);
-assert.equal(expected.length, 20, "fixture guard: active Claude handler count changed");
+assert.equal(expected.length, 24, "fixture guard: active Claude handler count changed");
 assert.deepEqual(
   new Set(manifest.handlers.map((entry) => key(entry.source))),
   new Set(expected.map(key)),

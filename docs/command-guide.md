@@ -15,6 +15,11 @@
 | `/custom:fix-harness-from-session [问题]` | 用户点名**单个**刚发生的 harness 问题时复盘根因并定位 source-level 修复（受理面比 review-skill 宽：CLAUDE.md、hook、settings、适配层都在 fix 范围内；原名 `fix-skill-from-session`） | 是，但**按落点分派**到对应的 review 命令，不一律走 `review-skill` |
 | `/custom:execute-plan <plan.md>` | Claude 作为 supervisor 启动 Codex 实施 plan.md：按 Stop Gate 收敛；随后按 plan 声明分流 UX 验收——声明了「UX 契约影响」就应用契约并按契约验证，只有 UX 入口就跑一遍探索式 `/custom:test-ux`，发现的 issue 回灌给 Codex 直到清零 | 是（Stop Gate + UX 验收双循环） |
 | `/custom:supervise [--backend codex\|gemini\|claude] [--autopilot] <task>` | Claude 作为 supervisor 用 codeagent-wrapper 跑**开放式任务（无 plan.md）**：spawn 前锁定 success criteria + backend，过程中代答简单决策 / 升级复杂决策（`--autopilot` 则全程不打扰），agent 早停则 resume 续命，结束把 agent 行为问题沉淀到 `docs/issues/general.md` | 是（按 success criteria + Stop Gate resume 收敛） |
+| `/custom:supervise-session <session UUID>` | 监督一个**你没启动、已经在跑**的 Claude Code session：独立 session 里用确定性 watcher（peer-session-watch.js）采样目标，结构化异常或终态候选时深审、经 session-inbox 投递纠正信息（投递半边 Phase 2 未接线：消息进收件箱、尚不注入对方 Stop，见 ADR-20260823-dddf）。Claude Code only（Codex 侧不生成 wrapper） | 是（采样 → 深审 → 投递循环） |
+| `/custom:review-session-progress [session UUID 前缀] [关注点] [--since-last] [--verify-deliverable]` | 从新 session 只读分析某个长任务 session 的进展：到哪了、顺不顺、有没有需要你立刻介入的偏差，要介入时附可直接粘贴的指令草稿；`--since-last` 只看上一份报告之后的增量，`--verify-deliverable` 额外以消费者身份实际调用其交付物 | 否（单次分析报告） |
+| `/custom:map-program-architecture <program>` | 把 program / plan 的工作项逐条落到模块，产出显示改造前后架构与能力差异的单文件 HTML 地图，据它判断计划是否合理、要不要介入（一个 program 跑一两次的重量级视图；每小时看进展用 review-session-progress） | 否（单次执行） |
+| `/custom:away [大概离开多久]` | 你要离开电脑一段时间时告知 session：只改提问时机与守望纪律（在飞产出被接住、不依赖答案的活推到底），需要你拍板的事照样等你回来。要自动采纳推荐项是上游另一套机制（autopilot，本仓未收录） | 模式（生效期间持续约束） |
+| `/custom:create-delivery-report` | 把已完成的交付讲给没参与的同事上手 | 否（单次执行） |
 | `/custom:resolve-issues [--source <path>] <目标>` | 围绕一个目标批量解决项目 issue：按目标 triage（核实存在性 + consumer scope，回写陈旧项），用户批准后按依赖顺序委派 agent 逐个解决并闭环回灌新 issue | 是（逐 issue 委派 + 回灌循环） |
 | `/custom:test-ux <产品/PRD>` | 从自由文本 / PRD 做一次性 ad-hoc 模拟测试：模拟用户测试**已部署**的产品（web / desktop / mobile），输出 issue 清单 | 否（codeagent-wrapper 启动 codex session 执行，可 resume 续跑） |
 | `/custom:create-ux-contract [产品上下文]` | 访谈用户写 ux-contract.md（L1 产品全貌 + L2 用户视角 verify + 验收侧重），作为 UX 验收基准 | 内部自动调 `/custom:review-ux-contract` 循环至收敛 |
@@ -26,6 +31,7 @@
 | `/custom:absorb-skill <外部 skill>` | 把外部 skill / command 中有用的内容合并进已有本地 skill / command | 内部按落点分派 `/custom:review-skill` 等收敛 |
 | `/custom:borrow-design <target> <reference>` | 对比两份 anatomy / design 文档，产出 consumer-aware、ROI 排序的 borrow checklist（不落地合并） | 否（单次执行，user-only） |
 | `/custom:anatomize-llm-workflow <系统>` | 把 LLM 调用型系统的 workflow 提取成质量诊断地图、逐节点审查 prompt | 否（单次执行） |
+| `/custom:reuse-for-aigc <要复用的既有物>` | 要靠复用别人已有的东西（开源项目 / 别人的 skill / 成文方法）产出 AIGC 内容、或正要为"让它跑起来"自建垫片时用：管选定之后到产出之间那一段，避免本可复用的轮子被自建流水线替代 | 否（单次执行） |
 | `/custom:create-eval-harness <判定 prompt>` | 给单个语义判定 prompt（judge / 分类 / 路由 / 抽取）建带标签 eval 与回归测试 | 否（单次执行） |
 | `/custom:review-claude-md <path>` | 按 `claude-md-review-principles.md` 审查单个 CLAUDE.md / AGENTS.md 指令文件的写作质量与结构 | 三阶段循环（审查→决策→落地） |
 | `/custom:review-agent-rules` | 审 agent 规则栈：加载关系、跨文件冲突、能力最小权限 | 否（单次审查 + 落地） |
@@ -139,6 +145,8 @@
 - 任务结束把观察到的 agent 行为问题 / 工具缺口沉淀到 `docs/issues/general.md`，供未来 agent 改进
 
 > supervise vs execute-plan：两者都是 Claude-as-supervisor 驱动后台 agent。**有 plan.md 用 `/custom:execute-plan`**（plan 自带 verify gate，无需另锁 success criteria）；**开放式、无 plan 用 `/custom:supervise`**（spawn 前现场跟用户锁 success criteria）。纯研究 / 查询 / 单文件 trivial 改动直接做，不必付 supervisor overhead。
+>
+> 监督**已经在跑、不是你启动的** session：`/custom:supervise-session <完整 session UUID>`（确定性 watcher 采样 + 深审 + 纠正信息投递）；只想偶尔看一眼进展、不需要持续监督时用 `/custom:review-session-progress`，要判断整个 program 的计划合理性时用 `/custom:map-program-architecture`。离开电脑期间让长任务继续跑：先 `/custom:away`。
 
 ---
 

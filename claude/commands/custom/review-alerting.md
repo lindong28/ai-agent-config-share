@@ -27,7 +27,15 @@ grep 出该项目**决定 fire、格式化消息、配置阈值、文档化告�
 
 ### 1. 审查（per-principle 并行 subagent）
 
-`alerting-review-principles.md` 的**每条原则各 spawn 一个 reviewer 并行**审查整个告警面，确保每条原则获得充分注意力。通道按 `~/.claude/references/delegation-policy.md` §Transport selection 判；走 in-process 时用 `general-purpose` 且**不传 `name`**。
+`alerting-review-principles.md` 的**每条原则各 spawn 一个 reviewer 并行**，确保每条原则获得充分注意力。
+
+**审查面**：整个告警面，该档的原则全部起用——别照抄一个写死的上界，条数以该档当时 `## <数字>.` 编号的原则为准（它的非编号章节不是原则）。spawn 前先把这些标题逐条抄出来当 roster；汇总时 roster 每一条都必须在产物里出现，或带 findings、或显式写"无 finding"，缺项即本次审查未完成。**没有这份对账，漏起用的那条不报错**——它只是不出现在 findings 里，而"10 条全审、其中 6 条无 finding"与"只审了 6 条"的输出逐字节相同。
+
+曾试过给「被 `review-gate` 自动叠加」这条路加一个按 diff 收窄的档位，**已撤回**——三轮修复每轮都露出同一个失效面：窄面里判不出、而没有任何被启动的原则会请求扩面。逐轮的洞分别是「没有确定映射」→「P5 没进恒在集」→「窄面定义漏掉共享同一上游但不共享 fire/severity/dedup 三维的规则」。按 `review-gate` 的 fail-closed 条款，收窄档在拿到真正够得着的升级出口之前本就不生效，故退回全量是当前的正确行为，不是妥协。
+
+代价照实记（2026-08-20 的一次实测，当时该档 9 条原则）：一次两段消息文案的改动会展开成全告警面 × 全部原则的审计，回报 40+ 条里有 19 条与该 diff 独立。那些发现有价值，但它们属于**系统级审计**这件事本身。缩它的正确做法留在 `docs/issues/harness-issues.md` 的 HARNESS-398，别在这里临时再造一个窄面。
+
+**通道按 `~/.claude/references/delegation-policy.md` §Transport selection 判——按该节要求，第一次 spawn 之前先给出 transport readout（同构 batch 共用一条即可）**；走 in-process 时用 `general-purpose-readonly` 且**不传 `name`**。用 readonly 那一型是因为 reviewer 的产出契约是报告 findings、不改文件，而它正在读的就是待审对象；`general-purpose` 保不住这一点。
 
 每个 subagent 的输入：
 - `~/.claude/references/alerting-review-principles.md`（完整——相邻原则提供边界；明确告知只应用指定那一条）
@@ -38,7 +46,7 @@ grep 出该项目**决定 fire、格式化消息、配置阈值、文档化告�
 
 每个 subagent 只输出其负责原则维度下的违反/borderline 发现（定位到具体规则/消息/行），不修改文件、不发 AskUserQuestion。
 
-所有 subagent 完成后，主 session 汇总：去重、标注每条发现来自哪条原则、按优先级排序（P1>…>P9，编号小者胜）。
+所有 subagent 完成后，主 session 汇总：去重、标注每条发现来自哪条原则、对着 roster 逐条对账（缺项即未完成，不是"无 finding"）、按该档「优先级与冲突裁决」节定义的顺序排序——**排序口径由该档单一维护，别在这里复制一份编号区间**；它排的是 fire-质量维度那些原则，可行性 / 前提维度的发现不进这个序，与它们并列呈现。
 
 ### 2. 决策
 

@@ -406,8 +406,9 @@ for skill_src in "$SRC_ROOT/skills"/*/; do
 done
 
 # --- Claude hooks (symlinked per-file so we never clobber an existing ~/.claude/hooks) ---
-# Only the hook scripts are linked here. Activation requires wiring three entries into
-# ~/.claude/settings.json (3 PreToolUse gates + 1 AskUserQuestion gate + 6 Stop hooks)
+# Only the hook scripts are linked here. Activation requires wiring the entries from
+# claude/settings.json's hooks block into ~/.claude/settings.json (see that file for
+# the current wiring set — HOOK_WIRING in verify.sh is the required/optional authority)
 # plus ECC_DISABLED_HOOKS="stop:desktop-notify" — the reference shape lives in
 # claude/settings.json and the README 安装 prompt walks Claude Code through the merge.
 # Test files ship alongside so the hooks stay verifiable after install
@@ -436,6 +437,15 @@ if [ -d "$HOOKS_SRC" ]; then
         rel="${src#"$HOOKS_SRC"/}"
         link_one "$src" "$HOME/.claude/hooks/$rel"
     done < <(find "$HOOKS_SRC/lib" -maxdepth 1 -type f \( -name '*.js' -o -name '*.json' \) -print0)
+    # Test fixtures live one dir deeper than the top-level glob; the tests that
+    # require them ship alongside, so post-install verification needs them too.
+    if [ -d "$HOOKS_SRC/bg-shell-reclaim-check.fixtures" ]; then
+        mkdir -p "$HOME/.claude/hooks/bg-shell-reclaim-check.fixtures"
+        while IFS= read -r -d '' src; do
+            rel="${src#"$HOOKS_SRC"/}"
+            link_one "$src" "$HOME/.claude/hooks/$rel"
+        done < <(find "$HOOKS_SRC/bg-shell-reclaim-check.fixtures" -maxdepth 1 -type f -name '*.js' -print0)
+    fi
 fi
 
 # --- codeagent-wrapper binary (darwin/arm64 + linux/amd64; required by /custom:execute-plan) ---
@@ -523,7 +533,7 @@ if [ -f "$ACTIVE_PLAN" ]; then
 fi
 
 # --- probe / observability CLIs (referenced by references/ and skills) ---
-for b in page-acceptance page-repetition first-screen-density; do
+for b in page-acceptance page-repetition first-screen-density visual-budget interaction-latency; do
     src="$SCRIPT_DIR/claude/bin/$b"
     [ -f "$src" ] && link_one "$src" "$HOME/.claude/bin/$b"
 done
@@ -533,7 +543,7 @@ SCRIPTS_SRC="$SCRIPT_DIR/claude/scripts"
 if [ -d "$SCRIPTS_SRC" ]; then
     echo
     echo "Installing claude/scripts:"
-    for rel in find-claude-session.sh mcp-dedup.py; do
+    for rel in find-claude-session.sh mcp-dedup.py peer-session-watch.js; do
         [ -f "$SCRIPTS_SRC/$rel" ] && link_one "$SCRIPTS_SRC/$rel" "$HOME/.claude/scripts/$rel"
     done
     while IFS= read -r -d '' src; do

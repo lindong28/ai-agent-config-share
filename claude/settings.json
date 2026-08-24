@@ -102,21 +102,28 @@
         "id": "pre:bash:codeagent-stdin-guard"
       },
       {
-        "matcher": "Edit|Write|MultiEdit|NotebookEdit",
+        "matcher": "Edit|Write|MultiEdit|NotebookEdit|Bash",
         "hooks": [
           {
             "type": "command",
             "command": "node \"$HOME/.claude/hooks/run-with-flags.js\" writer-registry-gate writer-registry-gate.js",
             "timeout": 15
-          },
+          }
+        ],
+        "description": "Register the writer and block overlapping concurrent edits (references/concurrent-plan-isolation.md 「轻量登记」). The registry lives in the git common-dir, not the worktree, so entries written from one worktree are visible from every other; the hook writes, reads AND expires entries, because the observed failure was not 'nobody registers' but 'entries are written, never read, never cleaned'. Matcher includes Bash because commits and file writes made through Bash commands were invisible to the registry (they register under the same registry key as Edit/Write).",
+        "id": "pre:edit:writer-registry-gate"
+      },
+      {
+        "matcher": "Edit|Write|MultiEdit|NotebookEdit",
+        "hooks": [
           {
             "type": "command",
             "command": "node \"$HOME/.claude/hooks/run-with-flags.js\" memory-carrier-gate memory-carrier-gate.js",
             "timeout": 15
           }
         ],
-        "description": "Register the writer and block overlapping concurrent edits (references/concurrent-plan-isolation.md 「轻量登记」). The registry lives in the git common-dir, not the worktree, so entries written from one worktree are visible from every other; the hook writes, reads AND expires entries, because the observed failure was not 'nobody registers' but 'entries are written, never read, never cleaned'. | memory-carrier-gate: block cross-project rules from being written into auto-memory files that git cannot see — durable guidance belongs in a git-tracked carrier (CLAUDE.md / references), memory keeps only a pointer (CLAUDE.md '长期解决方案载体').",
-        "id": "pre:edit:writer-registry-gate"
+        "description": "Block cross-project rules from being written into auto-memory files that git cannot see — durable guidance belongs in a git-tracked carrier (CLAUDE.md / references), memory keeps only a pointer (CLAUDE.md '长期解决方案载体').",
+        "id": "pre:edit:memory-carrier-gate"
       },
       {
         "matcher": "Bash",
@@ -161,6 +168,51 @@
         ],
         "description": "Enforce the deterministic half of the create-commit checklist at `git commit` time: no Co-Authored-By trailer, no vague bundled staging (git add -A / .), and the create-commit skill must actually have been invoked this session. Complements commit-message-language (language) — this gate checks staging discipline and skill invocation.",
         "id": "pre:bash:commit-discipline-gate"
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$HOME/.claude/hooks/run-with-flags.js\" liveness-predicate-gate liveness-predicate-gate.js"
+          }
+        ],
+        "description": "Two independent warnings about shell wait loops, reported separately: [liveness-predicate] the loop may be reading \"is it done yet?\" off `pgrep -f`, which cannot answer that question (any other command mentioning the same pattern satisfies it, including the check itself); [unbounded-wait] the loop's header is lexically infinite (`while :`, `while true`), so nothing inside it can ever stop it. Motivating incidents: wait loops idled for hours while the agent announced cleanup complete.",
+        "id": "pre:bash:liveness-predicate-gate"
+      },
+      {
+        "matcher": "Monitor",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$HOME/.claude/hooks/run-with-flags.js\" liveness-predicate-gate liveness-predicate-gate.js"
+          }
+        ],
+        "description": "Same liveness-predicate / unbounded-wait warnings as the Bash wiring, applied to Monitor tool calls whose watch expression is an infinite-header loop reading liveness off pgrep-style predicates.",
+        "id": "pre:monitor:liveness-predicate-gate"
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$HOME/.claude/hooks/run-with-flags.js\" guard-mutation-lint guard-mutation-lint.js"
+          }
+        ],
+        "description": "At commit time, enumerate the fail-closed guards this diff adds and ask the one question that separates a guard from a decoration: which mutation makes it red? A guard you just wrote is by default not covered — the suite passes before and after adding it, so its pass count carries no information about it, and every reader then believes something the tests do not check.",
+        "id": "pre:bash:guard-mutation-lint"
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$HOME/.claude/hooks/run-with-flags.js\" in-turn-cadence-advisor in-turn-cadence-advisor.js",
+            "description": "In-turn delegation cadence tripwire: counts same-shape Bash commands (executable + long-option set) and on the 6th occurrence injects a once-per-shape-per-session reminder to answer the delegate-or-not question (same-shape = isomorphic steps with a frozen spec; steps needing the previous one's result are not that). The reminder arrives at the 6th call, not before the first — answering before the first step remains the model's obligation (CLAUDE.md); this hook only makes the skipping of it observable. Advisory only, never blocks."
+          }
+        ],
+        "description": "In-turn delegation cadence advisory: counts same-shape Bash commands (executable + long-option set) and on the 6th injection reminds once per shape per session to answer the delegate-or-not question before the first of ≥6 same-shape mechanical steps (same-shape = isomorphic steps with a frozen spec; each step needing the previous one's result is not that). Advisory only, never blocks; the substantive judgment stays with the model.",
+        "id": "pre:bash:in-turn-cadence-advisor"
       }
     ],
     "Stop": [

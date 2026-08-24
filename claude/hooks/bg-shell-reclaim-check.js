@@ -31,10 +31,11 @@
  *
  * 交代闭环（pendingAck）：初版只"提醒一次"，被审查指出那一次可能花在中途的普通
  * Stop 上——等 agent 真正带着该任务宣告完成时，它已经用掉了唯一的机会、反而沉默。
- * 现在首次阻断只把 task 记为 pending；随后的 stop_hook_active=true 那次不阻断，
- * 而是从最后一条消息里解析**按 task id 具名**的 ack，覆盖到的才转 acked。没覆盖到
- * 的保持 pending，在下一次普通 Stop 再次提醒。这不制造死循环（active=true 从不阻断），
- * 也不重新分类卡死，只保证"最终必须明确交代"——但强制不了交代内容为真。
+ * 现在首次阻断只把 task 记为 pending；此后的每次 Stop 都先从最后一条消息里解析
+ * **按 task id 具名**的 ack，覆盖到的才转 acked。stop_hook_active=true 时收完即放行，
+ * 普通 Stop 则收完继续清点；没覆盖到的保持 pending，在下一次普通 Stop 再次提醒。
+ * 这不制造死循环（active=true 从不阻断），也不重新分类卡死，只保证"最终必须明确交代"
+ * ——但强制不了交代内容为真。
  *
  * 逃生口：`BG-SHELL-OK: <task id ...>`，须点名 task id 才对该任务生效。
  * 任何异常一律 fail-open：这道 gate 的作用是提醒，不该因自身故障卡住会话。
@@ -217,6 +218,26 @@ function logFire(entry) {
   }
 }
 
+/**
+ * 记下"这一轮判不了"，并让它与"这一轮没东西可报"在日志里分得开。
+ *
+ * 两者此前都表现为**零输出、零日志**——`logFire` 只在开火时写。于是这道闸静默失效时，
+ * 观察面与它正常工作且无事可报时完全相同，正是它自己提示词里那句"不知道是卡住了还是
+ * 在正常干活"，只不过发生在闸自己身上。实测代价：一次 session 里两个 headless Chrome
+ * 任务空转约 50 分钟，靠用户主动发现；事后想复盘它为什么没响时，日志里没有任何一条
+ * 对应那段时间，无法区分"看过了没事"与"根本没看成"。
+ *
+ * 原因同时写进 state（下一轮可读）与日志（跨轮可查）。写失败不抬升为错误——这是诊断
+ * 信息，不该让一道提醒型闸因为记不下原因而改变裁决。
+ */
+function noteUnusable(stateFile, sessionId, reason) {
+  updateState(stateFile, (state) => {
+    state.unusable = { at: new Date().toISOString(), reason };
+    return state;
+  });
+  logFire({ at: new Date().toISOString(), session: sessionId, unusable: reason });
+}
+
 function humanAge(ms) {
   const s = Math.round(ms / 1000);
   if (s < 60) return `${s} 秒`;
@@ -263,6 +284,21 @@ function ackedIdsIn(msg, pendingIds) {
   return out;
 }
 
+function applyAcks(state, lastMsg) {
+  const pend = Object.keys(state.tasks).filter((id) => state.tasks[id].pending);
+  for (const id of ackedIdsIn(lastMsg, pend)) {
+    state.tasks[id].pending = false;
+    state.tasks[id].acked = true;
+  }
+  return state;
+}
+
+// 模块作用域：外层 catch 要用它给 crash 记录标上会话身份。共享同一份 jsonl 的多个会话
+// 并发停止时，不带 session 的 crash 条目无法与任何一次"清点为空"对上——观察者知道"某次崩了"，
+// 却分不出哪个会话的零任务记录代表"正常且无事"，哪个代表"根本没清点成"。那正好击穿本文件
+// 要达到的唯一效果。崩在解析出 session_id 之前时它仍为 null，如实留空、不猜。
+let currentSessionId = null;
+
 function main() {
   let input;
   try {
@@ -275,6 +311,7 @@ function main() {
   // 验形必须先于构造任何路径：`../../settings` 会让 stateFile 落到 ~/.claude/settings.json，
   // 而下面确实会写它——一次畸形输入就能覆盖用户配置。
   if (!validSession(input.session_id)) return allow();
+  currentSessionId = input.session_id;
   const stateFile = path.join(STATE_DIR, `${input.session_id}.json`);
 
   let lastMsg = "";
@@ -288,14 +325,7 @@ function main() {
 
   // 阻断后的那一次 Stop：绝不再阻断（否则死循环），改为收 ack。
   if (input.stop_hook_active === true) {
-    updateState(stateFile, (state) => {
-      const pend = Object.keys(state.tasks).filter((id) => state.tasks[id].pending);
-      for (const id of ackedIdsIn(lastMsg, pend)) {
-        state.tasks[id].pending = false;
-        state.tasks[id].acked = true;
-      }
-      return state;
-    });
+    updateState(stateFile, (state) => applyAcks(state, lastMsg));
     return allow();
   }
 
@@ -321,6 +351,7 @@ function main() {
   const now = Date.now();
   let candidates = [];
   const committed = updateState(stateFile, (state) => {
+    applyAcks(state, lastMsg);
     // 裁剪依据是"当前有写持有者"。任务结束而 .output 保留是常态，只按文件存在裁剪会
     // 让条目永久残留，task id 复用时还会继承旧的 acked——该提醒的任务被当成已交代过。
     for (const id of Object.keys(state.tasks)) if (!byId.has(id)) delete state.tasks[id];
@@ -344,6 +375,19 @@ function main() {
   // "怎么解释都解除不了"的死拦。宁可这次不提醒。
   if (!committed) {
     dbg("state 未提交，放弃本次阻断，候选=", String(candidates.length));
+    // 有候选却不提醒，是本 hook 唯一一处"已经知道有活任务、却对外沉默"的路径——对调用方
+    // 而言它与"没有活任务"完全同形，正是本文件其余部分在消灭的那种失败。`dbg` 默认关闭，
+    // 等于没有观察面。故与两条降级路径同款留痕：不改变"这次不阻断"的裁决，只让它说得出来。
+    if (candidates.length) {
+      noteUnusable(stateFile, input.session_id, `state-uncommitted:${candidates.length}`);
+      try {
+        process.stderr.write(
+          `[bg-shell] 检出 ${candidates.length} 个待回收后台任务，但台账写入失败，本轮未提醒\n`,
+        );
+      } catch {
+        /* stderr 不可写时同样不改变裁决 */
+      }
+    }
     return allow();
   }
   const flagged = candidates;
@@ -363,7 +407,7 @@ function main() {
     .join("\n");
 
   process.stderr.write(
-    `[BG-SHELL] 这次停止时，下列后台任务仍在运行，且本 hook 还没收到过针对它们的处置说明：\n${lines}\n\n` +
+    `[BG-SHELL] 截至 ${new Date(now).toISOString()} 的探测：下列后台任务仍在运行，且本 hook 还没收到过针对它们的处置说明：\n${lines}\n\n` +
       "这会让调用方看到矛盾状态：要么该等它们（那就不该宣告完成），要么该回收它们。\n" +
       "本 hook 只知道它们还活着、活了多久——**不知道它们是卡住了还是在正常干活**，那要你判断（用 task id 回查你起它们时的命令与目的）：\n" +
       "• 已经没有意义（等的条件永不满足、等的东西早已结束、产出你已从别处取得）→ TaskStop 或 kill 回收。\n" +
@@ -371,13 +415,35 @@ function main() {
       "两种情况都要重发本回合的【完整交付物】，末尾另起一行：\n" +
       `BG-SHELL-OK: ${flagged.map((f) => f.id).join(" ")} — <逐个写去向>\n` +
       "**必须点名 task id**，没点到的会在下次停止时再次提醒。\n" +
+      "（上面这段是**一次快照，此后不会自我更正**：任务可能在你重发之前就退出，而本 hook 在任何一轮 `stop_hook_active` 为真的停止——不限于因本提醒而重发的那轮，该标志是全局的、任一 Stop 闸**阻断（exit 2）**都会置位——走的是只收 ack 的早退路径，不重新探测。所以**本轮之后的任何一轮**里，若别的闸报出与此相反的运行态，以那个即时读数为准：它们**开口时**报的是当轮现探的读数，而这段文字是旧的。反过来不成立——别的闸沉默可能是整轮跳过或探测故障，不等于它探过且认为没有。这也不叫两闸口径不一致：本方向上双方的 pid 枚举同出 `lib/session-tree.js`；反方向〔别的闸说有、本 hook 沉默〕通常也不是竞态，本 hook 另有计龄阈值与 ack 台账，且不看 subagent 转录。无论以哪个读数为准，本轮仍按上面的格式点名 ack。）\n" +
       `（阈值见 BG_SHELL_AGE_MS，当前 ${humanAge(AGE_MS)}。）\n`,
   );
   process.exit(2);
 }
 
+// fail-open 是对的——一道**提醒型**闸不该因为自身出错而卡住用户的会话。但静默地
+// fail-open 不对：`noteUnusable` 曾被调用两次却从未定义，两条降级路径（ps 发现失败、
+// lsof 不可用）因此必抛 ReferenceError，被这里吞掉，闸从此对那些轮次完全不响——而
+// 「崩了」与「无事可报」在外部观察面上一模一样，没有任何信号能把它们分开。
+//
+// 所以仍然放行，但**留痕**：日志留给事后复盘，stderr 那一行留给当场——两者缺一都不够，
+// 日志没人主动看，stderr 不持久。
 try {
   main();
-} catch {
+} catch (e) {
+  try {
+    logFire({
+      at: new Date().toISOString(),
+      session: currentSessionId, // 解析出 session_id 之前就崩的话为 null——如实留空
+      crashed: (e && (e.stack || e.message)) || String(e),
+    });
+  } catch {
+    /* 日志失败不改变裁决 */
+  }
+  try {
+    process.stderr.write(`[bg-shell] hook 自身出错，本轮未清点后台任务：${(e && e.message) || e}\n`);
+  } catch {
+    /* stderr 不可写时同样不改变裁决 */
+  }
   allow();
 }

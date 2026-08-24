@@ -2,6 +2,7 @@ import argparse
 import hashlib
 import json
 import logging
+import math
 import mimetypes
 import os
 import subprocess
@@ -10,6 +11,7 @@ import threading
 import time
 import uuid
 from collections import defaultdict
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -33,6 +35,31 @@ _SYNC_DUE_AFTER_SECONDS = 600
 _STALE_AFTER_SECONDS = 6 * 60 * 60
 RANGE_DAYS = {"7d": 7, "30d": 30, "90d": 90, "6m": 180, "1y": 365, "2y": 730}
 _SYNC_LOCK = threading.Lock()
+_ACCOUNT_MEMORY_LOCK = threading.Lock()
+_ACCOUNT_MEMORY_DELETE_EPOCH = 0
+_ACCOUNT_MEMORY_ACTIVE_UPSERT_EPOCHS = defaultdict(int)
+_ACCOUNT_MEMORY_DELETED_AT_EPOCH = {}
+_ACCOUNT_MEMORY_VERSION = 1
+_ACCOUNT_MEMORY_PATH = ROOT / "state" / "account_memory.json"
+_ACCOUNT_MEMORY_ENTRY_FIELDS = frozenset(
+    {
+        "provider",
+        "account_id",
+        "account_label",
+        "account_plan",
+        "five_hour_used_pct",
+        "five_hour_resets_at",
+        "seven_day_used_pct",
+        "seven_day_resets_at",
+        "observed_at",
+    }
+)
+_ACCOUNT_MEMORY_NUMERIC_FIELDS = (
+    "five_hour_used_pct",
+    "five_hour_resets_at",
+    "seven_day_used_pct",
+    "seven_day_resets_at",
+)
 _SYNC_STATE = {
     "running": False,
     "started_at": None,
@@ -102,7 +129,13 @@ def overview(query):
             )
 
 
-def _overview_from_admission(query, admission, *, completed_before, sync_started):
+def _overview_from_admission(
+    query,
+    admission,
+    *,
+    completed_before,
+    sync_started,
+):
     now = datetime.now().astimezone()
     range_value = _first(query, "range", "30d")
     rollup_range_window = rollup.range_window(range_value, now)
@@ -127,7 +160,10 @@ def _overview_from_admission(query, admission, *, completed_before, sync_started
         or sync_status.get("completed_at") != completed_before
     )
     return {
-        "rate_limits": _rate_limits(admission=admission, sync_status=sync_status),
+        "rate_limits": _rate_limits(
+            admission=admission,
+            sync_status=sync_status,
+        ),
         "sync": sync_status,
         "today": _rollup_summary(today_window),
         "week": week_summary,
@@ -318,10 +354,67 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         parsed = urlparse(self.path)
+        if parsed.path == "/api/account-memory/remove":
+            self._handle_account_memory_remove()
+            return
         if parsed.path == "/api/restart":
             self._handle_restart()
             return
         self.send_error(404)
+
+    def _handle_account_memory_remove(self):
+        # This is input-format validation only. The endpoint deliberately has
+        # the same reachability as the server's existing write endpoints.
+        if self.headers.get_content_type() != "application/json":
+            self._send_json(
+                {"error": "Content-Type must be application/json"}, status=400
+            )
+            return
+        try:
+            content_length = int(self.headers.get("Content-Length", ""))
+            if content_length < 0:
+                raise ValueError("negative Content-Length")
+            payload = json.loads(self.rfile.read(content_length))
+        except (ValueError, UnicodeDecodeError, json.JSONDecodeError):
+            self._send_json({"error": "Request body must be valid JSON"}, status=400)
+            return
+        provider = payload.get("provider") if isinstance(payload, dict) else None
+        account_id = payload.get("account_id") if isinstance(payload, dict) else None
+        observed_at = payload.get("observed_at") if isinstance(payload, dict) else None
+        if provider not in ("claude", "codex") or not isinstance(
+            account_id, str
+        ) or not account_id or not isinstance(observed_at, str) or not observed_at or (
+            _observed_at(observed_at) is None
+        ):
+            self._send_json(
+                {
+                    "error": (
+                        "provider must be claude or codex and account_id must be "
+                        "a non-empty string; observed_at must be a non-empty "
+                        "ISO-8601 string"
+                    )
+                },
+                status=400,
+            )
+            return
+        try:
+            with generation.generation_admission_snapshot() as admission:
+                live_rate_limits = _live_rate_limits_from_admission(admission)
+            status, receipt = _remove_account_memory(
+                provider, account_id, observed_at, live_rate_limits
+            )
+        except Exception as exc:
+            logger.exception(
+                "account memory removal failed: %s: %s",
+                type(exc).__name__,
+                exc,
+            )
+            self._send_json(
+                {"error": "Account memory removal could not be persisted"},
+                status=500,
+            )
+            return
+        self._send_json(receipt, status=status)
 
     def _handle_restart(self):
         errors = _compile_check()
@@ -563,6 +656,7 @@ def _run_sync_round(round_machines=()):
                 observations.get(name), completed_at, reason
             )
     finally:
+        _remember_accounts_after_sync_publish()
         completed_at = completed_at or _utc_timestamp()
         if observations is None:
             with _SYNC_LOCK:
@@ -1072,35 +1166,599 @@ def _session_sort_key(row, sort):
     return row["started_at"]
 
 
-def _rate_limits(admission=None, sync_status=None):
+def _rate_limits(admission=None, sync_status=None, expected_delete_epoch=None):
     if admission is None:
         with generation.generation_admission_snapshot() as loaded:
-            return _rate_limits_from_admission(loaded, sync_status=sync_status)
-    return _rate_limits_from_admission(admission, sync_status=sync_status)
-
-
-def _rate_limits_from_admission(admission, sync_status=None):
-    selected = {"claude": None, "codex": None}
-    for current in admission.admitted:
-        for provider in selected:
-            block = current.meta["rate_limits"].get(provider)
-            updated_at = _parse_timestamp(
-                block.get("updated_at") if isinstance(block, dict) else None
+            return _rate_limits_from_admission(
+                loaded,
+                sync_status=sync_status,
+                expected_delete_epoch=expected_delete_epoch,
             )
+    return _rate_limits_from_admission(
+        admission,
+        sync_status=sync_status,
+        expected_delete_epoch=expected_delete_epoch,
+    )
+
+
+def _rate_limits_from_admission(
+    admission, sync_status=None, *, expected_delete_epoch=None
+):
+    if expected_delete_epoch is None:
+        with _account_memory_upsert_epoch() as registered_epoch:
+            result = _live_rate_limits_from_admission(
+                admission, sync_status=sync_status
+            )
+            _remember_rate_limit_accounts(
+                result, expected_delete_epoch=registered_epoch
+            )
+    else:
+        result = _live_rate_limits_from_admission(
+            admission, sync_status=sync_status
+        )
+        _remember_rate_limit_accounts(
+            result, expected_delete_epoch=expected_delete_epoch
+        )
+    _merge_remembered_rate_limit_accounts(result)
+    return result
+
+
+def _live_rate_limits_from_admission(admission, sync_status=None):
+    """Quota grouped by account, because quota is metered per account.
+
+    Machines are not the unit: three machines signed into one Claude account
+    report one counter three times, and picking the freshest of them is right.
+    Two machines signed into different Codex accounts report two independent
+    pools, and picking the freshest is a coin toss between them — the bug this
+    replaces. Grouping by account gets both cases right.
+
+    A machine whose exporter predates account stamping groups under its own key
+    rather than merging with anything: an unknown account is not evidence of a
+    shared one, and merging unknowns would recreate the same bug one level down.
+    """
+    grouped = {"claude": {}, "codex": {}}
+    for current in admission.admitted:
+        rate_limits = current.meta.get("rate_limits")
+        if not isinstance(rate_limits, dict):
+            continue
+        for provider, buckets in grouped.items():
+            block = rate_limits.get(provider)
+            if not isinstance(block, dict):
+                continue
+            updated_at = _observed_at(block.get("updated_at"))
             if updated_at is None:
                 continue
-            previous = selected[provider]
-            if previous is None or updated_at > previous[0]:
-                selected[provider] = (updated_at, current.host, block)
-    return {
-        provider: _provider_block(value[2], source_machine=value[1])
-        if value is not None
-        else _provider_block(
-            None,
-            unavailable_reason=_quota_unavailable_reason(provider, sync_status),
+            account_id = _account_id(block)
+            key = account_id if account_id else ("unattributed", current.host)
+            bucket = buckets.get(key)
+            if bucket is None:
+                buckets[key] = {"latest": (updated_at, block), "machines": [current.host]}
+            else:
+                bucket["machines"].append(current.host)
+                if updated_at > bucket["latest"][0]:
+                    bucket["latest"] = (updated_at, block)
+
+    self_machine = _self_machine_name(admission)
+    result = {}
+    for provider, buckets in grouped.items():
+        # Freshest account first; it is the one the reader is most likely using.
+        ordered = sorted(buckets.values(), key=lambda b: b["latest"][0], reverse=True)
+        entries = [
+            _account_entry(bucket["latest"][1], bucket["machines"], self_machine)
+            for bucket in ordered
+        ]
+        result[provider] = {
+            "accounts": entries,
+            "unavailable_reason": None
+            if entries
+            else _quota_unavailable_reason(provider, sync_status),
+        }
+    return result
+
+
+def _remember_accounts_after_sync_publish():
+    """Remember the current admission snapshot while this sync round is still running."""
+    try:
+        with generation.generation_admission_snapshot() as admission:
+            with _account_memory_upsert_epoch() as expected_delete_epoch:
+                rate_limits = _live_rate_limits_from_admission(admission)
+                _remember_rate_limit_accounts(
+                    rate_limits, expected_delete_epoch=expected_delete_epoch
+                )
+    except Exception as exc:
+        logger.warning(
+            "account memory upsert after sync publish failed: %s: %s",
+            type(exc).__name__,
+            exc,
+            exc_info=True,
         )
-        for provider, value in selected.items()
+
+
+def _remember_rate_limit_accounts(rate_limits, *, expected_delete_epoch):
+    try:
+        return _upsert_account_memory(
+            rate_limits, expected_delete_epoch=expected_delete_epoch
+        )
+    except Exception as exc:
+        logger.warning(
+            "account memory upsert failed: %s: %s",
+            type(exc).__name__,
+            exc,
+            exc_info=True,
+        )
+        return False
+
+
+def _merge_remembered_rate_limit_accounts(rate_limits):
+    for provider in ("claude", "codex"):
+        provider_limits = rate_limits.get(provider)
+        if not isinstance(provider_limits, dict):
+            continue
+        for entry in provider_limits.get("accounts", ()):
+            entry["presence"] = "in_use"
+
+    with _ACCOUNT_MEMORY_LOCK:
+        state, payload = _load_account_memory()
+    if state != "valid":
+        return
+
+    remembered = sorted(
+        payload["accounts"].values(),
+        key=lambda record: _observed_at(record["observed_at"]),
+        reverse=True,
+    )
+    for provider in ("claude", "codex"):
+        provider_limits = rate_limits.get(provider)
+        if not isinstance(provider_limits, dict):
+            continue
+        entries = provider_limits.get("accounts")
+        if not isinstance(entries, list):
+            continue
+        live_account_ids = {
+            entry.get("account_id")
+            for entry in entries
+            if entry.get("account_state") == "known"
+        }
+        entries.extend(
+            _remembered_rate_limit_entry(record)
+            for record in remembered
+            if record["provider"] == provider
+            and record["account_id"] not in live_account_ids
+        )
+
+
+def _remembered_rate_limit_entry(record):
+    return {
+        "account_id": record["account_id"],
+        "account_label": record["account_label"],
+        "account_plan": record["account_plan"],
+        # Memory stores neither, and must not start: its record shape is
+        # validated by exact set equality, so one extra field would make the
+        # whole file unreadable and drop every remembered account (ADR
+        # 20260822-586a). Null is also the honest value — a remembered row
+        # states a past observation, not what any machine is signed into now.
+        "reading_plan": None,
+        "credential_plan": None,
+        "account_state": "known",
+        "presence": "remembered",
+        "five_hour_used_pct": _quota_number(record["five_hour_used_pct"]),
+        "five_hour_resets_at": _quota_number(record["five_hour_resets_at"]),
+        "seven_day_used_pct": _quota_number(record["seven_day_used_pct"]),
+        "seven_day_resets_at": _quota_number(record["seven_day_resets_at"]),
+        "updated_at": record["observed_at"],
+        "machines": [],
+        "this_machine": None,
     }
+
+
+@contextmanager
+def _account_memory_upsert_epoch():
+    with _ACCOUNT_MEMORY_LOCK:
+        epoch = _ACCOUNT_MEMORY_DELETE_EPOCH
+        _ACCOUNT_MEMORY_ACTIVE_UPSERT_EPOCHS[epoch] += 1
+    try:
+        yield epoch
+    finally:
+        with _ACCOUNT_MEMORY_LOCK:
+            remaining = _ACCOUNT_MEMORY_ACTIVE_UPSERT_EPOCHS[epoch] - 1
+            if remaining:
+                _ACCOUNT_MEMORY_ACTIVE_UPSERT_EPOCHS[epoch] = remaining
+            else:
+                del _ACCOUNT_MEMORY_ACTIVE_UPSERT_EPOCHS[epoch]
+            _prune_account_memory_deletions_locked()
+
+
+def _prune_account_memory_deletions_locked():
+    if not _ACCOUNT_MEMORY_ACTIVE_UPSERT_EPOCHS:
+        _ACCOUNT_MEMORY_DELETED_AT_EPOCH.clear()
+        return
+    oldest_active_epoch = min(_ACCOUNT_MEMORY_ACTIVE_UPSERT_EPOCHS)
+    for key, deleted_at_epoch in tuple(_ACCOUNT_MEMORY_DELETED_AT_EPOCH.items()):
+        if deleted_at_epoch <= oldest_active_epoch:
+            del _ACCOUNT_MEMORY_DELETED_AT_EPOCH[key]
+
+
+def _upsert_account_memory(rate_limits, *, expected_delete_epoch):
+    candidates = []
+    for provider in ("claude", "codex"):
+        provider_limits = rate_limits.get(provider)
+        if not isinstance(provider_limits, dict):
+            continue
+        for entry in provider_limits.get("accounts", ()):
+            candidate = _account_memory_entry(provider, entry)
+            if candidate is not None:
+                candidates.append(candidate)
+    if not candidates:
+        return False
+
+    with _ACCOUNT_MEMORY_LOCK:
+        state, payload = _load_account_memory()
+        if state == "unreadable_or_unsupported":
+            return False
+        accounts = {
+            key: _normalized_account_memory_record(record)
+            for key, record in payload["accounts"].items()
+        }
+        changed = False
+        for key, candidate in candidates:
+            if (
+                _ACCOUNT_MEMORY_DELETED_AT_EPOCH.get(key, 0)
+                > expected_delete_epoch
+            ):
+                continue
+            existing = accounts.get(key)
+            if existing is not None:
+                candidate_time = _observed_at(candidate["observed_at"])
+                existing_time = _observed_at(existing["observed_at"])
+                if candidate_time <= existing_time:
+                    continue
+            accounts[key] = candidate
+            changed = True
+        if not changed:
+            return False
+        _write_account_memory(
+            {
+                "version": _ACCOUNT_MEMORY_VERSION,
+                "accounts": accounts,
+            }
+        )
+        return True
+
+
+def _remove_account_memory(provider, account_id, observed_at, live_rate_limits):
+    global _ACCOUNT_MEMORY_DELETE_EPOCH
+    key = "%s:%s" % (provider, account_id)
+    with _ACCOUNT_MEMORY_LOCK:
+        provider_limits = live_rate_limits.get(provider)
+        entries = (
+            provider_limits.get("accounts", ())
+            if isinstance(provider_limits, dict)
+            else ()
+        )
+        in_use_entries = [
+            entry
+            for entry in entries
+            if entry.get("account_state") == "known"
+            and entry.get("account_id") == account_id
+        ]
+        in_use_machines = sorted(
+            {
+                machine
+                for entry in in_use_entries
+                for machine in entry.get("machines", ())
+            }
+        )
+        if in_use_entries:
+            return 409, {
+                "error": "Account is still in use on: %s"
+                % ", ".join(in_use_machines),
+                "machines": in_use_machines,
+            }
+        unstamped_entries = [
+            entry for entry in entries if entry.get("account_state") == "unstamped"
+        ]
+        unstamped_machines = sorted(
+            {
+                machine
+                for entry in unstamped_entries
+                for machine in entry.get("machines", ())
+            }
+        )
+        if unstamped_entries:
+            return 409, {
+                "error": (
+                    "Account ownership cannot be confirmed; update tt-web on: %s"
+                    % ", ".join(unstamped_machines)
+                ),
+                "machines": unstamped_machines,
+            }
+
+        state, payload = _load_account_memory()
+        if state == "unreadable_or_unsupported":
+            return 500, {"error": "Account memory is unreadable or unsupported"}
+        accounts = dict(payload["accounts"])
+        record = accounts.get(key)
+        if record is None:
+            return 404, {"error": "Remembered account not found"}
+        if record["observed_at"] != observed_at:
+            return 409, {
+                "error": (
+                    "Remembered account changed since confirmation; refresh the "
+                    "page and review the latest reading before removing it"
+                )
+            }
+        del accounts[key]
+        _write_account_memory(
+            {
+                "version": _ACCOUNT_MEMORY_VERSION,
+                "accounts": accounts,
+            }
+        )
+        _ACCOUNT_MEMORY_DELETE_EPOCH += 1
+        _ACCOUNT_MEMORY_DELETED_AT_EPOCH[key] = _ACCOUNT_MEMORY_DELETE_EPOCH
+        _prune_account_memory_deletions_locked()
+        return 200, {
+            "account_label": record["account_label"],
+            "observed_at": record["observed_at"],
+        }
+
+
+def _account_memory_entry(provider, entry):
+    if not isinstance(entry, dict) or entry.get("account_state") != "known":
+        return None
+    account_id = entry.get("account_id")
+    observed_at = _observed_at(entry.get("updated_at"))
+    if (
+        provider not in ("claude", "codex")
+        or not isinstance(account_id, str)
+        or not account_id
+    ):
+        return None
+    if observed_at is None:
+        return None
+    record = {
+        "provider": provider,
+        "account_id": account_id,
+        "account_label": entry.get("account_label"),
+        "account_plan": entry.get("account_plan"),
+        "five_hour_used_pct": _quota_number(entry.get("five_hour_used_pct")),
+        "five_hour_resets_at": _quota_number(entry.get("five_hour_resets_at")),
+        "seven_day_used_pct": _quota_number(entry.get("seven_day_used_pct")),
+        "seven_day_resets_at": _quota_number(entry.get("seven_day_resets_at")),
+        "observed_at": observed_at.astimezone(timezone.utc).isoformat(),
+    }
+    return "%s:%s" % (provider, account_id), record
+
+
+def _normalized_account_memory_record(record):
+    normalized = dict(record)
+    for field in _ACCOUNT_MEMORY_NUMERIC_FIELDS:
+        normalized[field] = _quota_number(normalized.get(field))
+    return normalized
+
+
+def _load_account_memory():
+    try:
+        raw = _ACCOUNT_MEMORY_PATH.read_bytes()
+    except FileNotFoundError:
+        return "missing", {"version": _ACCOUNT_MEMORY_VERSION, "accounts": {}}
+    except OSError as exc:
+        logger.warning("account memory is unreadable: %s: %s", type(exc).__name__, exc)
+        return "unreadable_or_unsupported", None
+    try:
+        payload = json.loads(raw)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        logger.warning("account memory is unreadable: %s: %s", type(exc).__name__, exc)
+        return "unreadable_or_unsupported", None
+    if not _valid_account_memory(payload):
+        logger.warning("account memory has an unreadable shape or unsupported version")
+        return "unreadable_or_unsupported", None
+    return "valid", payload
+
+
+def _valid_account_memory(payload):
+    if not isinstance(payload, dict) or set(payload) != {"version", "accounts"}:
+        return False
+    if payload.get("version") != _ACCOUNT_MEMORY_VERSION:
+        return False
+    accounts = payload.get("accounts")
+    if not isinstance(accounts, dict):
+        return False
+    for key, record in accounts.items():
+        if not isinstance(key, str) or not isinstance(record, dict):
+            return False
+        if set(record) != _ACCOUNT_MEMORY_ENTRY_FIELDS:
+            return False
+        provider = record.get("provider")
+        account_id = record.get("account_id")
+        if provider not in ("claude", "codex"):
+            return False
+        if not isinstance(account_id, str) or not account_id:
+            return False
+        if key != "%s:%s" % (provider, account_id):
+            return False
+        if record.get("account_label") is not None and not isinstance(
+            record["account_label"], str
+        ):
+            return False
+        if record.get("account_plan") is not None and not isinstance(
+            record["account_plan"], str
+        ):
+            return False
+        if _observed_at(record.get("observed_at")) is None:
+            return False
+    return True
+
+
+def _write_account_memory(payload):
+    parent = _ACCOUNT_MEMORY_PATH.parent
+    parent_created = not parent.exists()
+    parent.mkdir(parents=True, exist_ok=True)
+    if parent_created:
+        generation._fsync_directory(parent.parent)
+    temporary = parent / (".%s-%s" % (_ACCOUNT_MEMORY_PATH.name, uuid.uuid4().hex))
+    try:
+        fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(
+                payload,
+                handle,
+                ensure_ascii=False,
+                indent=2,
+                sort_keys=True,
+                allow_nan=False,
+            )
+            handle.write("\n")
+            handle.flush()
+        generation._fsync_file(temporary)
+        os.replace(temporary, _ACCOUNT_MEMORY_PATH)
+        generation._fsync_directory(parent)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
+
+
+def _observed_at(value):
+    """Observation time, always tz-aware, so readings stay comparable.
+
+    Codex rollouts carry tz-naive timestamps (`parsers/codex.py` normalizes them
+    for its own `max()`, and `tests/test_codex_rate_limits.py` pins that they
+    occur), while Claude's are offset-aware. Comparing one of each raises, and
+    both comparisons here span machines — so one machine with a naive timestamp
+    would take out the Overview for all of them. Naive is read as UTC, which is
+    what the exporters mean by it.
+    """
+    parsed = _parse_timestamp(value)
+    if parsed is None:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
+def _account_id(block):
+    """The account id, or None. Anything that is not a usable id reads as None.
+
+    The generation schema validates `rate_limits` only as "an object" — nothing
+    checks what is inside it — and this value is now a dict key and a rendered
+    string. A machine publishing a malformed field must cost its own quota row,
+    not the whole Overview payload it happens to travel in.
+    """
+    account_id = block.get("account_id")
+    return account_id if isinstance(account_id, str) and account_id else None
+
+
+def _quota_number(value):
+    """A standard-JSON number, or None when one malformed field is unusable.
+
+    `rate_limits` blocks intentionally have no inner wire schema. Normalizing at
+    each server-side boundary keeps one machine or remembered record's bad
+    field from turning the whole Overview response into JSON the browser cannot
+    parse, without rejecting the other rows in the same memory file.
+    """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float) and math.isfinite(value):
+        return value
+    return None
+
+
+def _plan_to_show(block):
+    """The plan a row displays, derived here rather than taken on trust.
+
+    An exporter that predates the two raw fields sends neither key, and its
+    `account_plan` is then the only plan available. Once a block carries the
+    keys, that value is a claim by one writer among several — every machine
+    runs its own exporter, at its own version, and nothing between them checks
+    that it agrees with the pair beside it. Past that point the pair is the
+    whole answer, including when the answer is "neither source reported one".
+    """
+    reading = _text(block.get("reading_plan"))
+    credential = _text(block.get("credential_plan"))
+    if reading or credential:
+        return reading or credential
+    if "reading_plan" in block or "credential_plan" in block:
+        return None
+    return _text(block.get("account_plan"))
+
+
+def _account_entry(block, machines, self_machine=None):
+    account_id = _account_id(block)
+    if account_id:
+        account_state = "known"
+    elif block.get("account_id") is None and "account_id" in block:
+        account_state = "signed_out"
+    else:
+        account_state = "unstamped"
+    return {
+        "account_id": account_id,
+        "account_label": _text(block.get("account_label")),
+        # Derived here, not taken from the block. The exporter derives the same
+        # value, but it is one of several writers — every other machine runs its
+        # own, at its own version, and nothing between them validates that a
+        # published `account_plan` agrees with the pair beside it. Trusting it
+        # would let a block claim a plan neither source reported, and that value
+        # does not stop at the screen: it is what the account memory persists,
+        # and that file cannot be rebuilt. Recomputing costs nothing and makes
+        # the contradiction unrepresentable downstream.
+        #
+        # The block's own value is the last resort, and only for exporters older
+        # than the pair — where it is the one plan on offer. That is a question
+        # about whether the keys are there, not about whether they hold
+        # anything: a current exporter that read neither source publishes both
+        # keys as null, and falling back on falsiness would hand that block the
+        # very value this recomputation exists to distrust. `account_id` two
+        # fields up already draws the line this way, for the same reason.
+        "account_plan": _plan_to_show(block),
+        # The two facts behind it, passed through unmerged so that having
+        # fewer than two comparable sources stays tellable apart from two that
+        # agree — the derived value alone cannot express the difference. An
+        # exporter that predates ADR 20260822-586a sends neither key, so such a
+        # row has zero sources, not one; either way nothing is compared, and
+        # that is not the same as comparing and finding them equal.
+        "reading_plan": _text(block.get("reading_plan")),
+        "credential_plan": _text(block.get("credential_plan")),
+        # Three states, not two. "Signed out" and "reported by an exporter too
+        # old to stamp accounts" both leave no account, but only the second is
+        # fixed by updating that machine — telling a current machine to update
+        # itself sends the reader after a problem they do not have.
+        "account_state": account_state,
+        # `*_used_pct`, not `*_pct`: the page shows headroom, and a name that
+        # does not say which direction it runs is one rename away from being
+        # rendered upside down. The wire field it comes from keeps its old name
+        # — that one is written by other machines and cannot be renamed without
+        # a flag day.
+        "five_hour_used_pct": _quota_number(block.get("five_hour_pct")),
+        "five_hour_resets_at": _quota_number(block.get("five_hour_resets_at")),
+        "seven_day_used_pct": _quota_number(block.get("seven_day_pct")),
+        "seven_day_resets_at": _quota_number(block.get("seven_day_resets_at")),
+        "updated_at": block.get("updated_at"),
+        "machines": sorted(machines),
+        # Marked so a row can say which account the session in front of the
+        # reader is spending. Three e-mail addresses do not tell them that; the
+        # machine list does, but only once one of the names is singled out.
+        "this_machine": self_machine if self_machine in machines else None,
+    }
+
+
+def _self_machine_name(admission):
+    """Which declared machine is this one, via the config's own accessor.
+
+    `load_machine_config` already refuses a config that does not name exactly
+    one, so this does not re-derive that rule — it only tolerates an admission
+    built without a config, which happens in tests.
+    """
+    config = getattr(admission, "config", None)
+    if config is None:
+        return None
+    try:
+        return config.self_machine.name
+    except (AttributeError, StopIteration):
+        return None
+
+
+def _text(value):
+    return value if isinstance(value, str) and value else None
 
 
 def _quota_unavailable_reason(provider, sync_status):
@@ -1125,28 +1783,6 @@ def _quota_unavailable_reason(provider, sync_status):
         "Admitted generations do not yet contain %s quota data; a successful refresh is required."
         % provider
     )
-
-
-def _provider_block(limits, *, source_machine=None, unavailable_reason=None):
-    if not limits:
-        return {
-            "five_hour_pct": None,
-            "five_hour_resets_at": None,
-            "seven_day_pct": None,
-            "seven_day_resets_at": None,
-            "updated_at": None,
-            "source_machine": None,
-            "unavailable_reason": unavailable_reason,
-        }
-    return {
-        "five_hour_pct": limits.get("five_hour_pct"),
-        "five_hour_resets_at": limits.get("five_hour_resets_at"),
-        "seven_day_pct": limits.get("seven_day_pct"),
-        "seven_day_resets_at": limits.get("seven_day_resets_at"),
-        "updated_at": limits.get("updated_at"),
-        "source_machine": source_machine,
-        "unavailable_reason": None,
-    }
 
 
 def _first(query, key, default):

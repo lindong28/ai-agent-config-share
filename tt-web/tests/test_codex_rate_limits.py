@@ -152,5 +152,58 @@ class CodexRateLimitsTests(unittest.TestCase):
         self.assertEqual(limits.seven_day_pct, 33.0)
 
 
+class ReadingPlanTests(unittest.TestCase):
+    """The plan Codex states inside the same object as the percentages.
+
+    It matters because it is the only plan known to come from the same event
+    as them — same event, not same observation: once a window's reset time has
+    passed its percentage is rewritten to zero while this keeps what the event
+    reported.
+    The plan in `~/.codex/auth.json` is a separate fact on its own clock, and
+    pairing that one with these numbers is what put "Pro Lite" next to a quota
+    that had already reset to 0% under Pro — see ADR 20260822-586a.
+    """
+
+    def load(self, rate_limits):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            rows = [
+                {
+                    "timestamp": "2026-08-22T00:58:29Z",
+                    "type": "session_meta",
+                    "payload": {"id": "session-1"},
+                },
+                {
+                    "timestamp": "2026-08-22T00:58:29Z",
+                    "type": "event_msg",
+                    "payload": {"type": "token_count", "rate_limits": rate_limits},
+                },
+            ]
+            (root / "session.jsonl").write_text(
+                "".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8"
+            )
+            return codex.load_rate_limits(root, state_db="/nonexistent")
+
+    window = {"used_percent": 0.0, "window_minutes": 10080, "resets_at": 4102444800}
+
+    def test_the_reading_carries_the_plan_it_was_reported_with(self):
+        limits = self.load({"primary": dict(self.window), "plan_type": "pro"})
+
+        self.assertEqual(limits.plan, "pro")
+        self.assertEqual(limits.seven_day_pct, 0.0)
+
+    def test_a_reading_without_a_plan_carries_none_rather_than_inventing_one(self):
+        self.assertIsNone(self.load({"primary": dict(self.window)}).plan)
+
+    def test_a_plan_that_is_not_a_usable_string_reads_as_absent(self):
+        """`rate_limits` has no wire schema, and this value ends up both in a
+        rendered label and in the equality that decides whether the two plan
+        sources disagree. A truthy non-string would pass `or` and reach both."""
+        for value in (7, True, {"tier": "pro"}, [], "", None):
+            with self.subTest(value=value):
+                limits = self.load({"primary": dict(self.window), "plan_type": value})
+                self.assertIsNone(limits.plan)
+
+
 if __name__ == "__main__":
     unittest.main()

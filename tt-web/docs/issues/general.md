@@ -51,3 +51,54 @@ Claude Code 在 resume/fork 时把整份 transcript 复制进新 session 文件�
 实测影响：1,799 个 rollout 文件里 1,608 个唯一 session_id，按此去重后 Codex 成本从 $18,579 掉到 $7,904。
 
 dashboard 不受影响——生产路径走 `aggregators._parse_usage_file()` 而非这个函数，且 `UsageEntry.message_id` 现已是 rollout 文件名，全局去重不会合并分支。该函数目前只被测试调用，故未改动其语义。
+
+## [open] `/api/restart` 是无认证写端点，且服务默认绑 0.0.0.0
+
+- **Type**: exposure-surface
+- **Discovered**: 2026-08-20
+- **Priority**: low（当前暴露面下）
+
+`server.py` 的 `do_POST` 只认一个路径 `/api/restart`（`:319` → `:324` `_handle_restart`），它做完 `_compile_check()` 就 `_schedule_reexec()` 让进程重新 exec 自己。这条路径**没有任何认证、来源检查或确认**。
+
+同时服务并非只绑 loopback：launcher `tt-web/tt-web:18` 是 `BIND_HOST="${TT_WEB_BIND:-0.0.0.0}"`，运行中的进程命令行确为 `--host 0.0.0.0`，`lsof` 显示 `TCP *:39001`。所以 Tailnet / LAN 上任何能访问该端口的客户端都能重启这个服务。
+
+**注意 `server.py` 会给出相反的读数**：`:49` 的 `_BIND_HOST` 与 `:1267` 的 argparse default 都写着 `127.0.0.1`，但 launcher 显式传 `--host` 覆盖它。只读 server.py 判暴露面会判错——这个坑已经真实发生过一次。
+
+**当轮未修的原因**：2026-08-20 的账号记忆改动要新增一个删除端点，借此评估了可达档位。用户明确裁决**沿用既有档位**（该 plan 的 D5）：既然 `/api/restart` 这个权限更大的端点已经敞着，只给新端点加锁不会真的提高防护。这条记录的是**事实与那次裁决的适用前提**，不是待办。
+
+**什么时候要重新裁决**：服务的暴露面变化时——接入更宽的网络、多人使用、或 `TT_WEB_BIND` 的默认值被改动。届时 `/api/restart` 与账号记忆的删除端点应一并处置，不要只看其中一个。
+
+## [open] 账号记忆的删除可被一个"删除前取得 admission"的在途请求复活
+
+- **Type**: race-condition
+- **Discovered**: 2026-08-20
+- **Priority**: low（后果是"删掉的账号又出现一次"，再删一次即可）
+- **Status**: 用户显式 waive，带着它交付
+
+`/api/account-memory/remove` 永久删除一条 remembered 记录后，一个**在删除之前就取得了 admission 快照**、但尚未进入内层 epoch context 的 overview 或 sync-publish 请求，仍可能把该账号写回：删除发生时若没有 active upsert epoch，墓碑会被 GC 立刻清空；随后那个旧请求注册到删除**之后**的 epoch，从**旧**快照派生候选，比较时已无墓碑可依，于是写回。
+
+overview 侧的窗口尤其宽——它在取得 admission 与注册 epoch 之间还夹着 rollup 查询。
+
+**这不是没修，是修了三轮后确认它落在一个坐标轴上**，三个打点位置各错一头：
+
+| epoch 打点位置 | 结果 |
+|---|---|
+| 入口开始 | 跨越 generation/rollup 工作 → 删除后取得的新读数被误拒 |
+| **admission 取得时** | 理论正解：删前取得的快照正确拒绝、删后取得的正确接受 |
+| 派生循环（当前实现） | 本条竞态 |
+
+真要修，方向是把 `_account_memory_upsert_epoch()` 上移到包住 admission 快照的获取。当轮未做是因为已连续两轮出现"新问题来自上一轮修法"，用户裁定带着它收口。
+
+**附带两条同源边界**：
+
+- tombstone map 只有最终收敛、没有硬上界：任一 derive/write context 长期不返回时，`oldest_active_epoch` 不前进，其后所有不同 key 的墓碑都不能回收。个人账号规模下风险很低。
+- `tests/test_account_memory.py` 里覆盖该路径的测试**不区分 admission 是在删除前还是删除后取得**，且在墓碑已被 GC 时对 epoch 语义不具区分力。它的名字与注释已按此更正，别再据旧名推断覆盖面。
+
+## [open] sessions 加载的 invalid-rows 守卫（web/app.js）没有任何测试看守
+
+- **Type**: coverage gap
+- **Priority**: low
+- **Discovered**: 2026-08-24，share 同步时 guard-mutation 反向变异检查
+- **Component**: `tt-web/web/app.js`（`throw new Error("Sessions response contained invalid rows.")`）
+- **Description**: 同批引入的 server 侧守卫（server.py negative Content-Length）经变异验证被套件守住（删掉后 1 error）；app.js 这个守卫删除后无任何测试变红——仓内确有执行 app.js 的 JS 通道（`test_web_static.py` 经 Node 跑 `web/app.js`），但现有用例没有覆盖该守卫，它目前是无覆盖的 invariant。
+- **候选修法**: 上游侧补 JS 行为测试（或在有 JS 测试通道后回填）；本仓跟随上游。

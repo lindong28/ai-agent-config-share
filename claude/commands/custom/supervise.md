@@ -1,6 +1,6 @@
 ---
 name: supervise
-description: 启动指定 backend（codex / gemini / claude）的 agent 跑用户口头描述的开放任务，Claude 作为 supervisor 监督到用户锁定的 success criteria 收敛才交付。用于你要把一个没有 plan.md 的开放任务交给另一个 agent 做、又想要质量监督与早停续跑时。
+description: **由你启动**一个指定 backend（codex / gemini / claude）的 agent 跑用户口头描述的开放任务，Claude 作为 supervisor 监督到用户锁定的 success criteria 收敛才交付。用于你要把一个没有 plan.md 的开放任务交给另一个 agent 做、又想要质量监督与早停续跑时。**监督对象是本命令起的**；要监督一个你没启动、已经在跑的 Claude Code session，用 `supervise-session`。
 argument-hint: "[--backend codex|gemini|claude] [--autopilot] <task description>"
 disable-model-invocation: true
 origin: 2026-05-21
@@ -217,39 +217,32 @@ resume-prompt 只列：哪几项 success criterion 未达成（无证据；存�
 2. 候选 issue 列表为空 → 跳过本节
 3. 读 `<WORKDIR>/docs/issues/general.md`（目录不存在则建目录 + 空文件，再继续）
 4. 对每条候选 issue：
-   - 现有 file 有相似 entry（相同行为模式 / 相同工具缺口） → 更新该 entry：在 `Occurrences` 列表 append 一条 `<timestamp> + 当前 session id + 当前 backend + 本次发生情形`，**不新增 top-level entry**
+   - 现有 file 有相似 entry（相同行为模式 / 相同工具缺口） → 更新该 entry：在 `Occurrences` 列表 append 一条 `<timestamp> + 当前 session id + 当前 backend + 本次发生情形`，不新增 top-level entry
    - 无相似 → 新增 top-level entry，schema 见下
 
-Entry schema（JIRA-flavored Markdown）：
+Entry 结构（`Type` / `Priority` / `Status` 生命周期 / `Notes` / 空字段省略规则）一律以全局协议模板 `~/.claude/references/docs-format-templates.md` §4.8 为准。supervise 特化两点：
+
+- `Description` 在 §4.8 的"现象 + 为什么是问题"上补 wrapped-agent 上下文：做什么任务时 / wrapped agent 是什么 backend / 观察到什么行为 / 期待什么行为 / 可能的 fix 方向。
+- 把 §4.8 的单次 `Discovered` 替换为 `Occurrences`——同一行为模式跨 session 反复出现时在此累积（不新增 top-level entry），首条时间戳即首次发现时刻（故不用 §4.8 的 `Discovered`、也无 `Created`）：
 
 ```markdown
-## [<type>] <title>
-
-- **Created**: 2026-MM-DD HH:MM
-- **Type**: bug | improvement | feature
-- **Description**: <足够上下文让其他 agent 理解和解决这个问题——做什么任务时 / wrapped agent 是什么 backend / 观察到什么行为 / 期待什么行为 / 可能的 fix 方向>
-- **Occurrences**:
+- Occurrences:
   - 2026-MM-DD HH:MM | session `<id>` | backend `<name>` | <本次发生的具体情形>
 ```
-
-Type 定义：
-- `bug`：wrapped agent 行为错了 / 违反已存在的 skill 或 convention
-- `improvement`：wrapped agent 行为不错但可以更好（e.g. 走弯路 / 漏 obvious 手段）
-- `feature`：缺某个 skill / 工具 / config，加上以后这类问题会消失
 
 ### 6. 最终 handoff（用户拿到的唯一交付物）
 
 中文回复，内容由实际执行轨迹决定：
 
 **必含**
-- Backend + session id + workdir
+- Backend + session id（无 session id 的异常退出则注明未捕获）+ workdir
 - 用户原始 task + 用户锁定的 success criteria
 - 最终 outcome：完成 / 合法 stop / 失败
-- Verify 证据摘要（每个 success criterion 对应的可观察信号）。任何走**判据降级**路径结案的 criterion（§4 lens 1），作为显式 delta 列出（criterion 原文 vs 实际交付值 + 降级理由），不报为普通"达成"
+- Verify 证据摘要：每个 success criterion 的达成状态——可观察证据，或未达成 / 无法验证的原因（失败 / 无产出时逐条给后者）。任何走**判据降级**路径结案的 criterion（§4 lens 1），作为显式 delta 列出（criterion 原文 vs 实际交付值 + 降级理由），不报为普通"达成"
 - **Working tree 状态摘要**（`git status` / diff 体量）——若 agent 已 commit 则给出 commit hash；若未 commit 则明示"改动在 working tree，用户后续自行 commit"
 - Supervisor 中间观察的简短总结（resume 次数 / dialogue 升级次数）
-- `general.md` 落地状态：新增 N 条 / 更新 M 条 / 无 issue
-- Real-time log 路径（`<WORKDIR>/logs/supervise/<task-slug>_<YYYYMMDD-HHmm>.md`），供用户需要时回看
+- `general.md` 落地状态：新增 N 条 / 更新 M 条 / 无 issue / §5 跳过（异常退出）
+- Real-time log 路径（`<WORKDIR>/logs/supervise/<task-slug>_<YYYYMMDD-HHmm>.md`），若已创建则供用户回看
 
 **适用时含**
 - **交互模式**：Dialogue 升级到用户的决策点列表（每条：agent 问什么 / 用户决策 / 后续效果）
@@ -265,9 +258,9 @@ Type 定义：
 下面这些 SOTA Claude 默认不会做，失守会让本 command 退化（其他执行时刻的细则在 §1–§6 各自 source-of-truth 里，本节只收录跨节、单一上游 anchor 抓不住的不变量）：
 
 - **wrapper 报错先归因 wrapper / 适配层**：只有观察到第三方原始响应（HTTP 体 / API error code / 状态页）才能写"外部不可用"。
-- **背景任务 + 增量轮询**：必须 `run_in_background: true`；主轮询姿势见 §3（增量读新增、必要时全量兜底）；不要因为等久就 kill；不要把"在等待"当 stop 理由扔给用户。**但"不被动 kill"≠"被动等"**：agent 反复对抗可解环境争用时主动可逆干预、不确定就 ask，见 §3「环境争用监测」。
+- **背景任务 + 增量轮询**：必须 `run_in_background: true`；主轮询姿势见 §3（增量读新增、必要时全量兜底）；不要因为等久就 kill；不要把"在等待"当 stop 理由扔给用户。但"不被动 kill"≠"被动等"：agent 反复对抗可解环境争用时主动可逆干预、不确定就 ask，见 §3「环境争用监测」。
 - **语言契约**：与 wrapped agent / 工具交互 English；与用户交互中文。
 - **Real-time log 不替代 general.md**：log 是 supervisor 自留的过程证据（防 memory compaction），观察问题以 entries 形式落地是 §5 的事。两个不同 consumer——log consumer 是 supervisor 自己，issues file consumer 是未来 agent。
-- **commit 经 create-commit、只 stage 自己的改动**：supervisor 提交自己的改动（如 §5 的 general.md 落地）时，按 `~/.claude/skills/create-commit/SKILL.md` 执行，且仅 stage 本次要提交的文件、不带入 wrapped agent 的 task 改动（其去向按 §6）；message 沿用 skill 格式不自行手写。与 execute-plan / execute-ux-contract 一致。
+- **commit 经 create-commit、只 stage 自己的改动**：supervisor 提交自己的改动（如 §5 的 general.md 落地）时，按 `~/.claude/skills/create-commit/SKILL.md` 执行，且仅 stage 本次要提交的文件、不带入 wrapped agent 的 task 改动（其去向按 §6）；message 沿用 skill 格式不自行手写。与 execute-plan / resolve-issues / execute-ux-contract 一致。
 - **不接管 task 范围内的代码改动**：Claude 修 wrapper / 适配层允许；替 wrapped agent 写 task 范围内的代码不允许——绕过 supervisor 定位。**限定**：AIGC / 语义质量任务下，prompt / rubric / 评分协议等品味工件不算"代码"、设计权归 supervisor——详见 `~/.claude/commands/custom/execute-plan.md` §4.5「AIGC / 语义质量任务的监督升格」。
 - **Supervisor 的 handoff 也是 stop**：supervisor 把残余工作推给用户时，自身也按 `~/.claude/references/plan-execution-principles.md` Stop Gate 自检——agent 没试完可用路径的情况下，supervisor 不能接受 stop 并转嫁给用户。

@@ -55,6 +55,8 @@
 - 执行过命令时，提供命令与退出状态。
 - 生成了产物或日志时，提供其位置。
 
+**未验证边界回来之后归 caller 处置**：这是上面「未验证边界与不确定性」那条在 caller 侧的另一半——子代理写下「未核实 / 我这一侧够不着」，语义是**把活交回来**，不是把它了结；它缺的往往正是你有的工具或权限，所以那句话多半指着一件你走得动的事。收到时按 `evidence-sufficiency.md`「你消费的任何报告里那句『未核实』」分三个出口处置，别默认归档。少了这一步，子代理诚实标注的缺口会静静停在 caller 手上，而交付物看起来已经披露过了。
+
 **产出先落盘，再回报**：凡委派会产生可复用产物（调研结论、生成的文件、分析结果），prompt 里指定一个系统临时目录之外的落盘路径，要求子代理先写文件、再返回摘要与该路径。文件才是交付物，返回文本只是它的索引。子代理没有 Write 类工具时，落盘手段在 prompt 里点明（有 `Bash` 即可用 heredoc 写）。
 
 有一类委派**刻意**限制写入能力——reviewer 就是，为的是让它改不了自己正在评审的文件（各档实际强度差别很大，见「Reviewer isolation」；别假定所有 reviewer 都不可写）。豁免按**实际能力**判、不按角色：确实没有安全落盘路径的，才以返回文本为唯一交付物；写得动、只是不许碰被审对象的，仍要把报告写进 caller 指定、在被审对象可写边界之外的持久路径。不要为了落盘去换 agent type 或放宽 sandbox：它的返回文本就是交付物，落盘义务转由 caller 在收到报告后履行。
@@ -84,6 +86,12 @@
 |---|---|---|---|---|
 | Claude Code in-process（`Agent` 工具） | 不传 `name` 时随工具结果回流；传了就不回流（见「Named delegation」） | 以所选 agent type 的实际 catalog 为准（`tools:` 或派发时查），查不到即视为不具备 | 同上 | 当前 Claude Code caller 的认证池 |
 | Codex（`codeagent-wrapper --backend codex`） | 前台从命令结果返回；`run_in_background` 由**进程退出**触发回调——静默挂起不回调（见 `background-agent-monitoring.md`「为什么需要主动巡检」），退出也不等于交回了最终报告（同文件「中途终止」） | `read-only` 禁写全机；`workspace-write` 仅允许 workspace 内写入——精确边界见 `codeagent-wrapper --help` | `read-only` 禁网；`workspace-write` 通 | Codex CLI 当前认证的独立池 |
+
+**判定要留下一条读数，否则「判过并选了 in-process」与「整步没发生」在事后完全同形。** **每个委派单元**派发之前，写出一条 transport readout：候选集、被剔除的候选及剔除依据（第 2 步的哪一项）、最终 transport。**没有这条读数不要派发。**
+
+复用只在一种情形下成立：**候选集、能力要求与剔除依据三者完全相同**的一批并行单元，共用一条 batch readout。绑到「单元」而不是「本轮首次派发」是必要的——异构派发正是最需要它的场景（先派一个只能 in-process 的单元，再派一个本该走 Codex 的 fan-out），而绑到首次会让那条早期 readout 字面上满足义务、后面换了候选集也不再留读数。
+
+这不是给判定加一层规则——判据全在下面四步、此处不复述。它加的是一个**可观察的绑定点**：实测一次 9 路 fan-out 全部默认走 in-process、把 45.3M usage 留在紧缺的池子里，而失守时运行表面完全正常——9 个 reviewer 都成功启动，没有任何错误能暴露「transport 选择这一步根本没发生」。读数是唯一能让这种缺席显形的东西。选 in-process 时同样要写，且要写出**具体的能力筛除依据**，「默认」不算依据。
 
 **逐个委派单元判定**，不按整条 command 判：
 
@@ -141,17 +149,51 @@ Codex transport（`codeagent-wrapper --backend codex`、Codex 原生 collaborati
 
 Codex transport 也是「Eligibility」中工具层故障场景的委派目标：hook 强制层只在 Claude Code 侧生效（见 user-scope `Harness 适配` 表），故本侧 hook 拦死 Read/Edit 时 Codex 的文件工具链仍完好；底层文件系统本身故障则不在此列。
 
+#### Codex 额度或账号鉴权不可用
+
+Codex 因额度或账号鉴权不可用时，停轮告知用户并等他恢复，不重试、不换 transport、不把这份活收回 Claude Code 自己做。后者看起来是"至少把事情推进了"，实际是「Resolve Blockers, Don't Bypass」明令的静默降级，而且恰好烧的是用户更紧的那个池子——上面「Transport selection」把 Codex 定为高 token 低结论密度工作的默认承接方，正是因为两个池子的余量不同。恢复动作（换账号、等窗口重置、充值）**只有用户做得到**，agent 在这里没有杠杆，替他挑一条次优路径只是把决定权拿走。
+
+已实测三种形态。归因栏写的是**候选**而非结论，三条都要另行证实：
+
+| 任务状态 | 现象 | 候选成因 | 你现在要做什么 |
+|---|---|---|---|
+| 已终止（`exit 1`，无任务输出） | `wss://…/codex/responses` Connection refused | 周额度已满（**候选**，代理 / 网络 / 服务端故障同形，须证实） | 保留 record；用户恢复后按有无 `session_id` 决定 resume 或从 checkpoint 重派 |
+| 已终止（`exit 1`，无任务输出） | `401 … auth error code: token_revoked` | 账号切换致在途 token 被吊销（**候选**，须证实）——该串**不自证**：实测它出现后无任何恢复动作、约两小时后同形态即 `exit 0`（`HARNESS-20260823-d6af`） | 同上 |
+| **仍存活，尚无返回值** | 进程活着、日志每几秒刷同一条 401 | 同上；wrapper 不把鉴权失败当终态 | **先按 task handle 终止它**，再走上一格的分流——它不会自己停，停轮而不终止它等于上面那条"不重试"没有兑现 |
+
+第三种最容易漏：它骗得过一切以"日志还在更新"为活性判据的探针，读数与健康态相同（见 `background-agent-monitoring.md`「等待器的判据与上界」）。它此刻没有退出码可读，被终止后按谁终止它落到 `124` / `130` / `killed`，别与前两行的 `exit 1` 混为一谈。恢复分流本身归 `background-agent-monitoring.md`「中途终止」，那里是单一 owner。
+
+**周额度这条候选按 session 证实或排除。** 判据是订阅的 7 天窗口（rollout 事件 `rate_limits` 里 `window_minutes=10080` 的 `used_percent`），**不是 credits**——`has_credits` / `balance` 是充值余额，实测它在账号正常工作期间同样是 `false` / `0`，没有区分度。
+
+取数要按**失败任务自己的 session** 取，不要用全局聚合：`tt-web` 的公开函数 `load_rate_limits()` 返回所有 session 里 `updated_at` 最新的那条，而换账号期间旧账号的残留 session 仍在写，于是它恰好会把已耗尽账号的状态报成当前状态（实测同一时刻它报 100%，而目标 session 实为 4%）。session id 就是 wrapper banner 里的 `Session-ID`，rollout 文件名带着它：
+
+```sh
+cd ~/research/ai-agent-config/tt-web && python3 -c "
+import sys, os, glob; sys.path.insert(0,'.')
+from parsers.codex import _extract_latest_rate_limits, _load_thread_models, STATE_DB
+sid = '<wrapper banner 里的 Session-ID>'
+hits = [f for f in glob.glob(os.path.expanduser('~/.codex/sessions/**/rollout-*.jsonl'), recursive=True)
+        if sid in os.path.basename(f)]
+print(hits and _extract_latest_rate_limits(hits[0], _load_thread_models(STATE_DB)) or 'no rollout for that session')
+"
+```
+
+两条限制随读数一起说出去。其一，这段调用依赖 `tt-web` 的**私有**函数与 rollout 目录布局，上游一改就会静默失效——稳定公开入口的缺口记在 `harness-issues.md` 的 HARNESS-357，那之后本节只留指针。其二，rollout 里**没有账号身份字段**，所以结论只能写成"该 session 报告的周窗口已满"，不能写成"某账号已耗尽"——后者是推断。取不到读数（该 session 无 `rate_limits` 事件）就如实报未核实，把未证实的候选连同现象交给用户，别改用全局值凑一个数。
+
+**换账号会终止使用旧 token 的在途任务**（不是全部——彼时已在新账号上的 session 不受影响）。这是恢复动作自带的代价，先向用户说明。恢复照「中途终止」办；本节只加一条它没有的语境：resume prompt 里要说明**这次终止来自账号切换而非任务自身失败**，否则它会把自己已完成的部分当作上一轮的错误去回滚。
+
+
 #### prompt 传入形态
 
 **用 wrapper 自带的 `-`（从 stdin 读任务）配 quoted heredoc，不要把 prompt 写成命令行参数。** `--help` 自述 `codeagent-wrapper - [workdir]` 与 `codeagent-wrapper resume <session_id> - [workdir]`，本仓既有调用（`execute-plan` / `test-ux` / `execute-ux-contract` / `multi-backend`）全是这个形态：
 
 ```sh
-CODEX_SANDBOX=read-only codeagent-wrapper --backend codex - <workdir> <<'EOF'
+CODEX_SANDBOX=read-only codeagent-wrapper --progress --backend codex - <workdir> <<'EOF'
 <prompt>
 EOF
 ```
 
-走 `-` 时 prompt 根本不经 argv，下面两类失败都不存在；也不需要 `</dev/null`（stdin 已经是 prompt，读完即 EOF）。**prompt-as-arg 只在确有理由时用**，那时才按 `background-agent-monitoring.md`「派发前自限（每次后台 codex/agent 派发都套）」补 `</dev/null`。
+走 `-` 时 prompt 根本不经 argv，下面两类失败都不存在；也不需要 `</dev/null`（stdin 已经是 prompt，读完即 EOF）。**prompt-as-arg 只在确有理由时用**，那时才按 `background-agent-monitoring.md`「派发前自限」补 `</dev/null`。
 
 写成命令行参数时会踩的两件事（实测于 zsh，两者独立；下表的 `f` 是一个打印 `$#` 与各参数的一行函数，照跑即可复现）：
 
@@ -172,14 +214,14 @@ EOF
 
 | 档位 | 本机文件写 | 网络 / ssh | 适用 |
 |---|---|---|---|
-| `read-only` | 拒 | 拒 | reviewer 及其它只读委派 |
-| `workspace-write` | 限 workspace 内 | 通 | 需要联网的委派，典型是远端诊断 |
+| `read-only` | 拒 | 拒 | reviewer 及其它只读委派；浏览器 / GUI 应用同样不可用（见下方实测边界「起不了浏览器 / GUI 应用」条） |
+| `workspace-write` | 限 workspace 内 | 通 | 需要联网的委派，典型是远端诊断；**浏览器 / GUI 应用不可用**——见下方实测边界「起不了浏览器 / GUI 应用」条 |
 | 未设 + `CODEX_REQUIRE_APPROVAL` 为假（默认） | 全盘 | 通 | artifact 传 `--dangerously-bypass-approvals-and-sandbox` |
 | 未设 + `CODEX_REQUIRE_APPROVAL=true` | 看 config | 看 config | artifact **一个 sandbox flag 都不传**，回落到 codex 自己的 `config.toml`——所以这一格没有固定答案，取决于那台机器怎么配 |
 
 flag 语义的单一来源是 `codeagent-wrapper --help`（artifact 自述），本节只承载**选哪一档、为什么**与实测边界；两者不一致时以 `--help` 为准并回来修本节。
 
-实测边界（2026-08-08，同 prompt 同 workdir 只变档位，写入面逐目标探测并用独立 `ls` 核实文件是否真落地）：
+实测边界（除注明外 2026-08-08，同 prompt 同 workdir 只变档位，写入面逐目标探测并用独立 `ls` 核实文件是否真落地；另注日期的条目各带自己的取证方式）：
 
 - **`read-only` 也禁网**，且拒绝落在 `connect()`、在认证之前：ssh 报 `Operation not permitted` 而不是任何认证形状的错误。照错误文本去查 key / 网络会全程走错方向——远端工作选错这一档就是这个症状。
 - **`workspace-write` 默认远比"workspace 内"宽**，wrapper 把收口条件全部钉成 flag（不读 config，好让该档在每台机器上含义相同）：`/tmp` 与 `$TMPDIR` **默认就是可写根**、无需任何配置；宿主已有的 `writable_roots` 不会被只覆盖 `network_access` 的 `-c` 清掉（实测某机器上它是 `["/tmp","/var/log","~/.codex"]`，全程有效）；`allow` 规则能让匹配的命令**整个跑到沙箱外**，故一并 `--ignore-rules`——注意它关掉的是**整份 user/project `.rules`**（优先级 forbidden > prompt > allow），保护性的 `forbidden` 也一起没了。这个取舍的依据是两种损害的有界性不同：`allow` 逃逸无界（命令整个离开沙箱，该档形同虚设），而 `forbidden` 失效后命令仍被关在 workspace 里。**别指望宿主写的 forbidden 在这一档兜底**；但作用域也只到这里——admin / managed requirements 由别处强制，仍然生效。
@@ -187,6 +229,7 @@ flag 语义的单一来源是 `codeagent-wrapper --help`（artifact 自述），
 - **`workspace-write` 档内起不了嵌套 `codeagent-wrapper`**：artifact 在解析任务前就用 `os.TempDir()` 建日志，而两个临时目录排除项正好拒掉它，于是启动期即 `operation not permitted`。这是已知取舍不是缺陷——远端诊断委派按叶子节点用；失败是响的、发生在启动期，不会静默跑成半截。需要嵌套就别用这一档。
 - **`workspace-write` 限的是写、不是读**：`~/.ssh/config` 在该档下可读。它压的是本机改动面，不是读取面，更不是外泄面。`read-only` 更是连写带网一起拒，读同样放开。
 - **上表任何一行都不约束 ssh 过去的主机**。`read-only` 是本机连接就建不起来，谈不上远端。`workspace-write` 与"未设 + 默认"这两行连得上，远端一侧不受任何本机档位约束。"未设 + `CODEX_REQUIRE_APPROVAL=true`"那一行连不连得上要看 config，但两种结果都不改变本条：连不上就没有远端，连得上就同样没有 enforcement。OS 沙箱不跟随 ssh 连接；openai/codex#32919 独立报告了同一个不可组合性（"本地拒绝不该显得权威，如果相邻的一次调用能在别处照做同类操作"）。远端的 blast radius 只能靠该 ssh 账号自身权限与 prompt 里的只读纪律收口——**这条得随 prompt 下达**：本文件不会被自动继承（它**能**读，见「Nested delegation」那条更正），所以要么在 prompt 里写明，要么指明本节路径要它去读；两者都不做就等于没下达。
+- **起不了浏览器 / GUI 应用**——`read-only` 与 `workspace-write` 皆然（2026-08-22 实测，两档逐档探针）：这两档的 OS 沙箱（macOS 上即 Seatbelt）拒绝 `com.apple.coreservices.launchservicesd` 的 mach-lookup，完整版 Chrome（含 `--headless=new`）启动即在 `_RegisterApplication` SIGABRT，macOS 桌面每次都弹"意外退出"框——被委派方重试几次就弹几个，且它自己看不出这是沙箱问题。`~/.local/libexec/agent-shims/agent-browser` shim 会在启动 agent-browser / Chrome 之前拦下并指引报 blocked（exit 69；见 system-config 仓 docs/adr/20260822-6a8b）；但它只覆盖按 PATH 解析的裸 `agent-browser` 调用——绝对路径直呼 pnpm bin、或直接调用 Chrome 二进制的命令都不经它，同样受此崩溃形态约束。**可能用到浏览器 / GUI 应用（含 agent-browser）的委派**：用"未设 + 默认"档（无 OS 沙箱）派发，或把该操作留在主线程；被委派方回报该拦截时按它的指引重派——除 shim 指引自己认可的那条旁路（只连沙箱外既有 daemon 时按单次前缀放行）外，不要指示它绕过。
 - **档位只对 `--backend codex` 生效**，其余 backend 根本不读它；shim 现在会直接拒绝这种组合，因为"跑完了、但要的沙箱从未施加"在调用点上完全看不出来。同理，shim 在用该档前会问 artifact `--help` 确认它认识这个档位——旧 artifact 遇到不认识的值会 fail-open 成完全 bypass，而版本号不变、装机器无从发现。
 
 **注意这里的默认方向是反的**：不设 `CODEX_SANDBOX`、且 `CODEX_REQUIRE_APPROVAL` 保持默认，就落到无沙箱——最宽的那一档**由两个变量同时保持默认选中、不需要任何人授权**；而本文件另一处远比它窄的放松（force-`rm` 豁免）却要求先向用户说明代价并取得授权。收紧档位不需要授权、放开也不需要，这个不对称是现状而非设计——委派方自己判，别把"没设"读成"已经想过了"。

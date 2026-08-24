@@ -39,3 +39,11 @@ class RateLimits:
     seven_day_resets_at: Optional[float]
     model: str = ""
     updated_at: str = ""
+    # The plan the reading itself reports, when the provider states one inside
+    # the same object as the percentages. It is the only plan known to come from
+    # the same event as them — a plan read from a credential file is a separate
+    # fact on its own clock. Same event, not same observation: a percentage
+    # whose window has since reset is rewritten to zero while this keeps the
+    # value the event carried. Codex fills it; Claude's status file
+    # carries no plan, so it stays None there. See ADR 20260822-586a.
+    plan: Optional[str] = None

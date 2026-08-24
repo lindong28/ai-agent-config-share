@@ -1,7 +1,7 @@
 ---
 name: agent-browser
 description: Drive a real browser to act on web pages — navigate, read page structure, fill and submit forms, click through a multi-step flow, capture page screenshots, extract data, exercise a web app, or sign in to a site. Use when the task needs a real browser to operate on or inspect a rendered page or its browser state. Not when a plain HTTP fetch of the content would do, and not for system-level capture of the desktop, an application window, or the browser's own chrome — this skill captures rendered page content only.
-allowed-tools: Bash(npx agent-browser:*), Bash(agent-browser:*), Bash(mktemp:*), Bash(open:*)
+allowed-tools: Bash(npx agent-browser:*), Bash(agent-browser:*), Bash(mktemp:*), Bash(open:*), Bash(im-notify:*)
 ---
 
 # Browser Automation with agent-browser
@@ -51,26 +51,33 @@ file or `--session-name` when no human handoff is required.
 
 Visibility is an observed runtime state — not a launch flag, an exit-0 command,
 or a captured artifact. Rows 1–2 apply to every situation entering the Visible
-GUI Browser over CDP path; rows 3–4 apply only when a user will watch or operate
-the page. Pass rows 1–3 before the first page action that user is meant to see
-and before handing control over. Row 4 falls due once they hand control back.
+GUI Browser over CDP path; rows 3–4 apply whenever a human handoff is required —
+which includes the handoffs the user completes on another device, since row 3 is
+where that gets settled. Pass rows 1–3 before the first page action that user is
+meant to see and before handing control over. Row 4 falls due once they hand
+control back.
 
 | # | Evidence | Required state | Requires |
 |---|---|---|---|
 | 1 | Browser build is headed | `eval "navigator.userAgent"` on the controlled page returns a UA without `HeadlessChrome` — a headless build reports it even under `--headless=new` | — |
 | 2 | Controlled target | The active controlled tab is the one you selected as target and shows the target URL. Select it from `tab list`, switch by its `t<N>` id or label, and record the pair that identifies what you are driving: `get cdp-url` plus that tab id | 1 |
-| 3 | User confirmation | Bring that window and target tab to the foreground through the OS or host UI, then ask through this harness's user-question mechanism and wait for an affirmative answer. Presence, a prior browser request, or a one-way notification is not an answer | 1, 2 |
+| 3 | User confirmation | Read the page for the device the pending action needs, then take one branch. **On this screen** (a form to fill, a dialog to click): bring that window and target tab to the foreground through the OS or host UI. **On another device** — anything scanned is performed on the user's phone: capture the code by screenshotting the viewport and cropping to its rect from `eval`, since `screenshot <selector>` returns blank for the cross-origin iframe these logins render into, and send it per the `im-notify` skill; do not foreground, and do not require them to be here. Either branch then asks through this harness's user-question mechanism and waits for an affirmative answer about the act they were asked to perform — for a delivered artifact that is receiving and using it, not seeing this window. Presence, a prior browser request, a send receipt, or any one-way notification is not an answer | 1, 2 |
 | 4 | Post-handoff | `get cdp-url` and the active tab id still match what row 2 recorded, through the same `--session` and `--cdp`; then verify the task-relevant result | 3 |
 
 Rows 1–2 establish *which* browser is under control. Only row 3 establishes that
-a human can see it — a headed build proves the browser can draw a window, never
-that one is on screen in front of anybody. So rows 1–2 alone never clear this
-gate for a watching user, and a successful `--headed` command, a screenshot, or a
-DOM snapshot satisfies no row at all. Activity in another browser or profile does
-not satisfy the handoff. When a required row's evidence cannot be obtained — no
-connectable GUI browser, or no reachable user where rows 3–4 apply — take the
-unavailable-capability row of Browser Mode Selection: report `Blocked` when it
-gates the task, otherwise mark that behavior `uncovered`.
+a human actually took the action over — on this screen that means seeing this
+window, and a headed build proves the browser can draw a window, never that one
+is on screen in front of anybody; on another device it means the artifact
+reached them there. So rows 1–2 alone never clear this gate for a handoff, and a
+successful `--headed` command, a screenshot, or a DOM snapshot satisfies no row
+at all. Activity in another browser or profile does not satisfy the handoff.
+When a required row's evidence cannot be obtained — no connectable GUI browser,
+or no reachable user where rows 3–4 apply — take the unavailable-capability row
+of Browser Mode Selection: report `Blocked` when it gates the task, otherwise
+mark that behavior `uncovered`. Being away from this machine is not by itself an
+unreachable user when row 3 took the other-device branch; it *is* one when the
+action is bound to this screen and they are not at it, which is the ordinary
+`Blocked`.
 
 ### Visible GUI Browser over CDP
 
@@ -151,7 +158,7 @@ kill <N>                                              # terminate that pid — a
 
 Once the daemon is gone, reconnect via the Standard Connection Workflow above. Do not keep retrying commands against a stale daemon after the first unexplained stall — finish the reset first.
 
-Beyond `kill` for the termination step, the only other step that reaches outside this skill's own `allowed-tools` is the Playwright fallback below, which runs through the target project's own runner. Where `kill` is unavailable the reset stops at `doctor`; where neither the reset nor that fallback can proceed, an unresolved stall is `Blocked` when it gates the task and `uncovered` otherwise — do not guess at a process.
+Beyond `kill` for the termination step, the only other step that reaches outside this skill's own `allowed-tools` is the Playwright fallback below, which runs through the target project's own runner. (Row 3's other-device branch also inspects the capture it is about to send, which needs whatever image-reading tool the harness offers.) Where `kill` is unavailable the reset stops at `doctor`; where neither the reset nor that fallback can proceed, an unresolved stall is `Blocked` when it gates the task and `uncovered` otherwise — do not guess at a process.
 
 ### Fallback: the project's own Playwright for verification
 
@@ -424,9 +431,10 @@ agent-browser batch --bail "open https://example.com" "click @e1" "screenshot"
 Use a single command when you need to inspect its output before deciding the
 next action. A workflow on the Visible GUI Browser over CDP path must also stop
 outside `batch` at each row of the [Visible Browser Evidence
-Gate](#visible-browser-evidence-gate) — including row 3's confirmation when a
-user will watch or operate the page. After the decision or confirmation, batch
-only the remaining uninterrupted steps.
+Gate](#visible-browser-evidence-gate) — including each of row 3's steps: the
+device read, the capture inspection on its other-device branch, and the
+confirmation. After the decision or confirmation, batch only the remaining
+uninterrupted steps.
 
 Stdin mode is also supported for programmatic use:
 
@@ -518,7 +526,8 @@ agent-browser --session existing-cdp-<task-id> --cdp "<cdp-url>" snapshot -i
 
 Verify the browser identity before acting and the task-relevant result
 afterward. A remote browser does not satisfy human handoff unless the user can
-view and operate that same controlled page.
+perform the pending action — viewing and operating that same controlled page
+when the action is on it, receiving the delivered artifact when it is not.
 
 When only reusable authentication state is needed—not control of the existing
 browser—use [Reuse Chrome Dev Authentication via CDP Cookies](references/authentication.md#reuse-chrome-dev-authentication-via-cdp-cookies)

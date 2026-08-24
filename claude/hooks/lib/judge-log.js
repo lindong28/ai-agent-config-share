@@ -207,6 +207,14 @@ function tidy() {
 }
 
 /**
+ * Stop 族事件（`Stop` / `SubagentStop`）。`active` 标记与 countRunFlags 的回合概念都只对它们成立：
+ * 只有 Stop 族才有 `stop_hook_active`，PreToolUse 一类事件写这个键会让回合边界读出噪声。
+ */
+function isStopEvent(event) {
+  return typeof event === "string" && event.endsWith("Stop");
+}
+
+/**
  * 记一条裁决。`verdict` 的**基线取值**是 ok | flag | judge_unavailable | skipped，但取值域共享且可扩、
  * 本函数不校验——各闸按自己的出口自加值，新增前先看消费方归哪一档。权威说明在本文件顶部字段表的
  * `verdict` 条（勿只读本段：两处曾各说一套）。`reason` 只在 flag / skipped 及各闸自加的早退值上写进去
@@ -245,6 +253,18 @@ function logVerdict(gate, verdict, reason, input, meta) {
       verdict,
       ...(reason && (verdict === "flag" || verdict === "skipped")
         ? { reason: String(reason).slice(0, REASON_MAX) }
+        : {}),
+      // `active` 是**回合边界标记**，只对 Stop 族事件写：`false` 即"这一停不是任何 hook 造成的
+      // 继续"，也就是一个回合的第一停。countRunFlags() 靠它把"本回合"从历史里切出来——没有它，
+      // 回合边界不可考，而回合正是多闸累计量唯一有意义的作用域（跨回合累加会把上一件事的
+      // 拦截算进这一件）。
+      // 缺席它的有两类，**读回侧处置不同、别混为一谈**（权威描述在 countRunFlags 的头注）：
+      // 非 Stop 事件本就不写它，读回时 `continue`（跳过、不计数、**不形成边界**）；
+      // 本键上线前的旧 Stop 记录也没有它，读回时 `break`（停止回溯、不计数）。
+      // 两者共同的 fail-safe 方向是让计数**偏小**——最坏取 0 = 预算不生效 = 退回本机制上线前的
+      // 行为，而不是把四道闸一起关掉。
+      ...(isStopEvent(i.hook_event_name) && typeof i.stop_hook_active === "boolean"
+        ? { active: i.stop_hook_active }
         : {}),
       // 本次裁决经过判官才写 backend，而 model 仅在调用侧解析得到时才写——它的缺席是
       // "具体模型不可考"这一状态本身，不是遗漏。见文件头字段表。
@@ -394,4 +414,126 @@ function countVerdictsOfGate(gate, sessionId, agentId, verdict) {
   return n;
 }
 
-module.exports = { logVerdict, LOG_PATH, lastVerdictOfGate, countVerdictsOfGate };
+/**
+ * 本**回合**内所有闸累计 flag 了多少次（回合 = 从最近一次 `active === false` 的那一停起，到现在）。
+ *
+ * 与 countVerdictsOfGate 的分工：那个按**单闸 × 整个 session** 计数、且明写"不改变任何放行/阻断
+ * 判定"，是给放行路径加一句可见读数用的。本函数按**全部闸 × 单个回合**计数，且**参与判定**——
+ * 它是那条读数缺失的强制层。
+ *
+ * 存在的理由是一次实测的**不收敛**（session 459049d8，2026-08-23T02:37→02:44）：stop-gate 与
+ * reverse-assertion-gate 交替开火 8 次，靠用户中断才停。两闸各自的逃生口都在正常工作——
+ * 各自的 `lastVerdictOfGate(...) === "flag"` 判断都对——但它们的跳过窗口**差一拍**：
+ *
+ *   停1: A 判→flag,      B 判→ok
+ *   停2: A prev=flag→skip, B prev=ok →"别的闸拦的"→ 判→flag
+ *   停3: A prev=skipped →"别的闸拦的"→ 判→flag,  B prev=flag→skip
+ *   停4: A prev=flag→skip, B prev=skipped→判→flag …
+ *
+ * 于是「原样再停一次即放行」这个逃生口在 ≥2 个闸同时不满意时**可证地够不着**，且与内容改没改
+ * 无关——字节完全相同也会这样，因为每个闸读的是**自己**的上一条裁决，而被另一个闸拦下的那一停
+ * 会把自己的记录刷成 skipped，等于替对方重新上膛。单闸看不见这个循环：它需要跨闸的累计量。
+ *
+ * 回合边界靠 `active === false` 切，而**三类记录各走各的路，别混为一谈**（上一轮 review 实测这段
+ * 注释与实现相反，LOW）：**非 Stop 事件** → `continue`，跳过、不计数、**不形成边界**（PreToolUse 闸
+ * 的 flag 与"这一回合被拦了几次"无关，但它夹在回合中间也不该把回合切断）；**`active` 非布尔**
+ * （本键上线前的旧记录、异常写入）→ `break` 且不计数；**`active === false`** → 计入后置
+ * `pastBoundary`，收完同停 sibling 再停。
+ * fail-safe 方向统一是**让计数偏小**：最坏取 0 = 预算不生效 = 退回本机制上线前的行为，
+ * 而不是把四道闸一起关掉。
+ *
+ * 边界那一停自己的 flag **计入本回合**（它就是本回合的第一停），所以要把该停的整组记录收完再停，
+ * 而不是见到第一条 `active === false` 就 break——同一停有 5 个闸各写一条，见一条就断会漏掉
+ * 同停 sibling 的 flag。
+ */
+function countRunFlags(sessionId, agentId) {
+  if (!sessionId) return 0;
+  const wantAgent = agentId || null;
+  // 与 countVerdictsOfGate 同样必须连归档一起读：跨越 tidy() 轮转的回合只读活分片会骤降甚至归零，
+  // 而"回合很长"恰恰是本函数要报的那种情形。
+  // **归档在前、活日志在后**：本函数从**尾部**回溯，而最新的记录在活日志里。反过来拼会让回溯从
+  // 最老的那代归档的末尾开始——轮转发生后读到的是几天前的回合，且外部表现完全正常。
+  const parts = [...listArchives(), LOG_PATH];
+  let raw = "";
+  let readAny = false;
+  for (const part of parts) {
+    try {
+      raw += fs.readFileSync(part, "utf8");
+      readAny = true;
+    } catch {
+      /* 缺一片只影响更早的回合，当前回合仍在活日志里 */
+    }
+  }
+  if (!readAny) return 0;
+  const lines = raw.split("\n");
+  let n = 0;
+  let pastBoundary = false;
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const t = lines[i].trim();
+    if (!t) continue;
+    let rec;
+    try {
+      rec = JSON.parse(t);
+    } catch {
+      continue; // 半行 / 损坏行跳过，与 lastVerdictOfGate 同一处置
+    }
+    if (!rec || rec.session_id !== sessionId || (rec.agent_id || null) !== wantAgent) continue;
+    // **非 Stop 族一律跳过、不计数**：`active` 只对 Stop 族有意义，而 PreToolUse 一类闸
+    // （permission-gate / ask-recommend-gate）的 flag 与"这一回合被拦了几次"无关。把它们算进来，
+    // 会让一次工具层拦截去消耗 Stop 层的预算。
+    if (!isStopEvent(rec.event)) continue;
+    // **`active` 不是布尔即停止回溯，且不计入**。这是本函数的 fail-safe 方向：本键上线前的历史
+    // 记录全都没有它（实测本机 16981 条里仅 81 条有），若把它们当边界并继续计数，任何一个历史
+    // flag 多的 session 一进 stop_hook_active 就会判为预算耗尽，**四道闸同时 fail-open**——那正是
+    // 本机制要防的事故的反面。读不出边界时返回偏小的计数（最坏是 0 = 不拦），
+    // 让预算不生效、退回改动前的行为，而不是把闸全关掉。
+    if (typeof rec.active !== "boolean") break;
+    // 到达边界停之前的那一停 → 已经跨回上一个回合，停。
+    if (pastBoundary && rec.active === true) break;
+    if (rec.verdict === "flag") n++;
+    // 边界停（本回合第一停）自己的 flag 计入；同停 sibling 是连续的 active===false，继续收完。
+    if (rec.active === false) pastBoundary = true;
+  }
+  return n;
+}
+
+/**
+ * 回合级 block 预算：本回合所有闸累计 flag 达到它，全部闸 fail-open。
+ *
+ * 取值 3 的依据是**实测的合法上界**：同一 session 里正常收敛的那几个回合（15:18–15:43）每回合
+ * 最多 2 次 flag（一次 prose-choice + 一次 stop-gate / continuation），改一次就过；而不收敛的
+ * 那个回合（02:37–02:44）在 3 次时已经确定进入 2-周期。所以 3 放过全部已观测的正常回合，
+ * 只截住循环。**它是止损阀不是判据**——触发即说明多闸没能在 3 次内让 agent 收敛，此时继续拦
+ * 的边际收益已经为负（实测第 4~8 次拦截没有产生任何新信息，只是重复前两条）。
+ *
+ * 可用 `JUDGE_RUN_BLOCK_BUDGET` 覆盖；设 0 或负数关闭本机制（回到旧行为，用于对照实验）。
+ */
+const RUN_BLOCK_BUDGET = (() => {
+  const raw = process.env.JUDGE_RUN_BLOCK_BUDGET;
+  if (raw === undefined || raw === "") return 3;
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : 3;
+})();
+
+/**
+ * 本回合是否已用尽 block 预算。用尽返回一句给日志的理由，否则返回 null。
+ *
+ * 四个闸共用它而不是各抄一份：预算值与判据只有一处，四处副本会分叉，而分叉的表现是
+ * "某个闸仍在拦"——恰好与本机制要修的 bug 同形，且同样只在多闸并联时才看得出来。
+ */
+function runBudgetExhausted(sessionId, agentId) {
+  if (!(RUN_BLOCK_BUDGET > 0)) return null;
+  const n = countRunFlags(sessionId, agentId);
+  if (n < RUN_BLOCK_BUDGET) return null;
+  return `本回合各闸累计 flag ${n} 次（预算 ${RUN_BLOCK_BUDGET}），fail-open 防多闸交替阻断`;
+}
+
+module.exports = {
+  logVerdict,
+  LOG_PATH,
+  lastVerdictOfGate,
+  countVerdictsOfGate,
+  countRunFlags,
+  runBudgetExhausted,
+  RUN_BLOCK_BUDGET,
+};

@@ -49,7 +49,7 @@
 ```markdown
 # Architecture Decision Records
 
-> 每条决策独立文件，编号递增。Status: accepted / superseded / deprecated.
+> 每条决策独立文件，文件名 `<YYYYMMDD>-<4 位随机后缀>-<slug>.md`（不用递增序号，理由见 `docs-organization-protocol.md` §4.4 的「编号」段）。Status: accepted / superseded / deprecated.
 
 | # | Title | Status | Date |
 |---|---|---|---|

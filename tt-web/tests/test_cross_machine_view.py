@@ -19,11 +19,31 @@ import exporter
 import rollup
 import server
 import sync
-from machine_config import Machine, machine_config_fingerprint
+from machine_config import Machine, MachineConfig, machine_config_fingerprint
 from parsers import UsageEntry
 
 
+_ACCOUNT_MEMORY_TEMP = None
+_ACCOUNT_MEMORY_PATCHER = None
+
+
+def setUpModule():
+    global _ACCOUNT_MEMORY_TEMP, _ACCOUNT_MEMORY_PATCHER
+    _ACCOUNT_MEMORY_TEMP = tempfile.TemporaryDirectory()
+    memory_path = Path(_ACCOUNT_MEMORY_TEMP.name) / "account_memory.json"
+    _ACCOUNT_MEMORY_PATCHER = mock.patch("server._ACCOUNT_MEMORY_PATH", memory_path)
+    _ACCOUNT_MEMORY_PATCHER.start()
+
+
+def tearDownModule():
+    _ACCOUNT_MEMORY_PATCHER.stop()
+    _ACCOUNT_MEMORY_TEMP.cleanup()
+
+
 class CrossMachineOverviewTests(unittest.TestCase):
+    def setUp(self):
+        server._ACCOUNT_MEMORY_PATH.unlink(missing_ok=True)
+
     def test_iv11_overview_usage_fields_are_all_computed_from_rollup(self):
         def pivot(x_dim, group_dim, metric, **_kwargs):
             if x_dim == "agent" and metric == "cost":
@@ -75,7 +95,13 @@ class CrossMachineOverviewTests(unittest.TestCase):
             ),
             mock.patch("server._maybe_sync_remotes", return_value=False),
             mock.patch("server._sync_status", return_value=sync_status),
-            mock.patch("server._rate_limits", return_value={"claude": {}, "codex": {}}),
+            mock.patch(
+                "server._rate_limits",
+                return_value={
+                    "claude": {"accounts": [], "unavailable_reason": None},
+                    "codex": {"accounts": [], "unavailable_reason": None},
+                },
+            ),
             mock.patch(
                 "server.generation.generation_admission_snapshot",
                 return_value=contextlib.nullcontext(
@@ -106,27 +132,35 @@ class CrossMachineOverviewTests(unittest.TestCase):
         self.assertEqual(payload["sync"]["coverage"], sync_status["coverage"])
         self.assertFalse(payload["sync"]["refresh_pending"])
 
-    def test_iv8_rate_limits_choose_latest_admitted_generation_per_provider(self):
+    def test_iv8_quota_groups_by_account_not_by_freshest_machine(self):
+        """The shape this pins is the difference between the two real cases.
+
+        Three machines on one Claude account report one counter three times, so
+        the freshest of them is the answer and the other two are stale copies.
+        Two Codex accounts are independent pools, so picking the freshest across
+        them shows one and hides the other — that was the reported bug, where a
+        second machine's 89% stood in for this machine's 1%.
+        """
         admitted = (
             self.current(
                 "macbook",
                 {
-                    "claude": self.limit("2026-08-04T10:00:00Z", 10),
-                    "codex": self.limit("2026-08-04T12:00:00Z", 30),
+                    "claude": self.limit("2026-08-04T10:00:00Z", 10, "claude-A"),
+                    "codex": self.limit("2026-08-04T12:00:00Z", 30, "codex-X"),
                 },
             ),
             self.current(
                 "macmini",
                 {
-                    "claude": self.limit("2026-08-04T11:00:00Z", 20),
-                    "codex": self.limit("2026-08-04T09:00:00Z", 40),
+                    "claude": self.limit("2026-08-04T11:00:00Z", 20, "claude-A"),
+                    "codex": self.limit("2026-08-04T09:00:00Z", 40, "codex-Y"),
                 },
             ),
             self.current(
                 "gpu-box",
                 {
-                    "claude": self.limit("2026-08-04T10:30:00Z", 99),
-                    "codex": self.limit("2026-08-04T13:00:00Z", 50),
+                    "claude": self.limit("2026-08-04T10:30:00Z", 99, "claude-A"),
+                    "codex": self.limit("2026-08-04T13:00:00Z", 50, "codex-Y"),
                 },
             ),
         )
@@ -143,12 +177,144 @@ class CrossMachineOverviewTests(unittest.TestCase):
         ):
             limits = server._rate_limits()
 
-        self.assertEqual(limits["claude"]["five_hour_pct"], 20)
-        self.assertEqual(limits["claude"]["source_machine"], "macmini")
-        self.assertEqual(limits["codex"]["five_hour_pct"], 50)
-        self.assertEqual(limits["codex"]["source_machine"], "gpu-box")
-        self.assertNotEqual(limits["claude"]["five_hour_pct"], 10 + 20 + 99)
-        self.assertNotEqual(limits["codex"]["five_hour_pct"], 30 + 40 + 50)
+        claude = limits["claude"]["accounts"]
+        self.assertEqual(len(claude), 1)
+        self.assertEqual(claude[0]["account_id"], "claude-A")
+        self.assertEqual(claude[0]["five_hour_used_pct"], 20)
+        self.assertEqual(claude[0]["machines"], ["gpu-box", "macbook", "macmini"])
+        self.assertNotEqual(claude[0]["five_hour_used_pct"], 10 + 20 + 99)
+
+        codex = {entry["account_id"]: entry for entry in limits["codex"]["accounts"]}
+        self.assertEqual(set(codex), {"codex-X", "codex-Y"})
+        self.assertEqual(codex["codex-X"]["five_hour_used_pct"], 30)
+        self.assertEqual(codex["codex-X"]["machines"], ["macbook"])
+        self.assertEqual(codex["codex-Y"]["five_hour_used_pct"], 50)
+        self.assertEqual(codex["codex-Y"]["machines"], ["gpu-box", "macmini"])
+        for entry in limits["codex"]["accounts"]:
+            self.assertNotEqual(entry["five_hour_used_pct"], 30 + 40 + 50)
+
+    def test_iv8_unstamped_readings_do_not_merge_across_machines(self):
+        """Two machines whose exporters predate account stamping are two
+        unknowns, not one shared account — merging them would rebuild the very
+        collapse this grouping exists to undo."""
+        blocks = []
+        for updated_at, pct in (("2026-08-04T09:00:00Z", 40), ("2026-08-04T13:00:00Z", 50)):
+            block = self.limit(updated_at, pct, None)
+            del block["account_id"]  # what an exporter predating the stamp emits
+            blocks.append(block)
+        admitted = (
+            self.current("macmini", {"codex": blocks[0]}),
+            self.current("gpu-box", {"codex": blocks[1]}),
+        )
+        admission = SimpleNamespace(admitted=admitted, records=())
+
+        limits = server._rate_limits(admission=admission)
+
+        entries = limits["codex"]["accounts"]
+        self.assertEqual(len(entries), 2)
+        self.assertEqual(
+            sorted(entry["machines"][0] for entry in entries), ["gpu-box", "macmini"]
+        )
+        self.assertTrue(all(entry["account_state"] == "unstamped" for entry in entries))
+
+    def test_iv8_signed_out_is_told_apart_from_an_exporter_that_cannot_stamp(self):
+        """Both leave no account, but only one is fixed by updating that machine.
+        Telling a current machine to update itself sends the reader after a
+        problem they do not have."""
+        signed_out = self.limit("2026-08-04T09:00:00Z", 40, None)
+        unstamped = self.limit("2026-08-04T10:00:00Z", 50, None)
+        del unstamped["account_id"]
+        admission = SimpleNamespace(
+            admitted=(
+                self.current("macmini", {"codex": signed_out}),
+                self.current("gpu-box", {"codex": unstamped}),
+            ),
+            records=(),
+        )
+
+        limits = server._rate_limits(admission=admission)
+
+        states = {
+            entry["machines"][0]: entry["account_state"]
+            for entry in limits["codex"]["accounts"]
+        }
+        self.assertEqual(states, {"macmini": "signed_out", "gpu-box": "unstamped"})
+
+    def test_iv8_the_row_names_which_machine_the_reader_is_sitting_at(self):
+        """Three e-mail addresses do not tell the reader which account the
+        session in front of them is spending; a marked machine name does."""
+        admitted = (
+            self.current("macbook", {"codex": self.limit("2026-08-04T10:00:00Z", 10, "A")}),
+            self.current("macmini", {"codex": self.limit("2026-08-04T09:00:00Z", 40, "B")}),
+        )
+        admission = SimpleNamespace(
+            admitted=admitted,
+            records=(),
+            config=MachineConfig(
+                machines=(Machine("macmini", "macmini", False), Machine("macbook", "macbook", True)),
+                retired_names=frozenset(),
+            ),
+        )
+
+        limits = server._rate_limits(admission=admission)
+
+        marks = {e["account_id"]: e["this_machine"] for e in limits["codex"]["accounts"]}
+        self.assertEqual(marks, {"A": "macbook", "B": None})
+
+    def test_iv8_no_self_machine_declared_marks_nothing(self):
+        """Absent config must leave the mark empty rather than guessing at the
+        first machine — a wrong 'this machine' is worse than none."""
+        admission = SimpleNamespace(
+            admitted=(self.current("macmini", {"codex": self.limit("2026-08-04T09:00:00Z", 40)}),),
+            records=(),
+        )
+
+        limits = server._rate_limits(admission=admission)
+
+        self.assertIsNone(limits["codex"]["accounts"][0]["this_machine"])
+
+    def test_iv8_one_malformed_block_costs_only_its_own_row(self):
+        """`rate_limits` is validated only as "an object" — nothing checks what
+        is inside. A machine publishing a bad field must not take down the
+        Overview payload it travels in, which carries cost and charts too."""
+        broken = self.limit("2026-08-04T09:00:00Z", 40)
+        broken["account_id"] = {"unhashable": True}
+        good = self.limit("2026-08-04T10:00:00Z", 50, "codex-Y")
+        admission = SimpleNamespace(
+            admitted=(
+                self.current("macmini", {"codex": broken}),
+                self.current("gpu-box", {"codex": good}),
+            ),
+            records=(),
+        )
+
+        limits = server._rate_limits(admission=admission)
+
+        entries = {entry["machines"][0]: entry for entry in limits["codex"]["accounts"]}
+        self.assertEqual(entries["gpu-box"]["account_id"], "codex-Y")
+        self.assertIsNone(entries["macmini"]["account_id"])
+        self.assertEqual(entries["macmini"]["five_hour_used_pct"], 40)
+
+    def test_iv8_a_naive_timestamp_on_one_machine_does_not_break_the_others(self):
+        """Codex rollouts carry tz-naive timestamps and Claude's are aware;
+        `tests/test_codex_rate_limits.py` pins that both occur. Comparing one of
+        each raises, and both comparisons here span machines."""
+        naive = self.limit("2026-08-04T09:00:00", 40, "codex-X")
+        aware = self.limit("2026-08-04T10:00:00Z", 50, "codex-Y")
+        admission = SimpleNamespace(
+            admitted=(
+                self.current("macmini", {"codex": naive}),
+                self.current("gpu-box", {"codex": aware}),
+            ),
+            records=(),
+        )
+
+        limits = server._rate_limits(admission=admission)
+
+        self.assertEqual(
+            [entry["account_id"] for entry in limits["codex"]["accounts"]],
+            ["codex-Y", "codex-X"],
+        )
 
     def test_iv8_legacy_generation_quota_unavailability_names_latest_sync_failure(self):
         admission = SimpleNamespace(
@@ -179,7 +345,7 @@ class CrossMachineOverviewTests(unittest.TestCase):
             "macmini: remote export returned non-zero exit status 2."
         )
         self.assertEqual(limits["claude"]["unavailable_reason"], expected)
-        self.assertIsNone(limits["claude"]["five_hour_pct"])
+        self.assertEqual(limits["claude"]["accounts"], [])
 
     def test_iv8_unknown_contact_is_not_misreported_as_latest_sync_failure(self):
         admission = SimpleNamespace(admitted=(self.current("macbook", {}),), records=())
@@ -203,13 +369,16 @@ class CrossMachineOverviewTests(unittest.TestCase):
         return SimpleNamespace(host=name, meta={"rate_limits": rate_limits})
 
     @staticmethod
-    def limit(updated_at, pct):
+    def limit(updated_at, pct, account_id="acct"):
         return {
             "five_hour_pct": pct,
             "five_hour_resets_at": 1,
             "seven_day_pct": pct + 1,
             "seven_day_resets_at": 2,
             "updated_at": updated_at,
+            "account_id": account_id,
+            "account_label": f"{account_id}@example.com" if account_id else None,
+            "account_plan": None,
         }
 
 
@@ -966,9 +1135,13 @@ class AdmissionStatusTests(unittest.TestCase):
                 self.assertFalse(excluded["admitted"])
                 self.assertIsNone(excluded["availability"])
                 self.assertEqual(excluded["exclusion_reason"], expected_reason)
-                self.assertEqual(limits["claude"]["five_hour_pct"], 30)
-                self.assertEqual(limits["claude"]["source_machine"], "gpu-box")
-                self.assertNotEqual(limits["claude"]["five_hour_pct"], 20)
+                quota = limits["claude"]["accounts"]
+                self.assertEqual(len(quota), 1)
+                self.assertEqual(quota[0]["five_hour_used_pct"], 30)
+                self.assertEqual(quota[0]["machines"], ["gpu-box", "macbook"])
+                # The excluded machine contributes neither its value nor its name.
+                self.assertNotEqual(quota[0]["five_hour_used_pct"], 20)
+                self.assertNotIn("macmini", quota[0]["machines"])
 
     def install_wrong_fingerprint(self, root, machine):
         self.publish(root, machine, fingerprint="f" * 64)
@@ -1045,6 +1218,11 @@ class AdmissionStatusTests(unittest.TestCase):
                     "seven_day_pct": quota_pct + 1,
                     "seven_day_resets_at": 2,
                     "updated_at": quota_updated_at,
+                    # One Claude account across the fleet, as in the real setup:
+                    # the machines differ, the counter they report does not.
+                    "account_id": "claude-acct",
+                    "account_label": "fleet@example.com",
+                    "account_plan": None,
                 }
             },
             exporter_commit="a" * 40,
@@ -1218,6 +1396,176 @@ class AdmissionStatusTests(unittest.TestCase):
 
 
 class FrontendStatusRenderTests(unittest.TestCase):
+    def test_sessions_latest_request_wins_and_invalid_rows_render_error(self):
+        script = r'''
+const fs = require("fs");
+
+function makeNode(overrides = {}) {
+  const node = {
+    value: "", textContent: "", disabled: false, className: "", dataset: {},
+    attributes: {}, children: [], listeners: {}, options: [{ textContent: "All" }],
+    style: { setProperty() {} },
+    addEventListener(name, callback) { this.listeners[name] = callback; },
+    appendChild(child) { this.children.push(child); return child; },
+    setAttribute(name, value) { this.attributes[name] = String(value); },
+    getAttribute(name) { return this.attributes[name] || null; },
+    querySelector(selector) {
+      return selector === "thead" ? { getBoundingClientRect() { return { height: 32 }; } } : null;
+    },
+  };
+  let html = "";
+  Object.defineProperty(node, "innerHTML", {
+    get() { return html; },
+    set(value) { html = String(value); this.children = []; },
+  });
+  return Object.assign(node, overrides);
+}
+
+const nodes = {
+  "#range": makeNode({ value: "30d" }),
+  "#sort": makeNode({ value: "time" }),
+  "#filter-agent": makeNode(),
+  "#filter-project": makeNode(),
+  "#filter-model": makeNode(),
+  "#page-prev": makeNode(),
+  "#page-next": makeNode(),
+  "#page-status": makeNode(),
+  "#session-count": makeNode(),
+  "#refresh": makeNode({ textContent: "Refresh" }),
+  "#sessions-body": makeNode(),
+  ".table-wrap.sticky-head": makeNode(),
+};
+
+global.window = {
+  location: { origin: "http://example.test", pathname: "/sessions", search: "?range=30d" },
+  history: { replaceState() {} },
+};
+global.document = {
+  readyState: "loading",
+  addEventListener() {},
+  querySelector(selector) { return nodes[selector] || null; },
+  querySelectorAll() { return []; },
+  createElement() { return makeNode(); },
+  createTextNode(text) { return { textContent: text }; },
+};
+
+const pending = [];
+global.fetch = (url) => {
+  const path = new URL(String(url), window.location.origin).pathname;
+  if (path === "/api/timezone") {
+    return Promise.resolve({ ok: true, json: () => Promise.resolve({ timezone: "UTC" }) });
+  }
+  if (path === "/api/sessions") {
+    return new Promise((resolve, reject) => pending.push({ resolve, reject }));
+  }
+  throw new Error(path);
+};
+
+function response(payload) {
+  return { ok: true, statusText: "", json: () => Promise.resolve(payload) };
+}
+function session(id, project) {
+  return {
+    session_id: id, agent_id: "codex", project, model: "gpt-5",
+    started_at: "2026-08-19T01:00:00Z", tokens: 10, messages: 2,
+    cost_usd: null, estimated: false,
+  };
+}
+function flush() {
+  return new Promise((resolve) => setImmediate(resolve));
+}
+function state() {
+  const row = nodes["#sessions-body"].children[0];
+  return row && row.dataset ? row.dataset.sessionState || null : null;
+}
+
+eval(fs.readFileSync("web/app.js", "utf8"));
+(async () => {
+  const firstLoad = window.TTWeb.initSessions();
+  await flush();
+  nodes["#range"].value = "7d";
+  nodes["#range"].listeners.change();
+  await flush();
+
+  pending[1].resolve(response([session("new", "/new-project")]));
+  await flush();
+  await flush();
+  const afterNew = {
+    state: state(), count: nodes["#session-count"].textContent,
+    filterDisabled: nodes["#filter-agent"].disabled,
+    rowHtml: nodes["#sessions-body"].children.find((row) => row.className === "session-row")?.innerHTML || "",
+  };
+
+  pending[0].resolve(response([session("old", "/old-project")]));
+  await firstLoad;
+  await flush();
+  const afterLateSuccess = {
+    state: state(), count: nodes["#session-count"].textContent,
+    filterDisabled: nodes["#filter-agent"].disabled,
+    rowHtml: nodes["#sessions-body"].children.find((row) => row.className === "session-row")?.innerHTML || "",
+  };
+
+  nodes["#refresh"].listeners.click();
+  await flush();
+  nodes["#range"].value = "30d";
+  nodes["#range"].listeners.change();
+  await flush();
+  pending[3].resolve(response([session("newer", "/newer-project")]));
+  await flush();
+  await flush();
+  const afterNewer = {
+    state: state(), count: nodes["#session-count"].textContent,
+    filterDisabled: nodes["#filter-agent"].disabled,
+    rowHtml: nodes["#sessions-body"].children.find((row) => row.className === "session-row")?.innerHTML || "",
+  };
+  pending[2].reject(new Error("late failure"));
+  await flush();
+  const afterLateFailure = {
+    state: state(), count: nodes["#session-count"].textContent,
+    filterDisabled: nodes["#filter-agent"].disabled,
+    rowHtml: nodes["#sessions-body"].children.find((row) => row.className === "session-row")?.innerHTML || "",
+  };
+
+  nodes["#sort"].listeners.change();
+  await flush();
+  const loadingBeforeFilter = state();
+  nodes["#filter-agent"].value = "claude-code";
+  nodes["#filter-agent"].listeners.change();
+  const loadingAfterFilter = state();
+  pending[4].resolve(response([null]));
+  await flush();
+  await flush();
+  const afterInvalid = {
+    state: state(), status: nodes["#page-status"].textContent,
+    filterDisabled: nodes["#filter-agent"].disabled,
+  };
+
+  process.stdout.write(JSON.stringify({
+    afterNew, afterLateSuccess, afterNewer, afterLateFailure, loadingBeforeFilter, loadingAfterFilter, afterInvalid,
+  }));
+})().catch((error) => { console.error(error); process.exit(1); });
+'''
+        result = subprocess.run(
+            ["node", "-e", script],
+            cwd=Path(__file__).resolve().parents[1],
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["afterNew"]["state"], None)
+        self.assertEqual(payload["afterNew"]["count"], "1 sessions")
+        self.assertFalse(payload["afterNew"]["filterDisabled"])
+        self.assertIn("/new-project", payload["afterNew"]["rowHtml"])
+        self.assertEqual(payload["afterLateSuccess"], payload["afterNew"])
+        self.assertIn("/newer-project", payload["afterNewer"]["rowHtml"])
+        self.assertEqual(payload["afterLateFailure"], payload["afterNewer"])
+        self.assertEqual(payload["loadingBeforeFilter"], "loading")
+        self.assertEqual(payload["loadingAfterFilter"], "loading")
+        self.assertEqual(payload["afterInvalid"]["state"], "error")
+        self.assertIn("invalid rows", payload["afterInvalid"]["status"])
+        self.assertTrue(payload["afterInvalid"]["filterDisabled"])
+
     def test_g4_idle_page_adopts_unknown_after_same_version_server_restart(self):
         script = r'''
 const fs = require("fs");

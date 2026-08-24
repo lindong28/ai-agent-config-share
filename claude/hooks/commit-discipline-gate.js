@@ -49,7 +49,7 @@ const fs = require('fs');
 const path = require('path');
 const { execFileSync } = require('child_process');
 // 解析住在共享模块：commit 相关的闸不止一道，两份实现迟早分歧（harness-issues H-006）。
-const { extractMessages, isCommitCommand, commitCwds, envDeclared, envDeclaredPerCommit } = require('./lib/git-commit-parse');
+const { extractMessages, isCommitCommand, commitCwds, envDeclared, envDeclaredPerCommit, envDeclaredHere, stripWithQuoted, segmentsOf, dequote } = require('./lib/git-commit-parse');
 const { knowledgeReadPaths, codexToolCommand } = require('./lib/codex-shell-read');
 
 const SUBJECT_MAX = 72;
@@ -62,6 +62,58 @@ const TAIL_BYTES_MAX = 64 * 1024 * 1024;
 const RECENT_WINDOW = 40;
 
 /**
+ * 展开到整仓（或整个 cwd 子树）的 pathspec。
+ *
+ * 必须先剥 **magic 前缀**再判：`:(top)` 与 `:/` 在 git 里是同义词，`:(glob)**` 与 `.`
+ * 等效——只认字面量的版本会拦掉一个、放过另一个，而两者 stage 出的文件集完全相同。
+ * `..` 同理（从子目录 add 上一级 = 整仓）。`--pathspec-from-file` 的宽度静态判不出来，
+ * 一律按宽处理。
+ */
+function isBroadPathspec(t) {
+  if (/^--pathspec-from-file(=|$)/.test(t)) return true;
+  const bare = t.replace(/^:(\([^)]*\)|[/!^]*)/, '');
+  return bare === '' || /^(\.{1,2}\/*|\*{1,2}|\/)$/.test(bare);
+}
+
+/**
+ * 扫全部改动的 flag：`-A` / `--all` / `-u` / `--update` / `--no-ignore-removal`，
+ * 以及把它们藏在成簇短参里的写法（`-Av`、`-vA`、`-Ap`、`-vu`）。
+ * 用正则而不是穷举列表——穷举漏掉过 `-vA`，而漏掉的每一种都与被拦的那种等效。
+ */
+function isBroadFlag(t) {
+  if (t === '--all' || t === '--update' || t === '--no-ignore-removal') return true;
+  return /^-[a-zA-Z]*[Au]/.test(t);
+}
+
+/**
+ * 分词走 `lib/git-commit-parse` 的同一条链（剥 heredoc 正文、引号内文本、接回行继续符），
+ * 而不是自己 `split`。自己 split 会同时犯两个方向的错，该 lib 都已经修过一遍：
+ * 漏拦 `git add \`+换行+`-A`（换行被当成分隔符），误拦 `git commit -m "…提到 -A…"`
+ * （message 正文被当成参数）。
+ *
+ * 关键在于 lib 把**整串引号内容折成一个 token**：`-m "docs: -all option"` 剥完是一个
+ * 不以 `-` 开头的 token，而 `git add "."` dequote 回来正好还是 `.`。两个方向同时对。
+ */
+function scanGitSegments(command, verb, hit) {
+  const { text, quoted } = stripWithQuoted(command);
+  // 原文本就含内部占位符时 lib 交不出 quoted。此时退回朴素分词：宁可误报（会被发现），
+  // 不可漏拦（不会被发现）。
+  const segs = quoted
+    ? segmentsOf(text)
+    : String(command).split(/[;&|\n]+/).map((s) => ({ toks: s.trim().split(/\s+/).filter(Boolean) }));
+  for (const { toks } of segs) {
+    const gi = toks.findIndex((t) => t === 'git' || t.endsWith('/git'));
+    if (gi < 0) continue;
+    const vi = toks.indexOf(verb, gi);
+    if (vi < 0) continue;
+    const rest = toks.slice(vi + 1).map((t) => (quoted ? dequote(t, quoted) : t)).filter((t) => t !== null);
+    const found = hit(rest);
+    if (found) return found;
+  }
+  return null;
+}
+
+/**
  * `git add -A` / `git add .` —— skill 明令禁止，且**不限于**与 commit 同一条命令：
  * 它常常单独发一次，随后才 commit。所以这条按"任何 Bash 命令"判，不挂在 commit 上。
  *
@@ -70,22 +122,43 @@ const RECENT_WINDOW = 40;
  * 读完"另一个 agent 抱怨我干过这事"的记录之后。
  */
 function findBroadAdd(command) {
-  // 逐段判，避免把 `git add -- ./x` 这类合法写法误伤。
-  for (const seg of String(command).split(/[;&|\n]+/)) {
-    const toks = seg.trim().split(/\s+/).filter(Boolean);
-    const gi = toks.findIndex((t) => t === 'git' || t.endsWith('/git'));
-    if (gi < 0) continue;
-    const ai = toks.indexOf('add', gi);
-    if (ai < 0) continue;
-    for (let k = ai + 1; k < toks.length; k++) {
-      const t = toks[k];
-      if (t === '--') break; // `--` 之后是路径，`.` 在那里是显式路径、不是通配
-      if (t === '-A' || t === '--all' || t === '.' || t === '-Av' || t === '--no-ignore-removal') {
-        return t;
-      }
+  return scanGitSegments(command, 'add', (rest) => {
+    let afterDashDash = false;
+    for (const t of rest) {
+      // `--` 之后一律是路径，所以那里不再判 flag——但 `.` / `:/` 在那里照样是整仓展开，
+      // 而不是"显式路径"。这个区分正是旧版整段 break 掉、于是 `git add -- .` 全程过闸的原因。
+      if (t === '--') { afterDashDash = true; continue; }
+      if (isBroadPathspec(t)) return t;
+      if (!afterDashDash && isBroadFlag(t)) return t;
     }
-  }
-  return null;
+    return null;
+  });
+}
+
+/**
+ * `git commit -a` / `-am` 与 `git add -A` 后果相同——把全部已跟踪改动一次带走——
+ * 却完全不经过上面那道闸，因为它根本不含 `add`。
+ */
+function findBroadCommit(command) {
+  return scanGitSegments(command, 'commit', (rest) => {
+    let scoping = false; // 上一个 token 是 --only / --include，于是这个 token 是它的 pathspec
+    let afterDashDash = false;
+    for (const t of rest) {
+      if (t === '--') { afterDashDash = true; scoping = false; continue; }
+      if (scoping || afterDashDash) {
+        // `--only .` 与 `git add -A` 后果完全相同，而它**字面满足** skill 要求的
+        // `git commit --only <路径>`——这条缝是被 skill 自己的措辞引出来的。
+        if (isBroadPathspec(t)) return t;
+        scoping = false;
+        continue;
+      }
+      if (/^(--only|--include)(=|$)/.test(t) || t === '-o' || t === '-i') { scoping = true; continue; }
+      if (t === '--all') return t;
+      // 成簇短参里的 `a`：`-am` / `-avm`。排除 `--author` 这类长参。
+      if (/^-[a-zA-Z]*a/.test(t) && !t.startsWith('--')) return t;
+    }
+    return null;
+  });
 }
 
 /** 仓库根；拿不到返回 null（不下结论）。 */
@@ -113,6 +186,151 @@ function userVisibleChangelog(root) {
   } catch {
     return null;
   }
+}
+
+/**
+ * 这次 commit 会包含哪些路径——**判不准就说判不准**。
+ *
+ * 为什么需要它：本 hook 是 **PreToolUse**，读到的索引是命令**执行前**的。而
+ * `create-commit` 第 5 步规定的动作正是「`git add <specific files>` 加
+ * `git commit --only <同一组路径>`」——两句写在同一条 Bash 命令里时索引是空的，
+ * 于是「索引为空就不判」那一支把整次判断静默放行。**失守形态是"什么都没发生"**：
+ * commit 成功、无输出、下游全绿。实测代价见 harness 账本 HARNESS-270 邻近条目。
+ *
+ * 为什么它几乎全是 bail：外部对抗评审在第一版（把命令里所有路径并成一个集合）上报出
+ * 9 条 HIGH，其中六条本质是**静态解析判不了**——magic pathspec（`:(exclude)*.md` 的
+ * 匹配集合要展开才知道）、shell 展开（`"$DOC"`）、`--pathspec-from-file`、可选附着值
+ * （`-S[<keyid>]`）、解析到仓库根的 `.`、以及 `git -C commit …` 让子命令识别错位。
+ * 另两条是语义错误：**`--only` 忽略索引**（与索引取并集会同时漏放和误拦），以及路径被
+ * 跨 segment / 跨 commit / 跨仓库混成一个集合。
+ *
+ * 所以本函数只认**完全无歧义**的那一种形态，其余一律 `{ known: false }`——调用方退回
+ * 「按索引判、索引为空就不判」的原行为。这不新增任何误拦，而误拦会训练出绕过行为、
+ * 等于废掉整道闸。
+ *
+ * @returns {{known: false} | {known: true, paths: string[]}}
+ */
+const UNKNOWN = { known: false };
+
+/**
+ * 这次 commit 会包含哪些路径——**只认一种形态，其余一律不判**。
+ *
+ * 为什么需要它：本 hook 是 PreToolUse，读到的索引是命令**执行前**的。而 `create-commit`
+ * 第 5 步规定的动作正是「`git add <paths>` 加 `git commit --only <同一组路径>`」——两句
+ * 写在同一条 Bash 命令里时索引是空的，「索引为空就不判」那一支于是把整次判断静默放行
+ * （exit 0、零输出、下游全绿）。
+ *
+ * 为什么是白名单、而不是"尽量解析"：两轮外部对抗评审对"尽量解析"版共报出 16 条 HIGH，
+ * 每轮都是上一轮没想到的新形态——`--pathspec-from-file=x` 被通用 `--k=v` 分支吞掉、
+ * `--only notes` 是目录会递归展开、段间 `cd` 改变解析基准、`true || git add …` 的控制流、
+ * `echo /usr/bin/git commit` 里 git 不在命令位、反斜杠转义、`--dry-run` 与 `--amend --only`
+ * 根本不按 pathspec 提交。**没有迹象表明再补一轮 bail 会收敛**。所以反过来：只认下面这
+ * 一种形状——它恰好是实测失守的那一种，而上面每一条按构造都落在形状之外。
+ *
+ *   [git add <paths> &&] git commit [无害 flag…] --only <同一组 paths> [无害 flag…]
+ *
+ * 还要求：每段的 `git` 在**命令位**、段间只用 `&&`、无反斜杠转义、路径在仓内、存在、且
+ * **不是目录**（目录递归展开的结果静态看不见）。任一不满足 → `{known:false}`，调用方退回
+ * 「按索引判、索引为空就不判」的原行为——**不新增任何误拦**，而误拦会训练出绕过行为、
+ * 等于废掉整道闸。
+ *
+ * @returns {{known: false} | {known: true, paths: string[]}}
+ */
+// commit 段允许出现、且**不改变提交范围**的 flag。`--amend`（不按 pathspec 提交索引）、
+// `--dry-run`（根本不提交）、`--fixup`/`--squash`（隐含 `--only` 语义）等一律不在表里 → bail。
+const COMMIT_HARMLESS_FLAGS = new Set([
+  '--only', '-o', '-v', '--verbose', '-q', '--quiet',
+  '-s', '--signoff', '--no-signoff', '--no-verify', '-n', '--verify',
+  '--allow-empty-message', '--no-edit', '--status', '--no-status',
+]);
+// 取值型：`-S[<keyid>]` 那种可选附着值的不收进来，按"吞下一个 token"猜会吃掉 pathspec。
+const COMMIT_VALUE_FLAGS = new Set(['-m', '--message', '-F', '--file']);
+
+/** 这个 token 的匹配集合静态判不出来吗？ */
+function opaquePath(tok) {
+  return tok.startsWith(':')           // magic pathspec：:(exclude) / :(top) / :/ …
+    || /[$`*?\[\]{}]/.test(tok)        // shell 展开、命令替换、未展开 glob
+    || tok.startsWith('~');
+}
+
+function commitScope(command, cwd, root) {
+  if (/\\/.test(String(command))) return UNKNOWN;   // 反斜杠转义：分词不支持它
+  const { text, quoted } = stripWithQuoted(command);
+  if (!quoted) return UNKNOWN;                     // 分词退化成朴素 split 时不下结论
+  const segs = segmentsOf(text).filter((s) => s.toks.length);
+  if (segs.length < 1 || segs.length > 2) return UNKNOWN;
+  // `&&` 之外的分隔符（`||` `|` `&` `;` 换行）都可能让某一段不执行、或改变执行顺序。
+  if (segs.length === 2 && segs[1].sep.trim() !== '&&') return UNKNOWN;
+
+  const real = (d) => { try { return fs.realpathSync(d); } catch { return null; } };
+  const realRoot = real(root);
+  const realCwd = real(cwd);
+  if (!realRoot || !realCwd) return UNKNOWN;
+  const toRel = (tok) => {
+    if (opaquePath(tok)) return null;
+    const abs = path.resolve(realCwd, tok);
+    let st;
+    // `lstat` 而非 `stat`：git 眼里 symlink 是**一个条目**，不是它指向的东西。跟随的话，
+    // 指向目录的 tracked symlink 会被判成目录 → bail → 漏放；悬空 symlink 则直接抛错。
+    try { st = fs.lstatSync(abs); } catch { return null; }  // 不存在：判不了它会匹配到什么
+    if (st.isDirectory()) return null;                      // 目录递归展开，展开结果看不见
+    const rel = path.relative(realRoot, abs);
+    if (!rel || rel === '..' || rel.startsWith('..' + path.sep)) return null;
+    return rel;
+  };
+
+  let addPaths = null;
+  let commitPaths = null;
+  let sawOnly = false;
+  for (const { toks } of segs) {
+    // 只认裸 `git`。`/tmp/fake/git` 同样以 `/git` 结尾，但它是不是真 git、`--only` 在它
+    // 那里是不是同一个语义，静态判不了——一个改写参数的包装器会让 known 的范围与实际
+    // 提交的完全不同。用绝对路径调 git 是罕见形态，为它冒这个险不划算。
+    if (toks[0] !== 'git') return UNKNOWN;               // git 必须在命令位，且是裸名
+    const verb = dequote(toks[1], quoted);
+    if (verb !== 'add' && verb !== 'commit') return UNKNOWN;
+    const here = [];
+    let skipNext = false;
+    for (const raw of toks.slice(2)) {
+      const tok = dequote(raw, quoted);
+      if (tok === null) return UNKNOWN;
+      if (skipNext) { skipNext = false; continue; }
+      if (tok.startsWith('-')) {
+        if (verb === 'commit' && COMMIT_VALUE_FLAGS.has(tok)) { skipNext = true; continue; }
+        if (verb === 'commit' && COMMIT_HARMLESS_FLAGS.has(tok)) {
+          if (tok === '--only' || tok === '-o') sawOnly = true;
+          continue;
+        }
+        return UNKNOWN;   // add 段不许带 flag；commit 段认不出的一律 bail
+      }
+      const rel = toRel(tok);
+      if (rel === null) return UNKNOWN;
+      here.push(rel);
+    }
+    if (skipNext) return UNKNOWN;              // 取值型 flag 的值缺失（`… -m` 结尾）
+    if (verb === 'add') {
+      if (addPaths || commitPaths) return UNKNOWN;   // 重复 add，或 add 出现在 commit 之后
+      if (!here.length) return UNKNOWN;
+      addPaths = here;
+    } else {
+      if (commitPaths) return UNKNOWN;
+      commitPaths = here;
+    }
+  }
+
+  if (!commitPaths || !commitPaths.length) return UNKNOWN;  // 无 commit 段 / 不带 pathspec
+  if (!sawOnly) return UNKNOWN;                             // 裸 pathspec 不在白名单形状里
+  const want = new Set(commitPaths);
+  // `add` 与 `--only` 必须点名同一组：不同就不是 skill 规定的那个形状，别猜哪个赢。
+  // 比的是**集合**，不是长度。`git add a a && git commit --only a a` 两边语义都是 {a}，
+  // 长度却是 2 vs 1 → 被误判成不同（漏放）；`add a a` vs `--only a b` 长度都是 2、且 add
+  // 的每个元素都在 want 里 → 被误判成相同（误拦）。长度这个读数在两组真相等与真不等时
+  // 都可能取同一个值。
+  if (addPaths) {
+    const got = new Set(addPaths);
+    if (got.size !== want.size || [...got].some((f) => !want.has(f))) return UNKNOWN;
+  }
+  return { known: true, paths: [...want] };
 }
 
 /** 已 staged 的路径（相对仓库根）。拿不到返回 null。 */
@@ -279,8 +497,19 @@ function evaluate(rawInput) {
   if (typeof command !== 'string') return { exitCode: 0 };
   const cwd = input.cwd || process.cwd();
 
+  // 逃生口先算：下面每一条 exit-2 都要受它保护。放在后面等于**文案不告诉你出路、而出路
+  // 其实存在于别的分支**——实测一个 reviewer 照着 `export COMMIT_SKIP_SKILL_CHECK=1`
+  // 撞了两次，最后改用字符串拼接骗过闸。那正是本文件别处写着要避免的训练结果：
+  // 「频繁误报会训练出"拦了就加环境变量绕过"」——连绕过都不给，就只剩不留痕的花招。
+  // 只认 process.env 不够：hook 是独立进程，命令行前缀设的是那条命令的环境，hook 看不到。
+  const envSkip = String(process.env.COMMIT_SKIP_SKILL_CHECK || '') === '1';
+  const skipDeclared = envSkip || envDeclared(command, 'COMMIT_SKIP_SKILL_CHECK');
+  // broad 分支拦的命令多半不含 commit 段，而 `envDeclared` 只数提交段——对它们必须用
+  // 不挂在提交上的那个判定，否则文案教的命令行前缀形态在这里恒不生效。
+  const skipHere = envSkip || envDeclaredHere(command, 'COMMIT_SKIP_SKILL_CHECK');
+
   // —— 1. git add -A / . （任何命令，不限 commit 场合）——
-  const broad = findBroadAdd(command);
+  const broad = skipHere ? null : findBroadAdd(command);
   if (broad) {
     return {
       exitCode: 2,
@@ -289,7 +518,25 @@ function evaluate(rawInput) {
         `它会把**别的 agent 正在写的文件**、以及与本次任务无关的改动一起 stage，` +
         `而 commit 照样成功、message 照样描述原来那件事——没有任何症状。\n` +
         `改用显式路径：git add <file1> <file2> …\n` +
-        `确实要提交全部改动时，也请逐个列出（\`git status --short\` 先看清有什么）。`,
+        `确实要提交全部改动时，也请逐个列出——用 \`git status --short --untracked-files=all\` 看清有什么。` +
+        `两个坑：未跟踪目录（尤其内嵌 git 仓库）可能只折叠成一行，你列的会是目录不是文件；` +
+        `含空格或非 ASCII 的路径会被加引号，去掉引号再传给 git add，否则 fatal。\n` +
+        `另外 add 的范围不等于 commit 的范围：\`git commit\` 落的是整个索引，` +
+        `要限定得用 \`git commit --only <同一组路径>\`。\n` +
+        `确实有正当理由（初始化一次性 fixture 仓等）：COMMIT_SKIP_SKILL_CHECK=1 声明式跳过。`,
+    };
+  }
+
+  const broadCommit = skipHere ? null : findBroadCommit(command);
+  if (broadCommit) {
+    return {
+      exitCode: 2,
+      message:
+        `[COMMIT-DISCIPLINE] \`git commit ${broadCommit}\` 与 \`git add -A\` 后果相同：` +
+        `它把**全部已跟踪改动**一次带走，包含别的 agent 正在写的、以及与本次任务无关的。\n` +
+        `改用 \`git add <file1> <file2> …\` 加 \`git commit --only <同一组路径>\`——` +
+        `范围要由 \`--only\` 兑现，\`add\` 兑现不了（它只往索引里追加，commit 落的是整个索引）。\n` +
+        `确实有正当理由：COMMIT_SKIP_SKILL_CHECK=1 声明式跳过。`,
     };
   }
 
@@ -304,9 +551,6 @@ function evaluate(rawInput) {
   // 逃生口同时认两种形态。**只认 process.env 不够**：hook 是独立进程，命令行前缀
   // `COMMIT_SKIP_SKILL_CHECK=1 <提交命令>` 设的是那条命令的环境，hook 看不到——
   // 而提示里教的正是这种写法，于是逃生口写了等于没写（上线当场撞到）。
-  const skipDeclared =
-    String(process.env.COMMIT_SKIP_SKILL_CHECK || '') === '1' ||
-    envDeclared(command, 'COMMIT_SKIP_SKILL_CHECK');
   if (skipDeclared) {
     // 声明式跳过是显式动作，静默漂移不是。
   } else if (input.transcript_path) {
@@ -378,33 +622,45 @@ function evaluate(rawInput) {
   for (let i = 0; i < dirs.length; i++) {
     if (declared[i] || seen.has(dirs[i])) continue;
     seen.add(dirs[i]);
-    const blocked = missingUserDoc(dirs[i]);
+    const blocked = missingUserDoc(dirs[i], command);
     if (blocked) return blocked;
   }
   return { exitCode: 0 };
 }
 
 /** 该仓这次提交缺 [User] 档同步吗？缺 → 返回拦截结果；否则 null。 */
-function missingUserDoc(cwd) {
+function missingUserDoc(cwd, command) {
   const root = repoRoot(cwd);
   if (!root) return null;
   const changelog = userVisibleChangelog(root);
   if (!changelog) return null;
-  const staged = stagedPaths(cwd);
-  if (!staged || staged.length === 0) return null;
+  const scope = commitScope(command || '', cwd, root);
+  const staged = stagedPaths(cwd) || [];
+  // 两支而已：`commitScope` 认出白名单形状时，范围就是 `--only` 点名的那组路径，**与索引
+  // 无关**（那正是 `--only` 的语义，也正是本闸此前静默放行的那个形态）；其余一律退回
+  // 「按索引判、索引为空就不判」的原行为。
+  const effective = scope.known ? [...new Set(scope.paths)] : [...new Set(staged)];
+  if (effective.length === 0) return null;
 
   const rel = path.relative(root, changelog) || 'CHANGELOG.md';
-  if (staged.includes(rel)) return null;
+  if (effective.includes(rel)) return null;
   // 纯文档改动不触发：它们本身就是文档同步的产物，再要求一次会变成永远拦。
-  const onlyDocs = staged.every((f) => /(^|\/)(docs|README\.md|CHANGELOG\.md)($|\/)/i.test(f) || f.endsWith('.md'));
+  // 两处判据都要大小写不敏感：前半段有 `/i`，后半段此前是 `endsWith('.md')`——于是
+  // `NOTES.MD` 被判成非文档而误拦。文件扩展名的大小写不由任何规范约束，别假定。
+  const onlyDocs = effective.every(
+    (f) => /(^|\/)(docs|README\.md|CHANGELOG\.md)($|\/)/i.test(f) || /\.md$/i.test(f));
   if (onlyDocs) return null;
 
   return {
     exitCode: 2,
     message:
-      `[COMMIT-DISCIPLINE] ${root} 的 ${rel} 自称只记「user-visible changes」，而它不在本次 staging 里。\n` +
+      `[COMMIT-DISCIPLINE] ${root} 的 ${rel} 自称只记「user-visible changes」，而${scope.known ? '这次提交不含它' : '此刻的索引里没有它'}。\n` +
       `create-commit §3 要求：改动产生**用户可感知变化**时，[User] 档必须与代码进同一个 commit。\n` +
-      `暂存的文件：${staged.slice(0, 8).join(', ')}${staged.length > 8 ? ` …共 ${staged.length} 个` : ''}\n\n` +
+      (scope.known
+        ? `这次会提交：${effective.slice(0, 8).join(', ')}${effective.length > 8 ? ` …共 ${effective.length} 个` : ''}\n`
+          + `（取自命令里 \`--only\` 点名的那组路径——\`--only\` **忽略索引**，所以已 staged 但没被点名的文件不在这次提交里）\n\n`
+        : `此刻索引里是：${effective.slice(0, 8).join(', ')}${effective.length > 8 ? ` …共 ${effective.length} 个` : ''}\n`
+          + `（**这不一定是最终提交范围**：本闸是 PreToolUse，而这条命令的形态没被识别——它可能在提交前再改索引。判不准时按索引提醒你一句，不替你断言。）\n\n`) +
       `二选一：\n` +
       `  • 可感知 → 写 ${rel} 并 \`git add\` 它，重新提交；\n` +
       `  • 不可感知（纯内部重构 / 测试 / 注释）→ 本条命令前加 COMMIT_NO_USER_DOC=1 显式声明。\n` +
@@ -427,4 +683,4 @@ function main() {
 
 if (require.main === module) main();
 
-module.exports = { evaluate, findBroadAdd, skillInvokedRecently, RECENT_WINDOW, SUBJECT_MAX };
+module.exports = { evaluate, findBroadAdd, findBroadCommit, skillInvokedRecently, RECENT_WINDOW, SUBJECT_MAX };

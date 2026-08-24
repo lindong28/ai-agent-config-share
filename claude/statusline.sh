@@ -31,7 +31,7 @@ CTX_PCT=0; CTX_SIZE=0; TOTAL_IN=0; TOTAL_OUT=0
 CUR_IN=0; CUR_OUT_FIELD=0; CACHE_READ=0; CACHE_CREATE=0
 USAGE_5H=""; RESET_5H=""; USAGE_7D=""; RESET_7D=""; MODEL_LIMIT_LINES=""
 SPEED=""; HAS_TDATA=0
-ST_IN=0; ST_OUT=0; ST_CACHE=0; ST_TOTAL=0; SST=""
+ST_IN=0; ST_OUT=0; ST_CACHE=0; ST_TOTAL=0; SST=""; LAST_FMT=""
 TOOLS_RUNNING_LINES=""; TOOLS_DONE_LINES=""; AGENT_LINES=""; SKILL_LINES=""
 TODO_CONTENT=""; TODO_COMPLETED=""; TODO_TOTAL=""
 MCP_COUNT=0; HOOKS_COUNT=0
@@ -248,6 +248,16 @@ fi
 line3="${C_DIM}${C_MAGENTA}会话时长: ${MINS}m ${SECS}s${C_RESET}"
 if [ -n "$SPEED" ]; then
   line3="${line3} ${C_DIM}· ${SPEED} tok/s${C_RESET}"
+fi
+
+# Last exchange, as an absolute wall-clock stamp rather than an age ("3m ago").
+# An age would have to be re-rendered to stay true, and this field's whole reason
+# to exist is being read off a tab that is *not* being re-rendered; an absolute
+# stamp needs no refresh to keep meaning what it says. Already formatted by
+# statusline-fields.py — no `date` call here, so no BSD/GNU dialect split and
+# nothing that can fail mid-render.
+if [ -n "$LAST_FMT" ]; then
+  line3="${line3} ${C_DIM}· 最后对话 ${C_RESET}${C_YELLOW}${LAST_FMT}${C_RESET}"
 fi
 
 # Model: "Opus 4.7 (1M)/xhigh/nofast"

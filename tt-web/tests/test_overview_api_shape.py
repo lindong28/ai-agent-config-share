@@ -1,9 +1,11 @@
 import contextlib
 import dataclasses
 import os
+import tempfile
 import time
 import unittest
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
@@ -11,8 +13,26 @@ import server
 from parsers import RateLimits, UsageEntry
 
 
+_ACCOUNT_MEMORY_TEMP = None
+_ACCOUNT_MEMORY_PATCHER = None
+
+
+def setUpModule():
+    global _ACCOUNT_MEMORY_TEMP, _ACCOUNT_MEMORY_PATCHER
+    _ACCOUNT_MEMORY_TEMP = tempfile.TemporaryDirectory()
+    memory_path = Path(_ACCOUNT_MEMORY_TEMP.name) / "account_memory.json"
+    _ACCOUNT_MEMORY_PATCHER = mock.patch("server._ACCOUNT_MEMORY_PATH", memory_path)
+    _ACCOUNT_MEMORY_PATCHER.start()
+
+
+def tearDownModule():
+    _ACCOUNT_MEMORY_PATCHER.stop()
+    _ACCOUNT_MEMORY_TEMP.cleanup()
+
+
 class OverviewApiShapeTests(unittest.TestCase):
     def setUp(self):
+        server._ACCOUNT_MEMORY_PATH.unlink(missing_ok=True)
         self.real_rate_limits = server._rate_limits
         self.sync_trigger_patcher = mock.patch("server._maybe_sync_remotes")
         self.sync_trigger = self.sync_trigger_patcher.start()
@@ -31,7 +51,10 @@ class OverviewApiShapeTests(unittest.TestCase):
         self.addCleanup(self.sync_status_patcher.stop)
         self.rate_limits_patcher = mock.patch(
             "server._rate_limits",
-            return_value={"claude": {}, "codex": {}},
+            return_value={
+                "claude": {"accounts": [], "unavailable_reason": None},
+                "codex": {"accounts": [], "unavailable_reason": None},
+            },
         )
         self.rate_limits_patcher.start()
         self.addCleanup(self.rate_limits_patcher.stop)
@@ -47,7 +70,7 @@ class OverviewApiShapeTests(unittest.TestCase):
         self.admission_patcher.start()
         self.addCleanup(self.admission_patcher.stop)
 
-    def test_rate_limits_are_nested_by_provider(self):
+    def test_rate_limits_are_grouped_by_account_under_each_provider(self):
         claude_limits = RateLimits(
             five_hour_pct=12.5,
             five_hour_resets_at=1779247200,
@@ -63,31 +86,176 @@ class OverviewApiShapeTests(unittest.TestCase):
             updated_at="2026-05-19T22:42:00+00:00",
         )
 
-        payload = self.overview_with(claude_limits, codex_limits)
+        payload = self.overview_with(claude_limits, codex_limits, account="acct-1")
 
         self.assertEqual(
             payload["rate_limits"],
             {
                 "claude": {
-                    "five_hour_pct": 12.5,
-                    "five_hour_resets_at": 1779247200,
-                    "seven_day_pct": 34,
-                    "seven_day_resets_at": 1779580800,
-                    "updated_at": "2026-05-19T22:41:23+00:00",
-                    "source_machine": "macbook",
+                    "accounts": [
+                        {
+                            "account_id": "acct-1",
+                            "account_label": "acct-1@example.com",
+                            "account_plan": "plan-acct-1",
+                            "reading_plan": None,
+                            "credential_plan": "plan-acct-1",
+                            "account_state": "known",
+                            "presence": "in_use",
+                            "five_hour_used_pct": 12.5,
+                            "five_hour_resets_at": 1779247200,
+                            "seven_day_used_pct": 34,
+                            "seven_day_resets_at": 1779580800,
+                            "updated_at": "2026-05-19T22:41:23+00:00",
+                            "machines": ["macbook"],
+                            "this_machine": None,
+                        }
+                    ],
                     "unavailable_reason": None,
                 },
                 "codex": {
-                    "five_hour_pct": 0.0,
-                    "five_hour_resets_at": 1779248487,
-                    "seven_day_pct": 40.0,
-                    "seven_day_resets_at": 1779835287,
-                    "updated_at": "2026-05-19T22:42:00+00:00",
-                    "source_machine": "macbook",
+                    "accounts": [
+                        {
+                            "account_id": "acct-1",
+                            "account_label": "acct-1@example.com",
+                            "account_plan": "plan-acct-1",
+                            "reading_plan": None,
+                            "credential_plan": "plan-acct-1",
+                            "account_state": "known",
+                            "presence": "in_use",
+                            "five_hour_used_pct": 0.0,
+                            "five_hour_resets_at": 1779248487,
+                            "seven_day_used_pct": 40.0,
+                            "seven_day_resets_at": 1779835287,
+                            "updated_at": "2026-05-19T22:42:00+00:00",
+                            "machines": ["macbook"],
+                            "this_machine": None,
+                        }
+                    ],
                     "unavailable_reason": None,
                 },
             },
         )
+
+    def test_a_reading_with_no_account_is_not_adopted_by_a_named_one(self):
+        """Unknown is a state to show, not a group to join. Here the exporter
+        is current and signed out, which the row must say — rather than
+        telling the reader to update a machine that is already current."""
+        limits = RateLimits(1, 2, 3, 4, updated_at="2026-05-19T22:42:00Z")
+
+        payload = self.overview_with(limits, limits, account=None)
+
+        for provider in ("claude", "codex"):
+            entry = payload["rate_limits"][provider]["accounts"][0]
+            self.assertEqual(entry["account_state"], "signed_out")
+            self.assertEqual(entry["presence"], "in_use")
+            self.assertIsNone(entry["account_id"])
+            self.assertIsNone(entry["account_label"])
+            self.assertEqual(entry["machines"], ["macbook"])
+
+    def test_a_block_from_an_older_exporter_has_no_credential_plan_to_compare(self):
+        """Machines upgrade one at a time, so blocks without the field arrive.
+
+        The entry must still carry the key, holding null — "nothing to compare
+        against" is a state the page has to keep apart from "compared and
+        equal", and a missing key would collapse it into whatever the reader's
+        code treats as a default.
+        """
+        limits = RateLimits(1, 2, 3, 4, updated_at="2026-08-22T00:58:29Z")
+        blocks = {
+            "codex": dataclasses.asdict(limits)
+            | {
+                "account_id": "acct-1",
+                "account_label": "a@b.c",
+                "account_plan": "prolite",
+            }
+        }
+        blocks["codex"].pop("plan", None)
+        admission = SimpleNamespace(
+            admitted=(SimpleNamespace(host="macbook", meta={"rate_limits": blocks}),),
+        )
+
+        with mock.patch(
+            "server.generation.generation_admission_snapshot",
+            return_value=contextlib.nullcontext(admission),
+        ):
+            entry = self.real_rate_limits()["codex"]["accounts"][0]
+
+        self.assertIn("reading_plan", entry)
+        self.assertIn("credential_plan", entry)
+        self.assertIsNone(entry["reading_plan"])
+        self.assertIsNone(entry["credential_plan"])
+        self.assertEqual(entry["account_plan"], "prolite")
+
+    def test_a_block_claiming_a_plan_neither_source_reported_does_not_survive(self):
+        """The wire's derived plan is one writer's word, and not this one's.
+
+        Every machine runs its own exporter at its own version and nothing
+        between them checks that a published `account_plan` agrees with the two
+        facts beside it. Taking it on trust would let a row display a plan
+        neither source ever reported — and that value does not stop at the
+        screen, it is what the account memory persists, from a file that cannot
+        be rebuilt. Recomputing here makes the contradiction unrepresentable.
+        """
+        limits = RateLimits(1, 2, 3, 4, updated_at="2026-08-22T00:58:29Z")
+        block = dataclasses.asdict(limits)
+        block.pop("plan", None)
+        block |= {
+            "account_id": "acct-1",
+            "account_label": "a@b.c",
+            "account_plan": "team",  # agrees with neither source below
+            "reading_plan": "pro",
+            "credential_plan": "prolite",
+        }
+        admission = SimpleNamespace(
+            admitted=(
+                SimpleNamespace(host="macbook", meta={"rate_limits": {"codex": block}}),
+            ),
+        )
+
+        with mock.patch(
+            "server.generation.generation_admission_snapshot",
+            return_value=contextlib.nullcontext(admission),
+        ):
+            entry = self.real_rate_limits()["codex"]["accounts"][0]
+
+        self.assertEqual(entry["account_plan"], "pro")
+        self.assertEqual(entry["reading_plan"], "pro")
+        self.assertEqual(entry["credential_plan"], "prolite")
+
+    def test_a_current_block_that_read_no_plan_does_not_fall_back(self):
+        """Both keys present and both null is not the same as neither key.
+
+        A current exporter that could read no plan from either source says so
+        by publishing two nulls. Falling back on falsiness would treat that as
+        "old exporter" and hand the row the stale `account_plan` beside them —
+        the exact value recomputation exists to distrust. The keys, not their
+        contents, are what says which kind of producer wrote this.
+        """
+        limits = RateLimits(1, 2, 3, 4, updated_at="2026-08-22T00:58:29Z")
+        block = dataclasses.asdict(limits)
+        block.pop("plan", None)
+        block |= {
+            "account_id": "acct-1",
+            "account_label": "a@b.c",
+            "account_plan": "team",
+            "reading_plan": None,
+            "credential_plan": None,
+        }
+        admission = SimpleNamespace(
+            admitted=(
+                SimpleNamespace(host="macbook", meta={"rate_limits": {"codex": block}}),
+            ),
+        )
+
+        with mock.patch(
+            "server.generation.generation_admission_snapshot",
+            return_value=contextlib.nullcontext(admission),
+        ):
+            entry = self.real_rate_limits()["codex"]["accounts"][0]
+
+        self.assertIsNone(entry["account_plan"])
+        self.assertIsNone(entry["reading_plan"])
+        self.assertIsNone(entry["credential_plan"])
 
     def test_missing_rate_limits_are_null_not_zero(self):
         cases = [
@@ -98,17 +266,20 @@ class OverviewApiShapeTests(unittest.TestCase):
 
         for claude_limits, codex_limits in cases:
             with self.subTest(claude=claude_limits, codex=codex_limits):
+                server._ACCOUNT_MEMORY_PATH.unlink(missing_ok=True)
                 payload = self.overview_with(claude_limits, codex_limits)
 
                 if claude_limits is None:
                     self.assert_missing_block(payload["rate_limits"]["claude"])
                 else:
-                    self.assertEqual(payload["rate_limits"]["claude"]["five_hour_pct"], 5)
+                    accounts = payload["rate_limits"]["claude"]["accounts"]
+                    self.assertEqual(accounts[0]["five_hour_used_pct"], 5)
 
                 if codex_limits is None:
                     self.assert_missing_block(payload["rate_limits"]["codex"])
                 else:
-                    self.assertEqual(payload["rate_limits"]["codex"]["five_hour_pct"], 1)
+                    accounts = payload["rate_limits"]["codex"]["accounts"]
+                    self.assertEqual(accounts[0]["five_hour_used_pct"], 1)
 
     def test_pivot_endpoint_uses_rollup_not_live_entries(self):
         expected = {"columns": ["value"], "rows": [{"x": "2026-06", "values": {"value": 1.0}}]}
@@ -344,12 +515,30 @@ class OverviewApiShapeTests(unittest.TestCase):
         self.assertTrue(long_payload["rollup_coverage"]["partial_before_range"])
         self.assertIsNotNone(long_payload["rollup_coverage"]["range_start"])
         self.assertFalse(short_payload["rollup_coverage"]["partial_before_range"])
+        # The overview card treats a null earliest_date as "we don't know",
+        # not as "fully covered" — it cannot tell that shape apart from an
+        # empty rollup DB, which reports exactly the same two fields. So a
+        # fully-covered window must still name the date. Drop it here as
+        # redundant-when-partial-is-false and every card, including the short
+        # ranges this payload stands for, silently reads "覆盖范围未知".
+        self.assertEqual(short_payload["rollup_coverage"]["earliest_date"], "2026-04-21")
 
-    def overview_with(self, claude_limits, codex_limits):
+    def overview_with(self, claude_limits, codex_limits, account="acct-1"):
         blocks = {}
         for provider, limits in (("claude", claude_limits), ("codex", codex_limits)):
             if limits is not None:
-                blocks[provider] = dataclasses.asdict(limits)
+                block = dataclasses.asdict(limits)
+                # `plan` is the parser's carrier for the reading's own plan and
+                # the exporter drops it; mirror that, or this fixture would pin
+                # a wire shape no machine publishes.
+                block.pop("plan", None)
+                blocks[provider] = block | {
+                    "account_id": account,
+                    "account_label": f"{account}@example.com" if account else None,
+                    "account_plan": f"plan-{account}" if account else None,
+                    "reading_plan": None,
+                    "credential_plan": f"plan-{account}" if account else None,
+                }
         admission = SimpleNamespace(
             admitted=(SimpleNamespace(host="macbook", meta={"rate_limits": blocks}),),
         )
@@ -360,18 +549,13 @@ class OverviewApiShapeTests(unittest.TestCase):
             return {"rate_limits": self.real_rate_limits()}
 
     def assert_missing_block(self, block):
-        self.assertEqual(
-            block,
-            {
-                "five_hour_pct": None,
-                "five_hour_resets_at": None,
-                "seven_day_pct": None,
-                "seven_day_resets_at": None,
-                "updated_at": None,
-                "source_machine": None,
-                "unavailable_reason": mock.ANY,
-            },
-        )
+        """No reading at all: an empty account list plus a stated reason.
+
+        The distinction this pins is that nothing is invented — not a zero, and
+        not an account row with dashes in it.
+        """
+        self.assertEqual(block["accounts"], [])
+        self.assertIsInstance(block["unavailable_reason"], str)
 
     @staticmethod
     @contextlib.contextmanager

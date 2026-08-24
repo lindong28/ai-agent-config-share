@@ -350,9 +350,9 @@ $AB fill @e1 "user@example.com"
 $AB fill @e2 "password123"
 $AB click @e3
 
-# Row 3 is not a command: foreground that window and tab through the OS or host UI,
-# then ask the user through this harness's user-question mechanism and wait for an
-# affirmative answer. Only after that, hand off and wait for them to finish 2FA:
+# Row 3 is not a command: run it in full per the Visible Browser Evidence Gate,
+# including its device branch — 2FA is the case where "the user completes this on
+# this screen" is wrong by default. Only once row 3 passes, hand off and wait:
 $AB wait --url "**/dashboard" --timeout 120000
 
 # Row 4: both recorded values must still match, then save state

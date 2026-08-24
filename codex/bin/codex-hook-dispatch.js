@@ -152,7 +152,26 @@ function runPluginWithFlags(hookId, scriptName, profiles, raw, env = {}) {
   );
 }
 
+// Non-blocking advisories reach the agent through `hookSpecificOutput.additionalContext`,
+// not through the exit code — `liveness-predicate-gate` and `guard-mutation-lint` both
+// exit 0 and carry their whole payload there. Forwarding only `status === 2` dropped them
+// silently: the parity manifest listed them as covered while nothing reached the agent,
+// which is exactly the "registered but inert" shape the manifest exists to rule out.
+function advisoriesFrom(results) {
+  const out = [];
+  for (const result of results) {
+    if (result.status === 2) continue; // blockers carry their own text below
+    const raw = (result.stdout || "").trim();
+    if (!raw) continue;
+    let ctx;
+    try { ctx = JSON.parse(raw)?.hookSpecificOutput?.additionalContext; } catch { ctx = null; }
+    if (typeof ctx === "string" && ctx.trim()) out.push(ctx.trim());
+  }
+  return out;
+}
+
 function emitBlock(results) {
+  for (const advisory of advisoriesFrom(results)) process.stderr.write(`${advisory}\n`);
   const blockers = results.filter((result) => result.status === 2);
   if (!blockers.length) return false;
   for (const result of blockers) process.stderr.write(result.stderr || "Hook blocked the action.\n");
@@ -244,6 +263,9 @@ async function handleBash(raw) {
     ["push-approval-gate", "push-approval-gate.js"],
     ["commit-message-language", "commit-message-language.js"],
     ["commit-discipline-gate", "commit-discipline-gate.js"],
+    ["liveness-predicate-gate", "liveness-predicate-gate.js"],
+    ["guard-mutation-lint", "guard-mutation-lint.js"],
+    ["in-turn-cadence-advisor", "in-turn-cadence-advisor.js"],
   ];
   emitBlock(await Promise.all(specs.map(([id, script]) => runWithFlagsAsync(id, script, raw))));
 }

@@ -59,29 +59,40 @@
                 <div id="week-cost" class="kpi-value">—</div>
                 <div id="week-tokens" class="kpi-sub">— tokens</div>
               </article>
+              <!-- The third figure is the one the range selector controls, so the
+                   label names the window rather than saying "Range": a card headed
+                   "Range cost" tells the reader nothing about which range without
+                   looking back up at the toolbar. -->
+              <article class="kpi-card">
+                <div id="range-label" class="kpi-label">Range cost</div>
+                <div id="range-cost" class="kpi-value">—</div>
+                <div id="range-tokens" class="kpi-sub">— tokens</div>
+              </article>
             </div>
           </section>
           <section class="kpi-group" aria-labelledby="kpi-quota-title">
-            <h2 id="kpi-quota-title" class="kpi-group-title">Quota remaining</h2>
-            <div class="kpi-grid quota">
-              <article class="kpi-card">
-                <div class="kpi-label">Claude 5h</div>
-                <div id="claude-five-hour" class="kpi-value">—</div>
-                <div id="claude-five-reset" class="kpi-sub">—</div>
-                <div id="claude-five-updated" class="kpi-meta">—</div>
-              </article>
-              <article class="kpi-card">
-                <div class="kpi-label">Claude 7d</div>
-                <div id="claude-seven-day" class="kpi-value">—</div>
-                <div id="claude-seven-reset" class="kpi-sub">—</div>
-                <div id="claude-seven-updated" class="kpi-meta">—</div>
-              </article>
-              <article class="kpi-card">
-                <div class="kpi-label">Codex 7d</div>
-                <div id="codex-seven-day" class="kpi-value">—</div>
-                <div id="codex-seven-reset" class="kpi-sub">—</div>
-                <div id="codex-seven-updated" class="kpi-meta">—</div>
-              </article>
+            <h2 id="kpi-quota-title" class="kpi-group-title">Quota Used</h2>
+            <p class="quota-scope">
+              One row per account — quota is metered per account, so rows are
+              never added together and machines sharing an account share a row.
+            </p>
+            <!-- Focusable and named: on narrower viewports this box is the only
+                 way to reach the later columns, and a scroller a keyboard
+                 cannot enter hides part of the seven-column comparison. -->
+            <div class="quota-table-wrap" tabindex="0" role="region" aria-label="Quota by account">
+            <table id="quota-accounts" class="quota-table">
+              <thead>
+                <tr>
+                  <th scope="col">Provider</th>
+                  <th scope="col">Plan</th>
+                  <th scope="col">Account</th>
+                  <th scope="col" class="numeric">5h used</th>
+                  <th scope="col" class="numeric">7d used</th>
+                  <th scope="col">Machines</th>
+                  <th scope="col">Updated</th>
+                </tr>
+              </thead>
+            </table>
             </div>
           </section>
           <div id="codex-five-hour-compat" hidden aria-hidden="true">

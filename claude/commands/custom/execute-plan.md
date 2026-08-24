@@ -44,7 +44,22 @@ origin: 2026-05-19
 
 **工作单元一致性 gate（baseline / spawn 前）**：把 plan 的 phase / verify 结构及其显式写出的 review / commit 时序，同本命令「工作单元边界」及 §3.5 对照。plan 若把多个可独立验收的 phase 延后到一次最终 review / commit，或以其他方式与本命令的单元收口契约冲突，不得静默选择其一：先按 user-scope `Surface Choices (Real Ones), Recommend One` policy 让用户决定采用本命令的逐单元边界、保留 plan 的聚合边界，或先回修 plan；说明聚合会扩大 diff、review 与返工失效域。强耦合 phase 已由 plan 明确作为一个工作单元时不构成冲突。把决定作为后续单元划分的权威输入。
 
+同一 gate 内再判一次**并行机会**：plan 含 ≥2 个文件面互不重叠、verify 互不依赖、且各自体量使并行有实质收益的 phase 时，按 Surface Choices 呈给用户（附推荐与理由）：
+
+| 选项 | 适用形状 | 单元与 review / staging 后果 |
+|---|---|---|
+| 串行或合并（默认） | 常规；短 phase 合并裁量仍归「工作单元边界」 | 现有单元循环不变 |
+| 拆面并行 | 上述并行机会成立 | 每个并行单元先声明**声明文件面**（本单元允许写入的精确路径 / glob 集合，记入台账、由用户随本选项确认）；各单元按 `~/.claude/references/delegation-policy.md`「Parallel-write runtime isolation」各建独立 worktree（自**集成分支**——输入 gate 时执行本 plan 的当前分支——切出），照 §1 各自 spawn（prompt 带条件项，见 §1）、§2 对全部在飞任务逐个轮询 / 等待（载体按 §2 的 transport 分流）；§3.5 gate + commit 由 supervisor 按各单元证据齐备顺序，将各单元分支依次合回集成分支执行，review / staging 归属按声明文件面（该节例外条款）。协调开销更高、返工失效域按面隔离 |
+| 转 program | 请求实为多件独立交付的 program 形状 | 上游有 `/custom:run-program`；本仓未收录，program 形状按上表的串行/并行单元循环自行编排 |
+
 首次 spawn 前记录 working-tree baseline：把 `git status --porcelain` 脏文件清单与 `git diff HEAD`（含 staged + unstaged）内容快照写入 plan 同目录 `baseline.patch`。它是 audit trail，不进入单元 review / commit；后续撞车处置见 §3.5。
+
+**supervisor 台账（spawn 起持续维护；动因与被否备选见 ADR-023，本节是 schema 与运行规则的唯一载体）**：与 `baseline.patch` 同目录维护 `supervisor-ledger.md`——supervisor 自有，implementer 拥有的 state.md / journal.md 不与它共写。每**任务**一行（工作单元是列属性；reviewer / 验证 context / doc-sync 等非单元任务同样入账）：
+
+| 任务 id | 所属单元 | 角色 | continuation handle（resume 用） | 当前 `.output` / 等待载体 | 状态 / 裁决 | commit | 证据指针 |
+|---|---|---|---|---|---|---|---|
+
+（拆面并行时另存每单元的声明文件面与并行处置：判定读数、用户决定。）**写入是三类事件（派发 / 收到裁决 / commit）各自的收尾动作——未写入台账即该动作未完成，不得进入等待或下一单元**。§6 handoff 的 continuation handle 与 commit 清单从这里取；恢复接手（fork / compaction 后 / 新 session）把它列入进场必读，与 plan.md / state.md 同批读入（无自动注入，见 HARNESS-347）。它是规划 audit trail，不进 commit（§3.5 / §5 Scope 的既有剔除覆盖之）。下文简称**台账**。
 
 **并发隔离（开工前）**：其它 agent session 可能并发在同一 repo 执行 plan。开工前按 `~/.claude/references/concurrent-plan-isolation.md` 检测并发、按三层结构隔离在独立 worktree 落地；plan 显式声明"单 session 独占"时可免**建 worktree**（另两层的铁律与并发检测不在豁免内）；执行中出现「执行中提升」的反证即按该节重判该豁免。
 
@@ -53,13 +68,15 @@ origin: 2026-05-19
 ## 主流程（lens，不是步骤清单）
 
 ```
-输入 gate → baseline → transport 分流 →【工作单元执行 → verify 裁决 → review gate → commit】↺
+输入 gate（单元边界；并行机会 → 串行/拆面并行/转 program）→ baseline + 台账 → transport 分流
+    →【工作单元执行 → verify 裁决 → review gate → commit】↺（派发/裁决/commit 各以台账写入收尾；
+       拆面并行时各单元此循环各自跑，gate+commit 按证据齐备顺序串行合回）
                                       ↘ 失败 / 重开 → Trajectory Gate
                                                        ├ 当前执行方案成立 / 低反转成本方案调整 → 回工作单元
                                                        └ 高反转成本 / 目标质变 → Stop Gate → 用户裁决
                                       ↓ 末单元完成
-                              可选 UX 修复循环 → docs 收尾 → handoff
-任一拟 stop → Stop Gate → 继续执行或合法 stop
+                              可选 UX 修复循环 → docs 收尾 → L1 达成断言 → handoff
+带在飞任务停轮 → 停轮对账（§2）；任一拟 stop → Stop Gate → 继续执行或合法 stop
 ```
 
 ### 1. 启动 Codex implementer（harness-aware transport）
@@ -97,7 +114,8 @@ Bash({
   - Rigor：读取 `~/.claude/references/rigor-tiers.md`，把 plan 默认 `(A,V)` 与本工作单元 per-phase override 传给 implementer / supervisor；授权控制、验证深度、reviewer multiplicity 与对抗适用面按（默认 ⊔ override）向量缩放、不按 label（review-gate 本地定档在 §3.5 gate 处再逐维并入）
   - 成功回报契约：本单元完成边界、改动文件 / diff、plan verify 的 exact 命令与可观察结果、最终证据新鲜度、遗留风险；复用证据时再附失效分析，blocked 则改走下一项
   - Blocked 时：贴满足全部 Stop Gate 的 report
-- 记录当前 transport 的 continuation handle——后续 resume 完全依赖它。Claude Code 捕不到 wrapper `session id` 时排查 stderr / 退出码 / 输出截断；Codex handle 丢失时检查 collaboration agent 状态。两者都先按 transport / 适配层问题处理，不直接交给用户。
+  - （拆面并行时另加）本单元的声明文件面原文（精确路径 / glob）、允许的证据输出面、面外写入禁令与"需要写声明文件面外时先停下回报、由 supervisor 裁决"、写入者登记按 `~/.claude/references/concurrent-plan-isolation.md`「写入者登记」
+- 记录当前 transport 的 continuation handle（写入台账，见「输入契约」）——后续 resume 完全依赖它。Claude Code 捕不到 wrapper `session id` 时排查 stderr / 退出码 / 输出截断；Codex handle 丢失时检查 collaboration agent 状态。两者都先按 transport / 适配层问题处理，不直接交给用户。
 
 ### 1.5 Context 拓扑：以工作单元为界复用/轮换
 
@@ -133,11 +151,31 @@ poll-progress.sh 只读新增进度行（默认每轮最多回显 80 行），�
 - **性质**：FYI 单向信息流，不是找用户——不提问、不等待回复、不构成 stop；用户可看可不看。内容：当前阶段 / 自上次汇报以来的推进 / 异常与否 / 下一里程碑，3-8 行。一切照常时一句话即可。
 - **机制**：idle 等待期 supervisor 无法主动发消息，须靠调度唤醒——唤醒 / 间隔 / 完成即删 / 醒来时没有活跃后台任务该怎么分流的机制，均归 `~/.claude/references/background-agent-monitoring.md`。FYI 汇报搭同一巡检唤醒的便车（巡检醒来时顺带发一条），不另起第二个 cron。仅 Critical 异常（进程死亡 / 付费墙 / 外部服务故障证据）才额外 PushNotification——周期汇报本身不推送，避免通知疲劳。
 
+**停轮对账（带着在飞任务停轮之前；FYI 轮与巡检轮同样适用）**：本 command 的设计形态是"派发 → 停轮 → 完成回调 / watchdog 唤醒再裁决"——带着在飞任务停轮不是早停，前提是逐项过下表（owner 三分，改自 run-program 停轮对账；唤醒与巡检语义归 `background-agent-monitoring.md`「Plan supervisor watchdog」与「watchdog 唤醒时先判谁会去看结果」，此处不复述）：
+
+| 未完成项的 owner | 合法停轮条件 |
+|---|---|
+| 本 session 派发的后台任务 / 子代理 | 仍可续用的 continuation handle 已记台账 + 完成回调或 watchdog 已武装，且本轮末尾按下行格式点名；回调与 watchdog 均不可得（capability gap，判据见上引 monitoring 节）→ 不以空轮询硬扛，按该节报告 gap 并走 Stop Gate |
+| supervisor 自己（裁决、gate、commit、派发下一单元） | 不得带着它停轮——本轮做完；确依赖上行的在飞产出时写明依赖并归入上行 |
+| 用户 / 外部第三方（许可、亲验、他人队列） | 按 Stop Gate 报阻塞在谁 + 解除条件 |
+
+命中第一行时，本轮最后一段逐任务以固定格式声明（与 `BG-SHELL-OK` 同构、作用不同——它是给 stop 判官与读者的在飞举证，不是 bg-shell hook 的 ack）：
+
+```
+IN-FLIGHT: <task-id> — <在等什么;唤醒锚(完成回调=该 task id 本身 / watchdog=cron job id / 其它 transport 的等待机制及其句柄)>
+```
+
+`<task-id>` = 台账行的「任务 id」列，取当前 transport 的后台任务标识（Claude Code 即 `run_in_background` 返回、`tasks/<id>.output` 所用的那一个，与 bg-shell 提醒同源——此处它与 continuation handle 是**两个**标识，前者定位在飞任务与其运行态产物、后者供 resume；Codex 的 collaboration handle 可同时承担两者，两列同值即可；无 transport 后台标识的任务以稳定的台账任务键为 id，「continuation handle（resume 用）」与「当前 `.output` / 等待载体」两列按适用性记 N/A）。同源才让声明可与台账及运行态产物对账，伪造与拼错的 id 由此分得开。两类行都要发时顺序固定：`IN-FLIGHT` 行在前、`BG-SHELL-OK` 行收尾——bg-shell hook 的 ack 解析只认最后一个非空行，反序会让 ack 被静默不认、任务下轮重提醒（跨闸 token 位序冲突见 HARNESS-348）。
+
+任一行过不了 → 本轮不得停；同一项连续两轮过不了 → 按 `plan-execution-principles.md` 的 Trajectory / Stop Gate 分流，不原地重试。
+
 Claude Code 需要完整上下文时（§3 裁决 / context 压缩后恢复 / 排查异常），用 `Read(<output-file>)` 读整份 `.output`；poll-progress.sh 只读不改源文件，完整记录始终在盘上。**poll-progress.sh 回显含「跳过 N 行」时必须先全量 `Read(<output-file>)` 再裁决**（单轮新增 > 80 行触发截断）——被跳过的中段在增量模式下不再出现，blocked / Stop Gate report / verify 证据可能正落在中段。resume 会产生新的后台任务 = 新 `.output` 文件，对新文件重新记录路径并从 0 开始轮询。Codex 则以 collaboration agent 的 message / final status 为裁决输入；需要更多证据时续用原 agent 定向索取，不把整个主 session transcript 再喂一遍。
 
 ### 2.5 Trajectory Gate：确认是否继续当前执行方案
 
 supervisor 在 `plan-execution-principles.md`「Trajectory Gate」规定的触发点亲自裁决，不能把 implementer 的自报当 verdict；Trajectory Gate 未裁决前不 dispatch 新 attempt、resume 或 review-fix 轮。裁决与用户边界沿该 reference，Long-task 模式的写入分别沿 `long-task-protocol.md`「state.md 写什么」与「journal.md 写什么」的写入 lens，不为 checkpoint 新增固定 schema。
+
+**交付物 E2E checkpoint（可观察触发点）**：一个消费者可见的工作单元已进入本地 `main`，而下一单元的主要产出是支撑、度量或质量对齐基础设施时，进入下一单元之前，把 plan **已有**的最小真实消费者路径提前到这个边界执行一次，并将读数作为 Trajectory Gate 输入。未取得该读数前不 dispatch 下一单元。此处不新增 verify 语义或第二套验收项；它只把 plan 已声明的真实入口绑到一个每次都会发生的单元切换动作，避免先做数小时支撑工作、最后才首次启动交付物。
 
 跨 attempt / resume 轮累积的**同一验证盲区** finding 计数是 supervisor 专属裁决输入——implementer 每轮只见本轮、看不到聚合，只有持 cross-cycle 记忆的 supervisor 能识别"这是同类第 N 个"。一个工作单元内 ≥2 个 finding 共享同一验证盲区（即便分属不同代码机制）时，按 Trajectory Gate 分流 (b) 重设验证策略、一次性真实接口 sweep，不继续逐轮 resume 打补丁。
 
@@ -176,7 +214,7 @@ Codex harness 对原 collaboration agent 发 follow-up task，语义与上面 re
   3. 每个 retained charter 启动前都冻结 closure contract。尚未启动的 charters 只有在 reviewer mechanism / expertise、独立性拓扑、scope、evidence、return schema 与 closure 全部兼容时才合并，并分别返回 verdict；任一不兼容则保持独立。已完成 review 只覆盖其原 prompt 与证据实际满足的 contract，不事后扩张。原 handle 不可续用时按该 contract 的 replacement semantics；只有 contract 允许定向 closure 时，才按原 transport 新起 reviewer，传原 charter / finding、修复 diff 与原返回契约，只做 closure。
   4. 产品语义 judge、LLM report gate、UX 测试与代码 gate 验证不同风险，不互相替代。实施前参与设计或修法的 reviewer 不算生成后独立 gate。
 - 指令 artifact 单元走专项路由：单元 diff 为指令 artifact（skill / command / reference / principles / CLAUDE.md·AGENTS.md——类型集以 review-gate「专项路由」定义为准）时按 review-gate 专项路由接管（走其映射的对应专项 command，无 backend 选择）；findings 修复随该专项 command 自身的主-session 交互修复闭环施加，不经下面「修复路由」、不 resume implementer——专项 command（review-skill / review-claude-md）是主-session 交互工作流、无法在 Codex resume 里跑，构成对「不接管」不变量的显式例外（见关键不变量）。下面「修复路由」只适用其余代码单元。
-- review 对象：working tree 中本单元改动（含 untracked；剔除输入 gate 后冻结的 `baseline.patch`、plan.md 同目录的规划 audit trail，以及 §4b/4c 测试证据文件；staging 判据同 §5 Scope）。implementer 不自行 commit（§1）+ 上一单元已 commit ⇒ 未提交部分即本单元。implementer 改动与 baseline 撞同一文件时立即 `AskUserQuestion`：有可用 pre-image diff 则拆出 baseline hunk 后 commit / stash，或授权整文件并入本单元一起 review + commit；无可用 pre-image 的 untracked / binary 文件只能整文件并入或整文件留给用户。用户保留的文件不作为已 review 内容，§6 注明。
+- review 对象：working tree 中本单元改动（含 untracked；剔除输入 gate 后冻结的 `baseline.patch`、plan.md 同目录的规划 audit trail，以及 §4b/4c 测试证据文件；staging 判据同 §5 Scope）。implementer 不自行 commit（§1）+ 上一单元已 commit ⇒ 未提交部分即本单元。**输入 gate 选了拆面并行时本句失效**：各单元在自己的 worktree 内（见输入契约并行机会表），review 对象与 staging 都限该单元的声明文件面；声明文件面外的写入不默认归属任何单元——已被其它并行单元的声明文件面覆盖的归那个单元，无任何声明文件面认领的按 baseline 撞车同款 `AskUserQuestion` 处置（并入本单元扩面 / 留给用户），不静默成孤儿；两单元实际写入交叠时同此处置。implementer 改动与 baseline 撞同一文件时立即 `AskUserQuestion`：有可用 pre-image diff 则拆出 baseline hunk 后 commit / stash，或授权整文件并入本单元一起 review + commit；无可用 pre-image 的 untracked / binary 文件只能整文件并入或整文件留给用户。用户保留的文件不作为已 review 内容，§6 注明。
 - 修复路由：CRITICAL/HIGH findings 视同单元验收 fail。进入新的 closure 修复轮前先过「Trajectory Gate」：review 证明的是 artifact 当前有缺陷，不证明保存它仍是最小充分方案；简化、替换或删除 artifact 也可以是正确修复。当前执行方案仍成立时再路由回该切片的作者：implementer 切片续用该单元 handle；supervisor 切片（§4.5 品味工件等）supervisor 自修。修复后先按证据失效范围恢复 plan verify，再让每个被失效的 retained charter 沿自身 continuation handle / closure contract 复核；单元 gate 沿 review-gate closure，合并调用中的各 verdict 也分别闭合。closure 修复若再改 artifact，则重新做失效分析与 verify。任一适用 gate 未过不 commit、不进下一单元。
 - 定档照常生效：trivial 单元显式免审声明后直接 commit——不为低风险单元付固定 review 成本。
 - 覆盖一切入 commit 的 diff：单元 commit 之后新增的改动（典型：§4 UX 修复）入 commit 前同样过本节 gate——小修复按定档自然落轻档。同一 root cause / 失效域、必须一起成立的强耦合修复组成一个 mini 单元，走「失效分析 → 恢复 plan verify → gate → commit」；无关修复不得混装。
@@ -195,7 +233,7 @@ Codex harness 对原 collaboration agent 发 follow-up task，语义与上面 re
 - 两条都不满足（纯内部重构 / 无 UX 入口且无契约影响）→ **§4 整段 skip**，直接进 §5。
 - ux-contract 中性但用户可感知的变更（如 UX bugfix）→ 仅 4c 触发，**跑 test-ux、不跑 4a/4b**。
 
-4b / 4c 的独立 Codex test contexts 统一按 §1 当前 harness transport 启动并记录 handle，等待与裁决沿 §2 / §3；两步只借下游 command 的测试 recipe，不内联其完整 supervisor。
+4b / 4c 的独立 Codex test contexts 统一按 §1 当前 harness transport 启动并记录 handle，等待与裁决沿 §2 / §3；两步只借下游 command 的测试 recipe，不内联其完整 supervisor。验证 context 彼此**独立且资源独立**（不共享测试账号 / 配额 / 可变服务端状态，证据输出面不重叠——这组判定读数派发前记台账）时默认并行派发；共享上述任一资源则按其容量定并发，可为 1（coding-guidelines「Concurrent Batch I/O」的有界并发及其资源独立限定在本 command 的落地）。4b/4c 的端到端测试会写产品侧状态，共享同一 instance / 账号时正属降并发情形。会写工作树的工作单元不在此列：§3.5 的 review 对象识别依赖单元串行（除非输入 gate 已选拆面并行）。
 
 **4a 应用 ux-contract 更新**
 
@@ -274,16 +312,19 @@ execute-plan 专属 delta：
 
 **执行**：按 `~/.claude/skills/create-commit/SKILL.md` 提交——Scope（见上）作 staging 判据，message 沿用 skill 格式、不手写。单元 commit 已覆盖全部改动且无 doc 残留时，本步无新 commit。
 
+**L1 达成断言（进入 §6 前）**：以 plan 的 L1 段（产物 / 使用者 / 使用方式，及该段记载的成功定义）为目标边界，执行 `plan-execution-principles.md`「验证边界由目标划定」所在的 Stop Gate 交付物用途项——逐条给出分得开的读数或如实记未核实（单元 verify 的覆盖面由 task 分解划定，不构成本断言）；未核实项按该 gate 处置（续 implementer 补齐，或升级用户）。断言结果逐条入 §6。
+
 ### 6. 最终 handoff（用户拿到的唯一交付物）
 
 中文回复，内容由实际执行轨迹决定：
 
 **必含**
 
-- implementer continuation handle 列表（wrapper session id 或 collaboration agent handle）+ plan 路径
+- plan 路径 + 台账路径 + 按角色列出的仍可续用 continuation handle（implementer / reviewer / 验证 context / doc-sync；已终结不可续用的不必全量抄出，台账里有）
 - commit hash 列表（§3.5 各单元 commit + §5 收尾 commit 的可追溯 anchor；某步无 commit 则注明原因，如 diff 为空 / Stop Gate 未满足）
 - 变更摘要 + 关键文件
 - 已跑的 plan verify + 可观察证据。任何走**判据降级**路径结案的 verify（见 §3 / `plan-execution-principles.md`「判据不可降级」），作为显式 delta 列出（plan verify 原文 vs 实际交付值 + 降级理由），不报为普通"达成"
+- L1 逐条达成断言（每条 L1 要素 → 覆盖证据指针；来自 §5 末步。未进入 §5 的合法 stop 注明未断言及原因）
 - 各单元 review gate 裁决摘要（含 trivial 免审声明与 waive 记录）
 - 文档同步的完整 manifest：recipe / caller gate status transition 轨迹与当前状态（含 `awaiting-caller-gate + gate blocked` 的合法 stop）、审查范围、实际起草 / 编辑的文档 / supporting artifact / 原则文件、coverage 状态与轮数、原始范围终审结果、最终 findings / decisions / edits、未解决的取舍 / 缺失依赖 / 写入阻塞及恢复点、caller gate 结果（均为 0 / 无时也明示，以区分 clean run 与未执行）
 - 文档同步的原则缺口支路状态：not-triggered / committed / rejected / deferred；非 not-triggered 时附原因，committed 时再附原则文件 owning repo + 独立 commit hash + scope
@@ -313,4 +354,5 @@ execute-plan 专属 delta：
 - 生成后 review 只有一个 inventory owner（§3.5）：supervisor 统一识别风险类别、合并兼容 charter、续用原 reviewer 做 closure；implementer 不另起重叠 generic/final review。去重不跨风险 contract——产品语义、UX、代码正确性仍分别有证据。
 - 验证按依赖失效，不按修改次数清零：最终 gate 的有效证据必须覆盖最终状态；无相关变化的本次执行证据继续有效，相关变化后只重跑被失效的最小验证与必要的最终 gate。
 - Long-task 模式下 state.md / journal.md 是交付证据：Codex 声称完成但两份文件没更新 → 视同 verify 缺项，续用原 handle 让 Codex 补。
+- 台账写入是派发 / 裁决 / commit 的完成边界，停轮对账是带在飞任务停轮的合法性条件（均见「输入契约」与 §2）：SOTA supervisor 默认把执行态留在对话里、把"在等"当无需交代——fork / compaction 后 continuation handle 与裁决即失传，停轮被误判成早停。
 - 不接管 plan 范围内的代码改动：supervisor 修 transport / 适配层允许；替 Codex 写 plan 范围内的代码不允许——绕过 supervisor 定位。限定：prompt / rubric / 评分协议等品味工件不算"代码"，§4.5 触发时其设计权本就归 supervisor。另一例外：指令 artifact 单元走专项路由时（§3.5），findings 修复随专项 command 的主-session 交互闭环施加、不续用 implementer——非绕过 supervisor 定位，而是 review-skill / review-claude-md 只能主-session 跑。

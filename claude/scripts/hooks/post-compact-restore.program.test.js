@@ -36,9 +36,80 @@ const PLAN_ACTION =
   "Action: read state.md and journal.md, then resume the in_progress task recorded there. " +
   'Do NOT ask the user "what next?" and do NOT rely on the task list above — long-task sessions ' +
   "track progress in state.md, not in TaskCreate/TaskUpdate.";
-const PROGRAM_ACTION =
-  "Action: 按 ledger 的状态与 next action 列接续；停轮对账规则见 " +
-  "`~/.claude/commands/custom/run-program.md`。";
+// The program action forks on journal presence. Both branches send the agent to the
+// SAME authority (per-task sync anchors + the first-party artifacts they point at —
+// run-program.md's glossary puts execution state there, not in the ledger and not in
+// the journal); the fork is only about what the journal can be mined for.
+const AUTHORITY_HINT = "核的是每行的同步锚点与证据指针指向的一手产物（执行态以它为准）。";
+// The ten columns are sliced per task, so any current-state fact belonging to no single
+// row can only sit outside the table. Step 1 used to name only 状态表, which made that
+// content invisible to the recovering agent — the briefing pointed at a file and told it
+// to verify a part.
+const LEDGER_SCOPE =
+  "ledger 是一份文件不是一张表：表格以外的正文可能还写着不属于任何" +
+  "一行的当前态，一并读、同样以一手产物为准。";
+const JOURNAL_CAVEAT =
+  "线索一律回到对应权威源核实，不得据 journal 直接改状态，" +
+  "也不得把其中的「已完成/已交付」写成 accepted——验收是单独一步。";
+const STALENESS_NOTE =
+  "陈旧不限于 in-flight——pending / dispatched / awaiting-verify 同样会过期，" +
+  "accepted 也可能被新证据推翻。停轮对账规则见 `~/.claude/commands/custom/run-program.md`。";
+const PROGRAM_ACTION_RECONCILE =
+  "Action: **先核后续**，顺序不可颠倒。" +
+  "(1) 逐行核 ledger 状态表：" + AUTHORITY_HINT + LEDGER_SCOPE +
+  "(2) 通读 journal 找分歧线索（不限末尾几条）：从未入表的任务、既有行的验收判据/路由/" +
+  "next action 更正、用户新增或改变的要求。" + JOURNAL_CAVEAT +
+  "(3) 把前两步核出的偏差修进表。" +
+  "(4) 完成第 1–3 步之后，才按修好的表接续。" + STALENESS_NOTE;
+const PROGRAM_ACTION_NO_JOURNAL =
+  "Action: **先核后续**，顺序不可颠倒。" +
+  "(1) 逐行核 ledger 状态表，每一行都核、不只在飞的那些：" + AUTHORITY_HINT + LEDGER_SCOPE +
+  "(2) journal 缺失，表外任务没有线索源——改从 transcript、当前 task list、" +
+  "以及带本 program tag 的一手产物里找；穷举不了就如实记「本次恢复未能穷举表外任务」，不得当作没有。" +
+  "(3) 把前两步核出的偏差修进表，并按上面 MISSING 那条重建 journal。" +
+  "(4) 完成第 1–3 步之后，才接续。" + STALENESS_NOTE;
+
+// The invariant is read off the PRODUCER'S DATA, not off the rendered sentence. Two
+// rounds of regexes over the prose each died to a new wording that kept every keyword
+// and inverted the behaviour — matching natural language against a spec that does not
+// constrain its producer is what `pattern-matching-scope.md` forbids. The hook now emits
+// typed steps, so "exactly one resume step and it is last" is a structural fact.
+//
+// The frozen literal goldens above stay: structure catches invariant violations, the
+// goldens catch prose drift. Deriving the goldens from the producer would make the
+// equality tautological — the symmetric-edit hole the reviewer kept exploiting.
+const { programActionSteps, renderProgramAction } = require(POST_COMPACT);
+
+function assertResumeIsGated(journalPresent, label) {
+  const steps = programActionSteps({
+    journalPresent,
+    AUTHORITY_HINT,
+    LEDGER_SCOPE,
+    JOURNAL_CAVEAT,
+    STALENESS_NOTE,
+  });
+  assert.deepEqual(
+    steps.map((step) => step.kind),
+    ["verify", "clues", "repair", "resume"],
+    `${label}: the action must be verify → clues → repair → resume`,
+  );
+  assert.equal(
+    steps.filter((step) => step.kind === "resume").length,
+    1,
+    `${label}: exactly one step may resume`,
+  );
+  assert.equal(steps[steps.length - 1].kind, "resume", `${label}: resuming must be the last step`);
+  // The producer itself refuses a mis-ordered contract — proven here rather than assumed,
+  // so a future edit that moves the resume step cannot silently render a briefing whose
+  // gating is wrong.
+  const misordered = [steps[3], ...steps.slice(0, 3)];
+  assert.throws(
+    () => renderProgramAction(misordered),
+    /resume step must be last/,
+    `${label}: the renderer must reject a resume step that is not last`,
+  );
+}
+
 const UNKNOWN_TYPE_ACTION =
   "Action: inspect or repair this active marker before resuming. " +
   "Do not apply long-task or program recovery semantics.";
@@ -116,7 +187,7 @@ function expectedProgramBriefing(program, readable, journal) {
     "",
     "---",
     readable
-      ? PROGRAM_ACTION
+      ? (journal ? PROGRAM_ACTION_RECONCILE : PROGRAM_ACTION_NO_JOURNAL)
       : "Action: locate the ledger at the path above, or confirm the program was closed and clear " +
         "the marker with `~/.claude/bin/active-plan clear`. Do not apply long-task recovery semantics.",
   );
@@ -455,6 +526,19 @@ test("program marker survives the real producer-to-consumer compaction chain", (
   const briefing = briefingFrom(postCompact(sid));
   assert.equal(briefing, expectedProgramBriefing(programPath, true));
   assert.match(briefing, /MISSING journal/, "a ledger without journal.md must surface the gap, not skip it");
+  assertResumeIsGated(false, "no-journal branch");
+  // Without a journal there is no lead on which rows are missing, so the sweep cannot
+  // be narrowed to the in-flight ones — that narrowing is exactly how the earlier
+  // draft would have skipped stale pending/dispatched/awaiting-verify rows.
+  assert.match(briefing, /每一行都核、不只在飞的那些/, "no journal means no way to narrow the sweep");
+  assert.match(briefing, /表格以外的正文/, "step 1 must widen past the table: facts belonging to no row live outside it");
+  assert.match(briefing, /同样以一手产物为准/, "table-external text is not self-authorising — it carries the same authority chain");
+  // Without a journal the off-table tasks have no clue source at all — "walk the rows"
+  // structurally cannot find a task that has no row. The action must name where else to
+  // look, and must make an incomplete sweep say so instead of reading as "none found".
+  assert.match(briefing, /transcript、当前 task list/, "off-table tasks need a named discovery source");
+  assert.match(briefing, /未能穷举表外任务/, "an incomplete sweep must be recorded, not read as an empty one");
+  assert.doesNotMatch(briefing, /通读 journal/, "cannot mine a journal that is absent");
 });
 
 test("program marker injects journal.md when the ledger directory has one", () => {
@@ -476,6 +560,16 @@ test("program marker injects journal.md when the ledger directory has one", () =
   // and the helper the same way would keep assert.equal green.
   assert.match(briefing, /- journal: /);
   assert.doesNotMatch(briefing, /MISSING journal/);
+  assertResumeIsGated(true, "journal-present branch");
+  // This branch's distinguishing duty, and the exact place two review rounds landed:
+  // the journal is a clue source for ANY divergence, not just for rows the table never
+  // got. Narrowing it to missing rows silently drops corrections to acceptance criteria,
+  // routing and next action that surface in the journal before the first-party artifact
+  // moves. And the clues are not only in the tail.
+  assert.match(briefing, /不限末尾几条/, "an earlier journal entry can hold the only trace of an off-table task");
+  assert.match(briefing, /既有行的验收判据\/路由\/next action 更正/, "clues cover existing rows, not just missing ones");
+  assert.match(briefing, /不限于 in-flight/, "stale rows are not only the in-flight ones");
+  assert.match(briefing, /表格以外的正文/, "step 1 must widen past the table on the journal-present branch too");
 });
 
 test("program marker reports an unavailable ledger removed after PreCompact", () => {

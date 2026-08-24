@@ -1,0 +1,736 @@
+#!/usr/bin/env python3
+"""量一个网页**花了多少视觉用量**，与一个参照并排，并强制作者为每一处差异作答。
+
+## 它防的是哪一次失守
+
+一个页面把 L2 参数层做对了——闭合间距梯、带嵌套规则的圆角族、按中文取的 13/22 行高、
+一个有意的 `--measure`——`validate-visual-system.js` 给它 10/12「system present」，作者据此施工。
+页面所有者看一眼就判它"繁琐、色彩审美差、两边留空白"。同条件成对实测：他满意的参照 11/12，
+他**同样满意**的另一个参照 0.417（并因此被记成"没有视觉系统、不是可再选的参照"）。
+**读数与满意度反相关**，而在它确实查的那几项上，坏页面还全面胜出（motion 100% vs 79%）。
+
+差异全部在参数**之上**：同一个 danger 角色刷了 1467 次、药丸徽章 1721 个、内容列在 1920 视口里
+只占 1400px。没有一个是某个元素自身的属性——它们是页面尺度的合成量，而 token 校验器按定义看不见。
+
+## 为什么它几乎不做判定
+
+本工具建成后按 `evidence-sufficiency.md`「发现候选的检索」的强制程序取了 9 个公认高水准页面做标定
+（IBM Carbon / AWS Cloudscape / Stripe / Plotly / Observable / Grafana Play / Apache ECharts / 两个用户点名的参照）。
+**七条候选判据里六条被反例证伪**：
+
+  色相桶少=好      → Carbon 8 桶、Cloudscape 9 桶，都高于被判差的那页（6）
+  饱和色少=好      → Cloudscape 100 种
+  描边样式少=好    → Plotly 15 = 被判差那页的 15
+  描边密度低=好    → 用户最满意的参照 21.8 ≈ 被判差那页 25.6
+  区域填充率       → 54% 来自一个**正确**的 --measure，病在容器宽度
+  宽度认领         → 三种口径全败：<main> 盒 5/5 退化成 1.000；全页 ink 并集把坏页读成 0.975
+                     （通栏告警条顶满）；数据区扫描线把坏页读成 0.703，**夹在**两个好页面
+                     0.677 与 0.762 之间
+  重复元件数       → **只活到"极端离群"**：好页面 0–48，坏页 1767；48 与 1767 之间无样本
+
+所以**唯一的闸是相对参照的 ≥10× 离群**，它宣称的只是"这是相对该参照的极端离群"，
+不是"这个页面不合格"。其余读数一律并排输出 + 强制作者逐项作答，不作答即退出「未完成」。
+判定留给人；本工具只保证那个问题**一定被问到**。
+
+倍数 10 本身**未经标定**（来自一个负例）。想改它之前先补 48–1767 之间的样本，别凭手感调。
+
+## 读数的确切含义（字段名即测法）
+
+- `repeated_elements`：徽章形态元件数——带描边或底色、圆角 >0、高 <40px、宽 <420px、文本 1–60 字。
+  **不按"无子元素的叶子"判**：那条规则受 DOM 结构支配，`<span class=badge><span>OK</span></span>`
+  外面多包一层就从 1 变 0。去重只跳过**包装型**祖先（面积与被包者相当），不跳过容纳多个兄弟的容器
+  这一族。它是唯一进闸的量。
+- `saturated_colors` / `hue_buckets`：chroma ≥40 的不同色值数 / 30° 色相桶数。**只报，不判。**
+- `border_styles` / `borders_per_100`：不同「宽·样式·色·圆角」组合数 / 每 100 个可见元素的描边盒数。**只报。**
+- `radii`：同时在用的不同 border-radius 值数。**只报。**
+- `screens`：`scrollHeight / innerHeight`。**只报。**
+- `data_region_coverage`：给了 `--data-region` 时，在该区域中心高度上做一条**扫描线**，
+  横向有多少比例的视口宽被真的画着东西覆盖。用扫描线而不是容器盒，是因为 `<main>` 这类通栏语义
+  地标会退化成 1.000（实测 5/5），而通栏装饰横幅又会把全页 ink 并集顶满（实测 0.975）。**只报。**
+
+## 两个常数的已知断点（未标定，摆出来而不是藏着）
+
+离群闸 = 倍数 `>=10×` **且** 绝对下限 `>=50`，两者都未标定，组合出这些断点：
+  · 漏报：参照 0–4、本页 49 → 比例 12× 到无穷大，仍不触发（卡在下限）
+  · 误报：参照 5、本页 50 → 触发，而 50 只比已观察到的好页面上沿 48 多两个
+  · 漏报：参照 20、本页 199 → 不触发，尽管 199 已是正例上沿的 4 倍
+另有一个**差异阈值 0.25**（相对差异多大才要求作答）：`120 vs 100` 因此不会被列为差异。
+还有一个**包装比例 1.8**（祖先面积 ÷ 子项面积 ≤ 它才判为"包装"并去重）——它同样未标定，
+且**它控制的正是唯一进闸的那个量**：30 对「外层 pill 套内层 pill」，1.79× 读 30、1.81× 读 60。
+四者都可由 `--outlier-multiple` / `--outlier-floor` / `--diff-threshold` / `--wrap-area-ratio`
+覆盖，且每次运行都打印在输出里。
+
+## 就绪闸：未渲染的页面在本量尺上与"极其克制的设计"逐字同形
+
+实测：同一段普查在数据未到达时报「2 种饱和色、14 个描边盒、5 种描边样式」，数据到达后同一页是
+「4 种色、209 个描边盒」。同一 session 里 `page-repetition` 掉进同一个坑——它只统计到 465 字
+（真实 72,885 字）并报**通过**。所以 `--ready <selector>>=N` 是**必填**的（放弃它要显式写 `--no-ready-gate`，那会在输出里留痕，
+且该次读数不得当作已核实）。它只数**可见**匹配——`querySelectorAll().length` 会把隐藏模板、
+骨架屏、`display:none` 的空态一起数进去，而那正是"请求失败但页面稳定渲染出一堆东西"的样子。
+阈值必须 ≥1：`>=0` 与 `.definitely-missing>=0` 都能把闸整个绕过（外部评审实测）。
+不达标即报 `unresolved`，**不报 0、不报通过**。
+
+**它仍挡不住的**：登录页 / 错误 shell 若恰好含有匹配该 selector 的可见元素、以及"内容来了但是错的"。
+就绪闸只证明"某个只在真实内容出现后才成立的锚点出现了"，而那个锚点选得对不对是**调用者的判断**，
+不是探针校准出来的——所以它连同 `--data-region` 一起被打印成「语义前提（调用者提供）」。
+
+## 退出码
+
+  0  读数取到；给了参照时无离群且全部差异已作答；未给参照时只报读数（并明说未产出判定）
+  1  离群闸触发（重复元件 ≥10× 参照）
+  2  仪器故障：agent-browser 缺失 / 打开失败 / eval 失败 / 读数不可解析 / 超时；
+     **也包括参数用法错误**（argparse 自身以 2 退出，而 `--viewport` 形态错、`--answers` 读不到、
+     `--ready` 阈值 <1 这几类由本程序显式捕获并同样映射到 2）。这不是巧合而是有意统一：
+     这些全都是"这次没量成"，与 1（页面读数触发离群）分属两类，**绝不能混**。
+     曾经的写法会让非法 `--viewport` 抛未捕获 ValueError、Python 以 1 退出，与离群同码——
+     外部评审判为 HIGH。
+  3  unresolved：就绪闸未过、参照页取不到读数、`--data-region` 选择器不匹配
+  4  未完成：有差异但没有作答（给 --answers 补齐）
+  6  结构缺陷：同名列在重复出现的同构块里落在多个 x（量的是**相对本表左缘**的偏移，不是
+     viewport 绝对 x——后者会误杀并排放在多列里的同构表），或有可展开元素**展开前后渲染完全
+     不变**（即读者无从看出它能展开、也无从看出当前是开是关）。
+     **这两条不需要参照、也不需要标定**——它们由构造给出。展开那一条**实测切换 `open` 前后的
+     渲染签名**，而不是查"有没有某个伪元素/图标"：后者两头都错——空 `content:""` 加边框画的
+     chevron 会被误判成没记号，而一个与展开无关的头像 svg 会让完全没有提示的页面过闸。
+     与 1 分开正是因为置信度不同。
+
+把 1 和 3 混成一个码，"页面有问题"与"我没量准"就同形了——本工具存在的理由正是不让两种结局同形。
+
+## 不覆盖
+
+内容对读者有没有用（→ `web-ui-observation.md`「交付前的最低证据·一」与 `page-repetition`）、
+信息架构与认知负荷（→ `design-critique`）、主功能元素有没有真的渲染出来（→ `page-acceptance`）、
+对比度、语义层级是否正确（**它没有读数，只有契约或人判得了**）、多状态真实使用（→ `test-ux`）、
+响应——点下去到画面更新等了多久（→ `web-ui-observation.md`「测量技术」的两行时延量法）。
+"读数干净"不等于"页面好"。
+"""
+
+from __future__ import annotations
+import argparse, json, math, os, re, shutil, subprocess, sys, uuid
+
+EXIT_OK, EXIT_OUTLIER, EXIT_INSTRUMENT, EXIT_UNRESOLVED, EXIT_INCOMPLETE = 0, 1, 2, 3, 4
+# 6 与 1 分开，不是洁癖：1 是"相对这个参照像个离群值"（未标定、要人判），
+# 6 是"这在任何页面上都是缺陷"（由构造给出，不需要语料）。混成一个码，弱的那个会
+# 借走强的那个的信用——而本工具存在的理由正是不让不同强度的断言长成一个样子。
+EXIT_STRUCTURAL = 6
+
+OUTLIER_MULTIPLE = 10   # 未标定：来自唯一一个负例（好页面 0–48 vs 坏页 1767）
+OUTLIER_FLOOR = 50      # 未标定：取自正例区间上沿 48。断点见模块 docstring「两个常数的已知断点」
+DIFF_THRESHOLD = 0.25   # 未标定：多大的相对差异才要求作答
+# 未标定：祖先面积 ÷ 子项面积 ≤ 此值时判为"包装"、去重；大于它判为"容器"、不去重。
+# **它控制唯一进闸的那个量**（repeated_elements），所以必须与上面三个同等对待——具名、
+# 可覆盖、每次运行都打印。上一版把它当实现细节埋在探针里，外部复核算出它的断点：
+# 30 对「外层链接 pill + 内层状态 pill」，祖先 1.79× 时读 30、1.81× 时读 60，参照为 6 时
+# 退出码可从"不触发"直接翻成"离群"。埋着的常数和写出来的阈值一样会决定判定，区别只在
+# 它不进审计。
+WRAP_AREA_RATIO = 1.8
+REPORT_ONLY = ["saturated_colors", "hue_buckets", "border_styles", "borders_per_100",
+               "radii", "screens", "data_region_coverage"]
+
+PROBE = r"""
+((readySel, readyMin, dataSel) => {
+  // 就绪闸只数**可见**匹配。`querySelectorAll().length` 会把隐藏模板、骨架屏、`display:none`
+  // 的空态卡片一起数进去——那正是"请求失败但页面稳定渲染出一堆东西"这一形态的样子，
+  // 而它与"内容真的来了"在计数上同形（外部评审判为 HIGH）。
+  const visibleCount = (sel) => {
+    let n;
+    try { n = document.querySelectorAll(sel); } catch (e) { return null; }
+    let c = 0;
+    for (const e of n) {
+      const r = e.getBoundingClientRect(); const cs = getComputedStyle(e);
+      if (r.width >= 1 && r.height >= 1 && cs.visibility !== 'hidden'
+          && cs.display !== 'none' && +cs.opacity !== 0) c++;
+    }
+    return c;
+  };
+  if (readySel) {
+    const got = visibleCount(readySel);
+    if (got === null) return JSON.stringify({unresolved: "ready selector invalid: " + readySel});
+    if (got < readyMin)
+      return JSON.stringify({unresolved: "not ready: " + readySel + " had " + got
+        + " **visible** matches < " + readyMin});
+  }
+  const vw = innerWidth, vh = innerHeight;
+  const vis = [...document.querySelectorAll('*')].filter(e => {
+    const r = e.getBoundingClientRect(), cs = getComputedStyle(e);
+    return r.width >= 1 && r.height >= 1 && cs.visibility !== 'hidden'
+        && cs.display !== 'none' && +cs.opacity !== 0;
+  });
+  if (vis.length < 20) return JSON.stringify({unresolved: "only " + vis.length + " visible elements"});
+
+  const parse = (c) => { const m = /rgba?\(([^)]+)\)/.exec(c); if (!m) return null;
+    const a = m[1].split(',').map(parseFloat); if (a[3] !== undefined && a[3] < 0.05) return null; return a.slice(0, 3); };
+  const chroma = (g) => Math.max(...g) - Math.min(...g);
+  const hueOf = ([r, g, b]) => { const mx = Math.max(r, g, b), mn = Math.min(r, g, b), d = mx - mn;
+    if (!d) return null; let h = mx === r ? ((g - b) / d) % 6 : mx === g ? (b - r) / d + 2 : (r - g) / d + 4;
+    return (Math.round(h * 60) + 360) % 360; };
+
+  const sat = new Set(), hues = new Set(), bstyle = new Set(), radii = new Set();
+  let bordered = 0, repeated = 0;
+  for (const e of vis) {
+    const cs = getComputedStyle(e);
+    const probes = [cs.color, cs.backgroundColor, cs.borderTopColor];
+    for (let i = 0; i < 3; i++) {
+      const v = probes[i];
+      if (i === 1 && v === 'rgba(0, 0, 0, 0)') continue;
+      if (i === 2 && parseFloat(cs.borderTopWidth) === 0) continue;
+      const rgb = parse(v); if (!rgb || chroma(rgb) < 40) continue;
+      sat.add(rgb.map(Math.round).join(','));
+      const h = hueOf(rgb); if (h !== null) hues.add(Math.floor(h / 30) * 30);
+    }
+    const bw = parseFloat(cs.borderTopWidth);
+    if (bw > 0) {
+      bordered++;
+      bstyle.add(cs.borderTopWidth + ' ' + cs.borderTopStyle + ' ' + cs.borderTopColor + ' r' + cs.borderTopLeftRadius);
+      radii.add(cs.borderTopLeftRadius);
+    }
+    // **不要**用 `e.children.length === 0` 当判据。`<span class=badge>OK</span>` 与
+    // `<span class=badge><span>OK</span></span>` 在页面上完全一样，前者计数、后者不计——
+    // 一次无视觉变化的 DOM 包装就能把读数从 1 变成 0（外部评审判为 HIGH，唯一的判定量因此
+    // 受 DOM 结构支配）。改为：自己是徽章形态，且**最近的徽章形态祖先不存在**（去重嵌套）。
+    const r = e.getBoundingClientRect();
+    const badgeLike = (el) => {
+      const c = getComputedStyle(el); const b = el.getBoundingClientRect();
+      const paint = parseFloat(c.borderTopWidth) > 0 || c.backgroundColor !== 'rgba(0, 0, 0, 0)';
+      return paint && parseFloat(c.borderTopLeftRadius) > 0 && b.height < 40 && b.width < 420
+             && el.textContent.trim().length > 0 && el.textContent.trim().length < 60;
+    };
+    if (badgeLike(e)) {
+      let anc = e.parentElement, nested = false;
+      // 只跳过**包装型**祖先，不跳过容器型祖先。原先"存在任何 badge-like 祖先即跳过"会把一个
+      // 自身也满足 badgeLike 的容器（分段控件外壳：有底色、圆角、高 36px、宽 400px）里的 20 个
+      // 独立 pill 整批吞掉——读数 20 → 1，唯一的判定量因此漏报（外部复核实测，判为 HIGH）。
+      // 包装型的判据是**几乎与被包者同大**：真包装只多出 padding；容纳多个兄弟的容器不会。
+      const myR = e.getBoundingClientRect();
+      const myArea = Math.max(1, myR.width * myR.height);
+      while (anc && anc !== document.body) {
+        if (badgeLike(anc)) {
+          const aR = anc.getBoundingClientRect();
+          if (aR.width * aR.height <= myArea * WRAP_RATIO) { nested = true; break; }
+        }
+        anc = anc.parentElement;
+      }
+      if (!nested) repeated++;
+    }
+  }
+
+  let coverage = null, scanY = null;
+  if (dataSel) {
+    const el = document.querySelector(dataSel);
+    if (!el) return JSON.stringify({unresolved: "data-region selector matched nothing: " + dataSel});
+    el.scrollIntoView({block: 'center'});
+    const r = el.getBoundingClientRect();
+    scanY = Math.max(1, Math.min(vh - 2, Math.round(r.top + r.height / 2)));
+    const paints = (e) => { const cs = getComputedStyle(e);
+      if (cs.visibility === 'hidden' || cs.display === 'none' || +cs.opacity === 0) return false;
+      const hasBg = cs.backgroundColor !== 'rgba(0, 0, 0, 0)' || cs.backgroundImage !== 'none';
+      const hasBorder = ['borderTopWidth','borderLeftWidth','borderRightWidth','borderBottomWidth'].some(k => parseFloat(cs[k]) > 0);
+      const hasText = [...e.childNodes].some(n => n.nodeType === 3 && n.nodeValue.trim());
+      const isGraphic = /^(IMG|VIDEO|CANVAS|SVG|INPUT|SELECT|BUTTON|TEXTAREA)$/i.test(e.tagName);
+      return hasBg || hasBorder || hasText || isGraphic; };
+    const segs = [];
+    for (const e of document.querySelectorAll('*')) {
+      const b = e.getBoundingClientRect();
+      if (b.width < 2 || b.height < 2 || b.top > scanY || b.bottom < scanY) continue;
+      if (b.width >= vw * 0.995 && b.height >= vh * 0.9) continue;   // 整页级容器不算承载内容
+      if (!paints(e)) continue;
+      segs.push([Math.max(0, b.left), Math.min(vw, b.right)]);
+    }
+    segs.sort((a, b) => a[0] - b[0]);
+    let cov = 0, cur = null;
+    for (const s of segs) { if (!cur) { cur = s.slice(); continue; }
+      if (s[0] <= cur[1]) cur[1] = Math.max(cur[1], s[1]); else { cov += cur[1] - cur[0]; cur = s.slice(); } }
+    if (cur) cov += cur[1] - cur[0];
+    coverage = +(cov / vw).toFixed(3);
+  }
+
+  // ---- 结构一致性：同一列在重复出现的同构块里必须落在同一个 x ----
+  // 这一项**不需要标定**，与上面那些"多少算多"的用量读数性质不同：同名列出现在两个不同的 x，
+  // 在任何页面上、对任何审美都是缺陷。判据由构造给出，不由语料给出。
+  // 实测动机：一页 90 张同构表，同名列表头落在 6 个不同的 x、跨度 370px；读者每张表都要重新
+  // 找一次列在哪。根因是每张表各自 `table-layout:auto`。
+  let colXSpread = null, colXWorst = null;
+  {
+    const tables = [...document.querySelectorAll('table')].filter(t => t.querySelector('thead th'));
+    // 分组键必须包含「同构」的具体含义，不能只按表头文字。**实测的误报**：同一个「指标」表头
+    // 同时出现在逐 case 表（90 张，在卡片里）与页首总览表（6 张，页级），两族容器 padding 不同、
+    // 列起点天然差 25px，按文字分组会把它报成缺陷。同构 = 同列数 + 同容器类。
+    const ctxOf = (t) => {
+      let p = t.parentElement, hops = 0;
+      while (p && hops < 4) {
+        const c = (p.className || '').toString().trim().split(/\s+/)[0];
+        if (c) return c;
+        p = p.parentElement; hops++;
+      }
+      return 'root';
+    };
+    const byLabel = {};
+    for (const t of tables) {
+      const ths = [...t.querySelectorAll('thead th')];
+      const tR = t.getBoundingClientRect();
+      // 表宽进分组键：宽度不同的表之间，"同一个 x" 本来就不是一个成立的期望。
+      // **按桶取，不按精确值**：舍入、滚动条、父容器 padding 会让本该同组的表差 1–2px，
+      // 精确键会把它们拆成 w900 / w901 / w902 三个单样本组，全被 `xs.length >= 3` 过滤掉，
+      // 于是真错位读成 `null` 并 exit 0——一个只在数字上很小、后果却是整条判据消失的差别
+      // （外部复核举出，判为 HIGH）。桶宽 16px：远大于这些噪声，又远小于"真的不同宽"。
+      const ctx = ctxOf(t) + '#' + ths.length + 'w' + Math.round(tR.width / 16);
+      ths.forEach((th, i) => {
+        const k = (th.textContent.trim() || ('col' + i)) + ' @' + ctx;
+        // 量**相对本表左缘**的偏移，不量 viewport 绝对 x。绝对 x 会误杀合法的多列布局：
+        // 三张完全一致的表并排放在 flex 三列里，列内对齐无可挑剔，绝对 x 却天然相差一整列宽
+        // ——实测报 "3 个不同 x、跨度 1283px" 并 exit 6，还把根因错指成 `table-layout:auto`
+        // （外部复核实测，判为 HIGH）。相对偏移同时保住真阳性：纵向堆叠的同宽表里，首列宽一变，
+        // 后面每一列的相对偏移就跟着变，照样报得出来。
+        (byLabel[k] = byLabel[k] || []).push(Math.round(th.getBoundingClientRect().left - tR.left));
+      });
+    }
+    const spreads = Object.entries(byLabel)
+      .filter(([, xs]) => xs.length >= 3)          // 至少重复三次才谈得上"同构块"
+      .map(([k, xs]) => ({label: k, distinct: new Set(xs).size,
+                          range: Math.max(...xs) - Math.min(...xs), n: xs.length}));
+    if (spreads.length) {
+      colXSpread = Math.max(...spreads.map(x => x.distinct));
+      colXWorst = spreads.sort((a, b) => b.distinct - a.distinct)[0];
+    }
+  }
+
+  // ---- 重复文字：同一串字面量在多少个单元里被印了多少遍 ----
+  // 它不是"噪声"，是**一次没做的分层决策**：同一句话出现 N 遍，说明它属于比"每个单元"更粗的
+  // 一层（图例 / 表头 / 按需展开 / title），而没有被放到那一层去。
+  let maxRepeatedCellText = 0, repeatedCellSample = null;
+  {
+    const counts = new Map();
+    for (const e of vis) {
+      if (e.children.length) continue;
+      const t = e.textContent.trim();
+      if (t.length < 4 || t.length > 80) continue;
+      counts.set(t, (counts.get(t) || 0) + 1);
+    }
+    for (const [t, n] of counts) {
+      if (n > maxRepeatedCellText) { maxRepeatedCellText = n; repeatedCellSample = t.slice(0, 40); }
+    }
+  }
+
+  // ---- 可展开的东西有没有显示"我可展开、现在是开/关" ----
+  // 同样**不需要标定**：一个可点开的东西不给任何记号，在任何页面上都是缺陷。
+  // 常见成因：给 <summary> 设了 display:flex/grid，浏览器默认三角依赖 display:list-item，于是消失。
+  let disclosuresTotal = 0, disclosuresNoMarker = 0;
+  for (const d of document.querySelectorAll('details')) {
+    const sm = d.querySelector(':scope > summary');
+    disclosuresTotal++;
+    if (!sm) { disclosuresNoMarker++; continue; }
+    const cs = getComputedStyle(sm);
+    const hasListMarker = cs.display === 'list-item' && cs.listStyleType !== 'none';
+    // **判据是「有没有一个随开合而变的视觉记号」，不是「有没有一个图形」。**
+    // 前两版都栽在这上面：先只认 `::before`（漏掉 `::after`、svg chevron、背景图），
+    // 改成"认更多图形载体"之后仍然两头错——外部复核举出的两个形态都实测存在：
+    //   · 误报：`summary::after{content:"";width:8px;border-right:2px;border-bottom:2px}`
+    //     用**空**伪元素加两条边框画箭头、`[open]` 时旋转，是极常见的写法，而按 content 判会
+    //     把 `""` 当成"没有记号"。
+    //   · 漏报：summary 里一个与展开无关的头像 `<svg>` 或装饰背景图，会让"有图形"为真，
+    //     于是一个**完全没有展开提示**的页面照样过闸。
+    // 所以改成实测：**切一次 open，看 summary 的渲染有没有变**。这正是读者判断"它现在是开还是
+    // 关"所依据的东西，不需要任何标定；切完立刻还原，不留状态。
+    const signature = () => {
+      const parts = [];
+      for (const which of ['::before', '::after']) {
+        const p = getComputedStyle(sm, which);
+        parts.push(p.content, p.transform, p.rotate, p.borderTopColor, p.borderRightColor,
+                   p.backgroundImage, p.width, p.height, p.display);
+      }
+      // **不要把 `listStyleType` 放进签名。** `<summary>` 的 UA 默认值会在 open/closed 之间
+      // 从 `disclosure-closed` 翻到 `disclosure-open`——**即使 `display:flex` 已经让那个 marker
+      // 根本不渲染**。放进来的后果是这条检查在**任何**页面上都报"有变化"，于是它恒不开火，
+      // 输出与"所有页面都合格"逐字同形。实测：一个 summary 里只有无关头像 svg、完全没有展开
+      // 提示的页面因此被判为 0 缺陷。真的 list-item marker 由上面的 hasListMarker 单独放行。
+      parts.push(getComputedStyle(sm).backgroundImage, getComputedStyle(sm).transform);
+      for (const c of sm.querySelectorAll('svg, img, span, i, b, div')) {
+        const ccs = getComputedStyle(c);
+        parts.push(ccs.transform, ccs.rotate, ccs.backgroundImage, ccs.display, ccs.opacity);
+      }
+      return parts.join('|');
+    };
+    const was = d.open;
+    const sigA = signature();
+    d.open = !was;
+    const sigB = signature();
+    d.open = was;                       // 立刻还原：探针不得改变被测页面的状态
+    const marksState = sigA !== sigB;
+    // 原生 marker 天然随开合旋转，但某些环境下 computed style 读不出差异，所以它单独放行。
+    if (!hasListMarker && !marksState) disclosuresNoMarker++;
+  }
+
+  return JSON.stringify({
+    url: location.href, viewport: vw + 'x' + vh, visible_elements: vis.length,
+    repeated_elements: repeated,
+    column_x_positions: colXSpread, column_x_worst: colXWorst,
+    max_repeated_cell_text: maxRepeatedCellText, repeated_cell_sample: repeatedCellSample,
+    disclosures_total: disclosuresTotal, disclosures_without_marker: disclosuresNoMarker,
+    saturated_colors: sat.size, hue_buckets: hues.size,
+    border_styles: bstyle.size, borders_per_100: +(bordered / vis.length * 100).toFixed(1),
+    radii: radii.size, screens: +(document.body.scrollHeight / vh).toFixed(1),
+    data_region_coverage: coverage, scan_y: scanY,
+  });
+})(READY_SEL, READY_MIN, DATA_SEL)
+"""
+
+
+def parse_ready(spec):
+    """'.card>=3' -> ('.card', 3)；'.card' -> ('.card', 1)；None -> (None, 1)。"""
+    if not spec:
+        return None, 1
+    m = re.match(r"^(.*?)(?:>=(\d+))?$", spec.strip())
+    sel = m.group(1).strip() or None
+    n = int(m.group(2) or 1)
+    # 阈值 0 会让闸恒真——`.definitely-missing>=0` 与 `>=0` 都能把它整个绕过（外部评审实测）。
+    if n < 1:
+        raise ValueError(f"就绪阈值必须 ≥1，收到 {n}（阈值 0 等于没有闸）")
+    if sel is None:
+        raise ValueError("就绪闸缺少 selector（只给了阈值）")
+    return sel, n
+
+
+def is_difference(mine, ref, threshold=None):
+    """相对差异超过 threshold 即算「需要作答」。ref 为 0 而本页非 0 也算——0 是分母陷阱。
+
+    **这个阈值本身是一个未标定的判定**，而 skill 正文一度声称 L1「只有一个离群闸、没有阈值」。
+    实测后果：`120 vs 100` 不会被列为需要作答的差异（外部评审判为 HIGH：正文与实现不符）。
+    它现在可由 --diff-threshold 覆盖，并写进「已知未验证项」。
+    """
+    t = DIFF_THRESHOLD if threshold is None else threshold
+    if mine is None or ref is None:
+        return False
+    if ref == 0:
+        return mine != 0
+    return abs(mine - ref) / abs(ref) > t
+
+
+def outlier_of(mine, ref, multiple=None, floor=None):
+    """离群闸：**只**作用在 repeated_elements 上，且要同时满足倍数与绝对下限。
+
+    绝对下限不可省：没有它，参照 1 个、本页 12 个就会报 12× 离群，而 12 个徽章在任何标定样本里
+    都属正常（好页面 0–48）。
+
+    **两个常数都未标定，且它们的组合有已知断点**（外部评审算出，逐条记在这里而不是藏着）：
+      · 漏报：参照 0–4、本页 49 → 比例 12× 到无穷大，仍不触发（卡在下限）
+      · 误报：参照 5、本页 50 → 触发，而 50 只比已观察到的好页面上沿 48 多两个
+      · 漏报：参照 20、本页 199 → 不触发，尽管 199 已是正例上沿的 4 倍
+    想动它们之前先补 48–1767 之间的样本，别凭手感调。
+    """
+    m = OUTLIER_MULTIPLE if multiple is None else multiple
+    f = OUTLIER_FLOOR if floor is None else floor
+    if mine is None or ref is None:
+        return None
+    if mine >= max(1, ref) * m and mine >= f:
+        return (mine, ref)
+    return None
+
+
+def run(cmd, timeout=180):
+    return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+
+
+def unwrap(raw: str):
+    """agent-browser 把 eval 结果作为带引号的 JSON 字符串回显。"""
+    s = raw.strip().splitlines()[-1].strip() if raw.strip() else ""
+    if not s:
+        return None
+    try:
+        v = json.loads(s)
+    except json.JSONDecodeError:
+        return None
+    if isinstance(v, str):
+        try:
+            v = json.loads(v)
+        except json.JSONDecodeError:
+            return None
+    return v if isinstance(v, dict) else None
+
+
+def measure(url, viewport, ready_sel, ready_min, data_sel, settle_ms,
+            wrap_ratio=WRAP_AREA_RATIO):
+    session = "vb-" + uuid.uuid4().hex[:8]
+    try:
+        w, h = viewport.lower().split("x")
+        if run(["agent-browser", "--session", session, "set", "viewport", w, h]).returncode != 0:
+            return None, f"set viewport 失败：{url}"
+        if run(["agent-browser", "--session", session, "open", url]).returncode != 0:
+            return None, f"打开失败：{url}"
+        run(["agent-browser", "--session", session, "wait", str(settle_ms)], timeout=settle_ms // 1000 + 60)
+        js = (PROBE.replace("READY_SEL", json.dumps(ready_sel) if ready_sel else "null")
+                   .replace("READY_MIN", str(ready_min))
+                   .replace("DATA_SEL", json.dumps(data_sel) if data_sel else "null")
+                     .replace("WRAP_RATIO", repr(float(wrap_ratio))))
+        p = run(["agent-browser", "--session", session, "eval", js], timeout=120)
+        if p.returncode != 0:
+            return None, f"eval 失败：{url}：{p.stderr.strip()[:200]}"
+        got = unwrap(p.stdout)
+        if got is None:
+            return None, f"读数不可解析：{url}"
+        return got, None
+    except subprocess.TimeoutExpired:
+        return None, f"agent-browser 超时：{url}"
+    finally:
+        run(["agent-browser", "--session", session, "close"], timeout=60)
+
+
+def load_answers(path):
+    if not path:
+        return {}
+    out = {}
+    with open(path, encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line or line.startswith("#") or ":" not in line:
+                continue
+            k, v = line.split(":", 1)
+            if v.strip():
+                out[k.strip()] = v.strip()
+    return out
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description="量视觉用量，与参照并排，强制为每处差异作答。")
+    ap.add_argument("url")
+    ap.add_argument("--reference", help="参照页 URL。不给则只报读数、不产出任何判定。")
+    ap.add_argument("--data-region", help="本页做正事的那个区域的 selector（扫描线用）。")
+    ap.add_argument("--reference-data-region",
+                    help="参照页的同类区域 selector。**必须单给**：它和 --ready 一样是逐页的。"
+                         "不给则参照页**不量**覆盖率（该项报 —），而不是让整次运行作废——"
+                         "'这一项没量' 与 '读数不可信' 是两回事。")
+    ap.add_argument("--ready", default=None,
+                    help="本页的就绪闸，形如 '.card>=1'。**必填**（放弃要显式写 --no-ready-gate，"
+                         "输出留痕且该次读数不得当作已核实）：未渲染页的读数与极其克制的设计同形。")
+    ap.add_argument("--reference-ready", default=None,
+                    help="参照页的就绪闸。**必须单给**：就绪选择器是逐页的，两页共用一个会把参照判成"
+                         "未就绪（实测：把本页的 .casecard 套到参照页上，直接 unresolved）。"
+                         "给了 --reference 就**必填**——参照页不设闸等于让一个错误页当分母。")
+    ap.add_argument("--no-ready-gate", action="store_true",
+                    help="显式放弃就绪闸。会在输出里留痕，且该次读数不得当作已核实。")
+    ap.add_argument("--outlier-multiple", type=float, default=OUTLIER_MULTIPLE,
+                    help=f"离群倍数，默认 {OUTLIER_MULTIPLE}。**未标定**，见 --help 顶部说明。")
+    ap.add_argument("--outlier-floor", type=int, default=OUTLIER_FLOOR,
+                    help=f"离群的绝对下限，默认 {OUTLIER_FLOOR}。**未标定**，取自正例区间上沿 48。")
+    ap.add_argument("--wrap-area-ratio", type=float, default=WRAP_AREA_RATIO,
+                    help="祖先面积 ÷ 子项面积 ≤ 此值判为包装（去重），大于判为容器（不去重）。"
+                         "**未标定**，且它控制唯一进闸的量。")
+    ap.add_argument("--diff-threshold", type=float, default=DIFF_THRESHOLD,
+                    help=f"相对差异多大才要求作答，默认 {DIFF_THRESHOLD}。**未标定**。")
+    ap.add_argument("--viewport", default="1920x1080")
+    ap.add_argument("--settle-ms", type=int, default=8000)
+    ap.add_argument("--answers", help="逐行 `metric: 为什么这里不同`；差异未作答则退出 4。")
+    ap.add_argument("--json", action="store_true")
+    args = ap.parse_args()
+
+    if shutil.which("agent-browser") is None:
+        print("visual-budget: 需要 agent-browser，未找到", file=sys.stderr)
+        return EXIT_INSTRUMENT
+
+    # 三个阈值必须是**有限正数**。`type=float` 收得下 `nan` / `inf`，而 NaN 让所有比较恒假：
+    # `--outlier-multiple nan` 会让一个 80 vs 1（80×）的页面读出「未触发离群闸」，退出码 4
+    # ——闸被静默关掉，而那一行的输出与"这页很干净"逐字同形（外部复核实测，判为 HIGH）。
+    # 拒在入口而不是各比较点：比较点有三处，漏一处就等于没修。
+    for _name, _val in (("--outlier-multiple", args.outlier_multiple),
+                        ("--outlier-floor", args.outlier_floor),
+                        ("--diff-threshold", args.diff_threshold),
+                        ("--wrap-area-ratio", args.wrap_area_ratio)):
+        if not math.isfinite(_val) or _val <= 0:
+            print(f"visual-budget: {_name} 需要有限正数，收到 {_val!r}", file=sys.stderr)
+            return EXIT_INSTRUMENT
+
+    try:
+        ready_sel, ready_min = parse_ready(args.ready)
+        ref_ready_sel, ref_ready_min = parse_ready(args.reference_ready)
+    except ValueError as e:
+        print(f"visual-budget: --ready/--reference-ready 无效：{e}", file=sys.stderr)
+        return EXIT_INSTRUMENT
+    # 就绪闸必填。它是唯一挡住"未渲染页读成极其克制的设计"的东西，做成"强烈建议"等于没有
+    # （外部评审判为 HIGH）。确实不需要时用 --no-ready-gate 显式声明，输出里会带这条声明。
+    if not ready_sel and not args.no_ready_gate:
+        print("visual-budget: 必须给 --ready '<selector>>=N'（只有内容真到了才成立的锚点）；"
+              "确实不需要时显式写 --no-ready-gate，那会在输出里留痕。", file=sys.stderr)
+        return EXIT_INSTRUMENT
+    # 参照页同样要有闸。**只强制本页等于只修了一半**：一个请求失败、却稳定渲染出导航 + 空态 +
+    # 错误卡片的参照页，元素数照样过得了兜底阈值，于是它带着一份"极其克制"的读数进入离群与
+    # 差异比较，把本页判成离群——而唯一的判定量正是拿它当分母（外部复核判为 HIGH）。
+    if args.reference and not ref_ready_sel and not args.no_ready_gate:
+        print("visual-budget: 给了 --reference 就必须给 --reference-ready '<selector>>=N'；"
+              "就绪选择器是逐页的，参照页不设闸等于让一个错误页当分母。", file=sys.stderr)
+        return EXIT_INSTRUMENT
+    try:
+        w, h = args.viewport.lower().split("x"); int(w); int(h)
+    except ValueError:
+        print(f"visual-budget: --viewport 形如 1920x1080，收到 {args.viewport!r}", file=sys.stderr)
+        return EXIT_INSTRUMENT
+    try:
+        answers = load_answers(args.answers)
+    except OSError as e:
+        print(f"visual-budget: --answers 读不到：{e}", file=sys.stderr)
+        return EXIT_INSTRUMENT
+
+    mine, err = measure(args.url, args.viewport, ready_sel, ready_min, args.data_region,
+                        args.settle_ms, wrap_ratio=args.wrap_area_ratio)
+    if err:
+        print("visual-budget: " + err, file=sys.stderr)
+        return EXIT_INSTRUMENT
+    if "unresolved" in mine:
+        print(f"⚠️  unresolved（本页）：{mine['unresolved']}")
+        print("   **不要**把它读成 0、也不要读成通过——这是「我没量准」，不是「页面没问题」。")
+        return EXIT_UNRESOLVED
+
+    ref = None
+    if args.reference:
+        # 参照页必须用**同一个**包装比例——两边取值不同，比出来的倍数就没有意义了。
+        ref, err = measure(args.reference, args.viewport, ref_ready_sel, ref_ready_min,
+                           args.reference_data_region, args.settle_ms,
+                           wrap_ratio=args.wrap_area_ratio)
+        if err:
+            print("visual-budget: 参照页 " + err, file=sys.stderr)
+            return EXIT_INSTRUMENT
+        if "unresolved" in ref:
+            print(f"⚠️  unresolved（参照页）：{ref['unresolved']}")
+            return EXIT_UNRESOLVED
+
+    metrics = ["repeated_elements"] + REPORT_ONLY
+    rows, differing = [], []
+    for k in metrics:
+        a, b = mine.get(k), (ref or {}).get(k)
+        if a is None and b is None:
+            continue
+        diff = ref is not None and is_difference(a, b, args.diff_threshold)
+        rows.append((k, a, b, diff))
+        if diff and k in REPORT_ONLY:
+            differing.append(k)
+
+    outlier = (outlier_of(mine.get("repeated_elements"), ref.get("repeated_elements"),
+                          args.outlier_multiple, args.outlier_floor) if ref else None)
+
+    # 结构缺陷：不需要参照、不需要标定
+    structural = []
+    cx = mine.get("column_x_positions")
+    if cx and cx > 1:
+        w = mine.get("column_x_worst") or {}
+        structural.append(
+            f"同名列「{w.get('label','?')}」在 {w.get('n','?')} 个同构块里落在 {cx} 个不同的 x"
+            f"（跨度 {w.get('range','?')}px）——读者每一块都要重新找一次列在哪。"
+            "常见根因：每块各自 `table-layout: auto`，首列宽随本块最长内容变。")
+    dn = mine.get("disclosures_without_marker") or 0
+    if dn:
+        structural.append(
+            f"{dn} / {mine.get('disclosures_total')} 个可展开元素没有任何「我可展开」的记号。"
+            "常见根因：给 <summary> 设了 display:flex/grid，而浏览器默认三角依赖 display:list-item。")
+
+    if args.json:
+        # JSON 消费者要拿到与人类读者**同一份**审计前提。此前它只给 page/reference/outlier/
+        # unanswered：把差异全部填上垃圾答案再加 `--json`，退出码 0、`unanswered: []`，而
+        # 「非空不等于成立」这句、答案原文、三个未标定阈值、以及 ready / data-region 这些
+        # **调用者提供的语义前提**一个都不在里面——机器消费者于是把"填过字"读成"通过"
+        # （外部复核判为 HIGH）。人类分支已经印这些；两条通道给的不是一份东西就是缺口。
+        print(json.dumps({
+            "page": mine, "reference": ref, "outlier": outlier,
+            "unanswered": [k for k in differing if k not in answers],
+            "differing": differing,
+            "answers": {k: answers[k] for k in differing if k in answers},
+            # 与人类分支同源：调用者提供的语义前提，不是探针校准出来的。
+            "premises": {"ready": args.ready, "reference_ready": args.reference_ready,
+                         "data_region": args.data_region,
+                         "reference_data_region": args.reference_data_region,
+                         "ready_gate_waived": bool(args.no_ready_gate)},
+            "thresholds_uncalibrated": {"outlier_multiple": args.outlier_multiple,
+                                        "outlier_floor": args.outlier_floor,
+                                        "diff_threshold": args.diff_threshold,
+                                        "wrap_area_ratio": args.wrap_area_ratio},
+            "caveat": ("答案只验非空，不验成不成立。exit 0 的含义仅是「差异都被问到了、"
+                       "也都有人写了字」，不是「这一页通过」；那些答案需要一个人读一遍。"),
+        }, ensure_ascii=False, indent=1))
+    else:
+        w = max(len(k) for k, *_ in rows)
+        print(f"visual-budget · {args.url}  ({mine['viewport']})")
+        if ref:
+            print(f"参照 · {args.reference}")
+        # 调用者提供的**语义前提**必须入账：哪个区域算"这一页的正事"、什么选择器只在真实内容
+        # 出现后才成立，都是人工判断，不是探针自动校准出来的。不记下来，后来的人无法审计
+        # 这份读数建立在谁的哪个判断之上（外部评审点名）。
+        print(f"  语义前提（调用者提供，非探针校准）：ready={args.ready or '（无 —— 已用 --no-ready-gate 放弃）'}"
+              f" · reference-ready={args.reference_ready or '—'}"
+              f" · data-region={args.data_region or '—'} · reference-data-region={args.reference_data_region or '—'}")
+        print(f"  阈值（**均未标定**）：outlier ≥{args.outlier_multiple:g}× 且 ≥{args.outlier_floor} 个"
+              f" · 差异 >{args.diff_threshold:.0%} 才要求作答"
+              f" · 包装去重 ≤{args.wrap_area_ratio:g}× 面积")
+        if args.no_ready_gate:
+            print("  ⚠️  本次**放弃了就绪闸**：未渲染 / 请求失败但稳定渲染的页面在本量尺上与"
+                  "「极其克制的设计」读数同形。该次读数不得当作已核实。")
+        print()
+        print(f"  {'读数'.ljust(w)}  {'本页':>10}  {'参照':>10}   判定")
+        for k, a, b, diff in rows:
+            gate = ""
+            if k == "repeated_elements":
+                gate = "❌ 极端离群" if outlier else ("—" if ref is None else "未触发离群闸")
+            else:
+                gate = "只报读数" + ("（差异需作答）" if diff else "")
+            print(f"  {k.ljust(w)}  {str(a):>10}  {str(b if b is not None else '—'):>10}   {gate}")
+        print()
+        if ref is None:
+            print("  ⓘ 未给 --reference：**本次没有产出任何判定**，只有读数。")
+            print("     跨页阈值在 9 个高水准页面上被逐条证伪，所以没有参照时本工具无判据可用。")
+        print()
+        print("  结构一致性（**不需要参照、不需要标定**——由构造给出）")
+        cx = mine.get("column_x_positions")
+        print(f"    同名列的 x 位置数        {cx if cx is not None else '—（页面上没有重复 ≥3 次的同构表头）'}"
+              f"{'   ✅ 一致' if cx == 1 else ('   ❌ 不一致' if cx and cx > 1 else '')}")
+        print(f"    可展开元素缺记号         {mine.get('disclosures_without_marker')} / {mine.get('disclosures_total')}"
+              f"{'   ✅' if not mine.get('disclosures_without_marker') else '   ❌'}")
+        print(f"    同一串字面量最多印了     {mine.get('max_repeated_cell_text')} 遍"
+              f"   ⓘ 每一处重复都是一次没做的分层决策，见下")
+        if mine.get("repeated_cell_sample"):
+            print(f"      最多的那串：{mine['repeated_cell_sample']}")
+        for msg in structural:
+            print(f"  ❌ {msg}")
+        if mine.get("max_repeated_cell_text", 0) >= 10:
+            print()
+            print("  ⓘ 有一串字面量被印了很多遍。它不是噪声，是**一次没做的分层决策**——")
+            print("     问一句「这句话其实属于哪一层」，四个常见答案：")
+            print("       · 它是这一列的属性       → 提到表头，格里不再印")
+            print("       · 它是一个状态的释义     → 格里留短形（N/A / 未记录），释义进图例 + 每格 title")
+            print("       · 它是这一行对象的属性   → 收进该行的 ⓘ 展开（按需可达，默认不占版面）")
+            print("       · 它标记的事实值本身已表达 → 直接删（有值就是 available，不必再印一遍）")
+            print("     **一个字都不用删**——这是分层，不是删减。哪一层由**语义**定，不由省字多少定。")
+        if outlier:
+            a, b = outlier
+            # 印**本次实际生效**的倍数，不是模块默认值：`--outlier-multiple 3` 时按 3× 判，
+            # 这一行却写「闸：≥10×」，与上面那行动态阈值自相矛盾（外部复核判为 MEDIUM）。
+            print(f"  ❌ 重复元件 {a} 个 = 参照 {b} 个的 {a / max(b,1):.0f} 倍"
+                  f"（闸：≥{args.outlier_multiple:g}× 且 ≥{args.outlier_floor} 个）。")
+            print("     它只断言「相对该参照是极端离群」，**不**断言这个页面不合格。倍数未标定。")
+        unanswered = [k for k in differing if k not in answers]
+        if unanswered:
+            print(f"  ⏳ 未完成：以下读数与参照相对差异 >{args.diff_threshold:.0%}，但没有作答"
+                  f" —— {', '.join(unanswered)}")
+            print("     用 --answers 给一个逐行文件：`metric: 为什么这里不同`。")
+        for k in differing:
+            if k in answers:
+                print(f"  ✍️  {k}：{answers[k]}")
+        # **这句无条件打**。此前它只在"还有没作答项"时出现，于是填满垃圾答案（`因为我想这样`）
+        # 之后退出码变 0、警告一并消失——"已作答"就被消费成"已论证"了（外部评审实测判为 HIGH）。
+        if differing:
+            print()
+            print("  ⚠️  程序只验作答**非空**，验不了它成不成立。退出码 0 的含义仅是"
+                  "「差异都被问到了、也都有人写了字」，**不是**「这一页通过」。")
+            print("     那些答案需要一个人读一遍；本工具不承担这一步，也不声称承担。")
+        print()
+        print("  不覆盖：内容对读者有没有用 · 信息架构与认知负荷 · 主元素有没有真渲染 · 对比度 ·")
+        print("          语义层级是否正确（它没有读数，只有契约或人判得了） · 多状态真实使用 ·")
+        print("          响应（点下去到画面更新等了多久 → web-ui-observation.md「测量技术」）。")
+        print("          读数干净不等于页面好——跑完它，然后看一眼页面。")
+
+    if structural:
+        return EXIT_STRUCTURAL
+    if outlier:
+        return EXIT_OUTLIER
+    if [k for k in differing if k not in answers]:
+        return EXIT_INCOMPLETE
+    return EXIT_OK
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -26,11 +26,14 @@
 'use strict';
 
 const fs = require('fs');
+// 显式 require：本机 Node 26 恰好把 `os` 暴露成全局，于是漏写 require 也跑得通——
+// 而它换个 Node 版本就是 ReferenceError，且失败点在一个 PreToolUse 闸里。
+const os = require('os');
 const path = require('path');
 const { execFileSync } = require('child_process');
 const { isAgentRoot } = require('./lib/session-tree');
 
-const GATED_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit', 'apply_patch']);
+const GATED_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit', 'apply_patch', 'Bash']);
 const REGISTRY_DIRNAME = 'agent-writers';
 const PS_ANCESTOR_HOPS = 16;
 
@@ -368,6 +371,76 @@ function blockMessage(rel, top, conflicts) {
  * 文件。只取第一个就等于其余文件既不检查也不登记——"看起来在管、实际只管一个"比完全
  * 不管更危险，因为它会让人以为已经覆盖。
  */
+/**
+ * 从一条 shell 命令里取出**它会写的文件**。
+ *
+ * 为什么必须有这一支：本闸此前只挂 `Edit|Write|MultiEdit|NotebookEdit`，于是"走 Edit 会被拦、
+ * 走 `cat >>` / `sed -i` / `tee` 一路放行"，而后者恰是 agent 追加 changelog / issue / 日志时的
+ * 常用写法——也就是说，登记机制的**主要目标场景（跨 worktree 协调 append 型台账）恰好是它
+ * 覆盖率最低的场景**。实测后果：一天之内三次 issue 编号冲突，两侧都没有收到任何信号，因为
+ * 三次写入全部经 `cat >>` 落盘。该缺口早在 HARNESS-186 的 Notes 里被记为"值得单独立项"。
+ *
+ * **只解析有 spec 的那部分**（POSIX shell 的重定向语法、`tee` 与 `sed -i` 的选项形态）——
+ * 这是模式匹配的合法用法（判据见上游 pattern-matching-scope.md，本仓未收录）：存在一份约束
+ * 产出方的规范，且匹配依赖的正是那份规范。
+ *
+ * **判不出就放行，且这是显式选择而非遗漏**：shell 不可静态解析（变量、eval、heredoc 里的
+ * python `write_text`、`$(...)` 里的路径都拿不到）。此处的安全方向是**不拦**——本闸拦下的
+ * 代价是一次真实写入被挡住，而漏掉的代价是退回到本支存在之前的状态。两者不对称，所以
+ * 判不准时退回后者。残余缺口按此记录在案，不假装已覆盖。
+ */
+function bashWriteTargets(command) {
+  const out = new Set();
+  const cmd = String(command || '');
+  // 引号区间先挖空再扫。它是 POSIX 明文规定的语法，属本函数允许解析的范围；不挖空则
+  // `git commit -m 'fix: a > b'` 会交出 `b'`、`awk '$1 > 5' f` 会交出 `5'`——垃圾键进
+  // `files[]` 后**永不清除**（writeClaim 只 add），登记表逐渐变噪声（外部复核实测）。
+  const blankQuoted = (t) => t
+    .replace(/'[^']*'/g, (m) => ' '.repeat(m.length))
+    .replace(/"(?:\\.|[^"\\])*"/g, (m) => ' '.repeat(m.length));
+  // 去掉 heredoc 正文：它是数据不是命令，里面的 `>` 不是重定向（也避免把 python 源码当命令读）
+  // 只剥 heredoc **正文**，保留开头行 `<<TAG` 之后的剩余部分——重定向常就写在那一行上
+  // （`cat <<'PY' >> notes.md`）。连开头行一起剥会把真正的目标一并吃掉。
+  const body = blankQuoted(
+    cmd.replace(/<<-?\s*'?([A-Za-z_][A-Za-z0-9_]*)'?([^\n]*)\n[\s\S]*?\n\1\b/g, '$2 '));
+  // 1) 重定向：`> path` / `>> path`，排除 `>&`（fd 复制）与 `>(` (进程替换)
+  for (const m of body.matchAll(/(?:^|[\s;|&])\d?>>?\|?\s*(?![&(])([^\s;|&<>|]+)/g)) {
+    if (m[1]) out.add(m[1]);
+  }
+  // 2) tee：其位置参数即目标（`-a` 追加）
+  // tee 可带多个目标文件；只取第一个等于"其余文件既不检查也不登记"，与本函数的目的相抵。
+  for (const m of body.matchAll(/(?:^|[\s;|&])tee\s+((?:-[a-zA-Z-]+\s+)*)((?:[^\s;|&<>]+\s*)+)/g)) {
+    for (const t of String(m[2] || '').trim().split(/\s+/)) {
+      if (t && !t.startsWith('-')) out.add(t);
+    }
+  }
+  // 3) 就地改写工具。**这一族按名单认，名单必然不全**——已知覆盖 `sed -i` / `sed --in-place` /
+  //    `perl -pi` / `perl -i`；`ed`、`ex`、各语言脚本里的 `open(...,'w')` 一律认不出。
+  //    认不出即放行（与本函数其余部分同一安全方向），这是声明出来的缺口不是遗漏。
+  //    取**末尾所有非选项 token** 而不是第一个：`sed -i s/a/b/ a.md b.md` 里 `s/a/b/` 未加引号时
+  //    会被当成第一个位置参数，只取第一个就恰好取到脚本、漏掉两个真文件（外部复核实测）。
+  const IN_PLACE = /(?:^|[\s;|&])(?:sed|perl)\s+((?:-{1,2}[a-zA-Z][\w-]*\s*|'[^']*'\s*|"[^"]*"\s*)*)([^\s;|&<>]+(?:\s+[^\s;|&<>-][^\s;|&<>]*)*)/g;
+  for (const m of body.matchAll(IN_PLACE)) {
+    const flags = String(m[1] || '');
+    if (!/(?:^|\s)-{1,2}(?:[a-zA-Z]*i[a-zA-Z]*|in-place)\b/.test(flags)) continue;
+    for (const t of String(m[2] || '').trim().split(/\s+/)) {
+      // 未加引号的 sed 脚本（`s/a/b/`、`1d`、`/x/d`）不是文件——按形态排除，取其余的
+      if (!t || t.startsWith('-')) continue;
+      if (/^[0-9]*[sdpyaic]?[\/,]/.test(t) || /^\$?[0-9,]*[dpa]$/.test(t)) continue;
+      out.add(t);
+    }
+  }
+  // 含 shell 元字符 / 明显不是字面路径的一律丢弃——解析不出真值时不猜
+  // `~/` 必须展开。不展开时它会作为字面键 `~/.claude/CLAUDE.md` 落进 `files[]`，而对手方
+  // 从 `git status` 得到的键是 `claude/CLAUDE.md`——两键**永不相等**，于是协调完全不发生，
+  // 而登记表看起来有条目。这比不登记更坏（外部复核实测；本函数上方注释自己也把"看起来在管、
+  // 实际不管"列为最危险的形态）。`cat >> ~/.claude/...` 正是本支宣称覆盖的那一类写法。
+  const home = os.homedir();
+  return [...out]
+    .filter((t) => t && !/[$`*?{}]/.test(t) && t !== '/dev/null' && !t.startsWith('/dev/'))
+    .map((t) => (t === '~' ? home : t.startsWith('~/') ? path.join(home, t.slice(2)) : t));
+}
+
 function targetPaths(toolName, toolInput) {
   if (!toolInput || typeof toolInput !== 'object') return [];
   const out = new Set();
@@ -383,6 +456,9 @@ function targetPaths(toolName, toolInput) {
       const match = line.match(/^\*\*\* (?:(?:Add|Update|Delete) File|Move to): (.+)$/);
       if (match && match[1].trim()) out.add(match[1].trim());
     }
+  }
+  if (toolName === 'Bash' && typeof toolInput.command === 'string') {
+    for (const t of bashWriteTargets(toolInput.command)) out.add(t);
   }
   return [...out];
 }
